@@ -1,0 +1,71 @@
+{
+  "npc_id": "六扇门",
+  "display_name": "六扇门",
+  "seed_layer": "scene",
+  "seed_confidence_tier": "low",
+  "name_unlock_status": "unlocked",
+  "identity": {
+    "role_label": "待确认",
+    "faction": "待确认",
+    "base_region": "待确认"
+  },
+  "importance": {
+    "level": "medium",
+    "observation_window_turns": 12,
+    "appearance_turns": 0,
+    "score": 2,
+    "reason": [
+      "当前已进入 state.md 的 Active NPCs，下一轮不看可能演错",
+      "当前已在 state.md 的 Active NPCs 中，先生成低置信度 scene seed 占位，待后续轮次补证据。",
+      "当前角色来自通用占位模板，后续应根据更多轮次逐步细化。"
+    ]
+  },
+  "persona_seed": {
+    "mbti": {
+      "value": "unknown",
+      "confidence": 0.3
+    },
+    "archetype": {
+      "value": "待确认",
+      "confidence": 0.35
+    },
+    "runtime_hooks": {
+      "decision_style": {
+        "value": "当前只确认其正在深度卷入本场景，具体决策风格待确认",
+        "confidence": 0.25
+      },
+      "risk_profile": {
+        "value": "待确认",
+        "confidence": 0.25
+      },
+      "info_style": {
+        "value": "待确认",
+        "confidence": 0.25
+      },
+      "social_strategy": {
+        "value": "待确认",
+        "confidence": 0.25
+      },
+      "conflict_style": {
+        "value": "待确认",
+        "confidence": 0.25
+      },
+      "speech_rhythm": {
+        "value": "待确认",
+        "confidence": 0.25
+      },
+      "stress_response": {
+        "value": "待确认",
+        "confidence": 0.25
+      }
+    }
+  },
+  "uncertainties": [
+    "当前 seed 基于观察窗内的稳定倾向推断，不应把短期情绪直接写成长期人格。",
+    "若后续两个评估周期出现明显波动，应重新评估而不是直接升级为长期档案。"
+  ],
+  "source_window": {
+    "history_range": "last_12_turns",
+    "last_evaluated_at": 1774970814784
+  }
+}

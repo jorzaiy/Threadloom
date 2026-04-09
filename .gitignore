@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+backend/threadloom.log
+backend/threadloom.pid
+backend/runtime-web.log
+backend/runtime-web.pid
+
+sessions/
+
+config/runtime.json
+
+.DS_Store

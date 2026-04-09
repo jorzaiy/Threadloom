@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "sources": {
+    "runtime_rules": "prompts/runtime-rules.md",
+    "openclaw_models": "/path/to/models.json",
+    "character_core": "character/character-data.json",
+    "lorebook": "character/lorebook.json",
+    "user": "USER.md",
+    "player_profile_md": "player-profile.md",
+    "player_profile_json": "player-profile.json",
+    "preset_dir": "character/presets",
+    "active_preset": "world-sim-balanced",
+    "canon": "memory/canon.md",
+    "state": "memory/state.md",
+    "summary": "memory/summary.md",
+    "history": "memory/history.jsonl",
+    "npc_profiles_dir": "memory/npcs",
+    "persona_seeds_dir": "runtime/persona-seeds"
+  },
+  "models": {
+    "narrator": {
+      "provider": "custom-provider",
+      "model": "gpt-5.4",
+      "temperature": 0.9,
+      "max_output_tokens": 1200,
+      "stream": true
+    },
+    "turn_analyzer": {
+      "provider": "openai-compatible",
+      "model": "heuristic-or-llm",
+      "temperature": 0.2,
+      "max_output_tokens": 700,
+      "stream": false
+    },
+    "state_keeper": {
+      "provider": "local-gemma",
+      "model": "your-local-model.gguf",
+      "base_url": "http://127.0.0.1:8080/v1",
+      "apiKey": "",
+      "temperature": 0.1,
+      "max_output_tokens": 480,
+      "stream": false
+    },
+    "state_keeper_candidate": {
+      "provider": "custom-provider",
+      "model": "Llama-3.3-70B",
+      "temperature": 0.0,
+      "max_output_tokens": 120,
+      "stream": false
+    },
+    "arbiter": {
+      "provider": "openai-compatible",
+      "model": "",
+      "temperature": 0.2,
+      "max_output_tokens": 800,
+      "stream": false
+    }
+  },
+  "roles": {
+    "narrator": {
+      "provider": "llm",
+      "model_role": "narrator"
+    },
+    "turn_analyzer": {
+      "provider": "heuristic",
+      "model_role": "turn_analyzer"
+    },
+    "state_keeper": {
+      "provider": "llm",
+      "model_role": "state_keeper"
+    },
+    "state_keeper_candidate": {
+      "provider": "llm",
+      "model_role": "state_keeper_candidate"
+    }
+  },
+  "bootstrap": {
+    "must_load_runtime_rules_first": true
+  },
+  "memory": {
+    "recent_history_turns": 12,
+    "recent_summary_blocks": 3,
+    "consolidate_every_turns": 12,
+    "auto_save_every_turns": 20
+  },
+  "refresh_policy": {
+    "runtime_rules_every_turn": true,
+    "preset_every_turn": true,
+    "state_every_turn": true,
+    "scene_persona_every_turn": true,
+    "recent_history_turns": 10,
+    "summary_refresh_every_turns": 12,
+    "deep_refresh_every_turns": 20,
+    "deep_refresh_on_scene_change": true,
+    "deep_refresh_on_onstage_shift": true
+  },
+  "state_policy": {
+    "max_onstage_npcs": 6,
+    "max_relevant_npcs": 6,
+    "max_open_questions": 6,
+    "carryover_clues_max": 4
+  },
+  "persona_policy": {
+    "seed_window_turns": 12,
+    "scene_seed_limit": 6,
+    "longterm_min_score": 5,
+    "scene_seed_allow_low_confidence": true
+  },
+  "web": {
+    "default_debug": false,
+    "history_page_size": 80,
+    "show_state_panel": true,
+    "show_debug_panel": false
+  }
+}

@@ -1,0 +1,246 @@
+<html class="" lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0, viewport-fit=cover" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif:wght@400;500;700&amp;family=Inter:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "primary-container": "#5d7060",
+            "on-background": "#1a1c1b",
+            "tertiary-container": "#826467",
+            surface: "#f9f9f7",
+            secondary: "#595f64",
+            "primary-fixed": "#d3e8d5",
+            "surface-bright": "#f9f9f7",
+            outline: "#737873",
+            "surface-container-low": "#f4f4f2",
+            "on-secondary": "#ffffff",
+            "on-secondary-fixed-variant": "#41484c",
+            tertiary: "#684c4f",
+            "on-error-container": "#93000a",
+            primary: "#455849",
+            "on-primary-fixed-variant": "#394b3d",
+            "surface-tint": "#506354",
+            "tertiary-fixed": "#ffd9dc",
+            "surface-variant": "#e2e3e1",
+            "on-tertiary": "#ffffff",
+            "inverse-on-surface": "#f1f1ef",
+            "on-primary-container": "#ddf3df",
+            "tertiary-fixed-dim": "#e2bec1",
+            "surface-container-high": "#e8e8e6",
+            "on-surface": "#1a1c1b",
+            "primary-fixed-dim": "#b7ccb9",
+            "surface-container-lowest": "#ffffff",
+            "inverse-primary": "#b7ccb9",
+            "on-error": "#ffffff",
+            "on-tertiary-container": "#ffe9ea",
+            "secondary-fixed-dim": "#c1c7cd",
+            "on-tertiary-fixed": "#2a1618",
+            "error-container": "#ffdad6",
+            "surface-dim": "#dadad8",
+            "surface-container": "#eeeeec",
+            "surface-container-highest": "#e2e3e1",
+            "outline-variant": "#c3c8c1",
+            "inverse-surface": "#2f3130",
+            "secondary-fixed": "#dee3e9",
+            "on-tertiary-fixed-variant": "#5a4043",
+            "secondary-container": "#dbe0e6",
+            "on-secondary-container": "#5d6368",
+            "on-secondary-fixed": "#161c20",
+            "on-primary-fixed": "#0e1f13",
+            "on-surface-variant": "#434843",
+            background: "#f9f9f7",
+            "on-primary": "#ffffff",
+            error: "#ba1a1a",
+            "error-dim": "#bb5551",
+            "secondary-dim": "#84a59a",
+            "primary-dim": "#dab36a",
+            "tertiary-dim": "#efe8d6"
+          },
+          borderRadius: {
+            DEFAULT: "0.125rem",
+            lg: "0.25rem",
+            xl: "0.5rem",
+            full: "0.75rem"
+          },
+          fontFamily: {
+            headline: ["Noto Serif"],
+            body: ["Noto Serif"],
+            label: ["Inter"],
+            display: "Noto Serif"
+          }
+        }
+      }
+    };
+  </script>
+<style>
+    body { font-family: 'Noto Serif SC', serif; }
+    .label-text { font-family: 'Inter', sans-serif; }
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #e2e3e1;
+    }
+    .prose-chinese {
+      line-height: 1.8;
+      text-align: justify;
+      text-justify: inter-character;
+    }
+    .prose-chinese p {
+      margin-bottom: 1.5rem;
+    }
+    /* Safe Area Padding for Mobile */
+    .pb-safe {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  </style>
+</head>
+<body class="bg-surface text-on-surface h-screen flex overflow-hidden">
+<main class="flex-1 flex flex-col h-full overflow-hidden relative">
+<header class="flex-none flex justify-between items-center px-8 py-4 w-full bg-surface text-primary font-headline font-bold text-lg z-50 border-b border-outline-variant/10">
+<div class="flex items-center gap-4">
+<span class="font-headline text-xl font-bold text-on-surface">Modern Anthology</span>
+<div class="h-4 w-[1px] bg-outline-variant/30"></div>
+<span class="uppercase tracking-[0.2em] text-[10px] text-on-surface-variant font-label pt-1">Chapter IV: The Whispering Woods</span>
+</div>
+<div class="flex items-center gap-6">
+<button class="hover:bg-surface-container-low transition-colors duration-200 p-2 rounded">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+</div>
+</header>
+<!-- Story text area -->
+<section class="flex-1 overflow-y-auto custom-scrollbar bg-surface relative">
+<div class="max-w-4xl mx-auto px-12 md:px-24 py-12">
+<article class="space-y-10">
+<header class="mb-12 border-b border-outline-variant/20 pb-8">
+<h1 class="text-3xl md:text-4xl font-headline font-bold text-on-surface leading-tight tracking-tight">归档室之降临 (The Archival Descent)</h1>
+<p class="mt-3 text-on-surface-variant italic font-body text-base">Entry date: 丰收潮第十四日 (The 14th of Harvest Tide)</p>
+</header>
+<div class="prose-chinese max-w-none text-on-surface text-lg">
+<p>
+              地窖里的空气弥漫着铜锈与陈年尘埃的味道。你高举提灯，琥珀色的火焰在黑曜石墙壁上跳跃起舞。每一步脚步声都带着几个世纪的沉重，那种有节奏的重击声似乎随着走廊阴影的移动而搏动。
+            </p>
+<p>
+              在你的左侧，一排石灰岩底座静静伫立，每个底座上都放置着旧世界的遗物。有些看起来很眼熟——破碎的剑柄和锈迹斑斑的印章——但其他的则完全无法辨认。其中一个特别引人注目，那是一个搏动着的紫色玻璃球，似乎正将你提灯的光芒吸入其深邃的核心。
+            </p>
+<div class="my-10 py-6 px-8 bg-surface-container-highest italic text-on-surface-variant border-l-4 border-primary leading-relaxed relative">
+<span class="absolute -left-2 -top-2 text-5xl opacity-10 font-serif">“</span>
+              “警惕档案馆的寂静，因为其中的故事并不希望无人阅读。”
+              <span class="absolute -right-2 bottom-0 text-5xl opacity-10 font-serif">”</span>
+</div>
+<p>
+              你在沉重的铁门前停下脚步。门后就是内殿，那里存放着大师的手稿。门锁异常精巧，是一种黄铜齿轮机构，仅仅依靠蛮力是无法打开的。金属中传出一阵微弱的嗡鸣，通过靴底震动着你的脚掌。
+            </p>
+<aside class="hidden xl:block absolute -left-48 w-40 text-secondary text-sm font-body italic leading-snug opacity-70">
+              边注：传说黑曜石是从陨落之星的核心中开采出来的。
+            </aside>
+<p>
+              你伸手入包，感受着古老钥匙那冰冷的重量。金属似乎在期待着什么，在你的掌心中微微发热。当你走向大门时，底座上的紫色玻璃球突然爆发出一种无声而灿烂的光芒。
+            </p>
+<p>
+              地窖里的空气弥漫着铜锈与陈年尘埃的味道。你高举提灯，琥珀色的火焰在黑曜石墙壁上跳跃起舞。每一步脚步声都带着几个世纪的沉重，那种有节奏的重击声似乎随着走廊阴影的移动而搏动。
+            </p>
+<p>
+              在你的左侧，一排石灰岩底座静静伫立，每个底座上都放置着旧世界的遗物。有些看起来很眼熟——破碎的剑柄和锈迹斑斑的印章——但其他的则完全无法辨认。其中一个特别引人注目，那是一个搏动着的紫色玻璃球，似乎正将你提灯的光芒吸入其深邃的核心。
+            </p>
+</div>
+</article>
+</div>
+</section>
+<!-- Fixed Input Footer Area -->
+<footer class="flex-shrink-0 w-full px-8 py-6 bg-surface-container-lowest border-t border-outline-variant/30 shadow-[0_-4px_10px_-5px_rgba(0,0,0,0.05)] z-[60] pb-safe mb-16 lg:mb-0">
+<div class="max-w-2xl mx-auto flex items-center bg-surface border border-outline-variant/30 rounded-lg shadow-sm px-4 py-1 focus-within:border-primary/50 transition-all duration-300">
+<span class="material-symbols-outlined text-primary/60 mr-2" data-icon="chevron_right">chevron_right</span>
+<input class="flex-1 bg-transparent border-none focus:ring-0 font-body text-base placeholder:italic placeholder:text-outline-variant/50 text-on-surface h-10" placeholder="输入指令... (Enter command)" type="text"/>
+<button class="ml-4 px-6 py-2 bg-primary text-on-primary font-label uppercase tracking-widest text-[11px] hover:bg-primary/90 transition-all rounded-sm shadow-sm">
+          提交
+        </button>
+</div>
+</footer>
+</main>
+<aside class="hidden lg:flex w-[20rem] max-w-[25%] h-full bg-surface-container-low border-l border-outline-variant/15 flex-col overflow-y-auto custom-scrollbar flex-none">
+<div class="p-8 space-y-10">
+<div class="flex flex-col items-center space-y-4 pt-4">
+<div class="w-24 h-24 flex items-center justify-center bg-surface-container-highest border border-outline-variant/30 rounded-sm shadow-inner mb-2 group relative">
+<span class="text-4xl font-headline font-bold text-primary opacity-40 group-hover:opacity-100 transition-opacity">W</span>
+<div class="absolute inset-2 border border-primary/10 pointer-events-none"></div>
+</div>
+<div class="text-center">
+<h2 class="font-headline text-lg text-on-surface font-bold tracking-wide">游历者 (The Protagonist)</h2>
+<p class="font-label uppercase tracking-widest text-[10px] text-on-surface-variant">Level 12 Wanderer</p>
+</div>
+</div>
+<div class="space-y-6">
+<div class="space-y-2">
+<div class="flex justify-between items-end">
+<span class="font-label uppercase tracking-widest text-[10px] text-on-surface-variant font-bold">健康值</span>
+<span class="font-label text-sm">84 / 100</span>
+</div>
+<div class="h-[2px] w-full bg-surface-variant/40">
+<div class="h-full bg-primary" style="width: 84%"></div>
+</div>
+</div>
+<div class="space-y-2">
+<div class="flex justify-between items-end">
+<span class="font-label uppercase tracking-widest text-[10px] text-on-secondary-container font-bold">精力值</span>
+<span class="font-label text-sm">32 / 50</span>
+</div>
+<div class="h-[2px] w-full bg-surface-variant/40">
+<div class="h-full bg-tertiary" style="width: 64%"></div>
+</div>
+</div>
+</div>
+<div class="pt-6 space-y-4">
+<h3 class="font-label uppercase tracking-widest text-[10px] text-on-surface-variant border-b border-outline-variant/20 pb-2">地理考据 (Lore)</h3>
+<p class="font-body text-xs leading-relaxed text-secondary italic">
+          归档室曾是范恩大法师的私人图书馆。据说，没有任何寻求真相的人在离开此处时能保持原样。
+        </p>
+</div>
+<div class="pt-6 space-y-4">
+<h3 class="font-label uppercase tracking-widest text-[10px] text-on-surface-variant border-b border-outline-variant/20 pb-2">当前行囊</h3>
+<ul class="space-y-3 font-body text-sm text-on-surface">
+<li class="flex items-center gap-3">
+<span class="material-symbols-outlined text-[18px] opacity-60" data-icon="key">key</span>
+<span>古老钥匙 (Elder Key)</span>
+</li>
+<li class="flex items-center gap-3">
+<span class="material-symbols-outlined text-[18px] opacity-60" data-icon="light">light</span>
+<span>油灯 (Oil Lantern)</span>
+</li>
+<li class="flex items-center gap-3 opacity-30">
+<span class="material-symbols-outlined text-[18px]" data-icon="inventory_2">inventory_2</span>
+<span class="italic text-xs">空位 (Empty)</span>
+</li>
+</ul>
+</div>
+</div>
+</aside>
+<!-- Mobile Navigation Bar -->
+<nav class="fixed bottom-0 left-0 w-full z-[100] flex justify-around items-center px-4 py-2 lg:hidden bg-surface/90 backdrop-blur-md border-t border-outline-variant/10 pb-safe">
+<button class="flex flex-col items-center text-on-surface-variant p-2 transition-transform active:scale-90">
+<span class="material-symbols-outlined" data-icon="inventory_2">inventory_2</span>
+<span class="font-label uppercase text-[9px] tracking-widest mt-1">行囊</span>
+</button>
+<button class="flex flex-col items-center bg-primary text-on-primary rounded-sm p-2 px-6 transition-transform active:scale-95 shadow-sm">
+<span class="material-symbols-outlined" data-icon="edit">edit</span>
+<span class="font-label uppercase text-[9px] tracking-widest mt-1">互动</span>
+</button>
+<button class="flex flex-col items-center text-on-surface-variant p-2 transition-transform active:scale-90">
+<span class="material-symbols-outlined" data-icon="query_stats">query_stats</span>
+<span class="font-label uppercase text-[9px] tracking-widest mt-1">状态</span>
+</button>
+</nav>
+</body></html>

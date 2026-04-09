@@ -1,0 +1,72 @@
+{
+  "npc_id": "高个皂衣人",
+  "display_name": "高个皂衣人",
+  "seed_layer": "scene",
+  "seed_confidence_tier": "low",
+  "name_unlock_status": "unlocked",
+  "identity": {
+    "role_label": "追索者 / 官面执行者",
+    "faction": "待确认",
+    "base_region": "待确认"
+  },
+  "importance": {
+    "level": "medium",
+    "observation_window_turns": 12,
+    "appearance_turns": 0,
+    "score": 2,
+    "reason": [
+      "当前已进入 state.md 的 Active NPCs，下一轮不看可能演错",
+      "当前已在 state.md 的 Active NPCs 中，先生成低置信度 scene seed 占位，待后续轮次补证据。",
+      "当前角色来自通用占位模板，后续应根据更多轮次逐步细化。",
+      "已根据多轮稳定称呼与角色功能，生成保守的人格方向。"
+    ]
+  },
+  "persona_seed": {
+    "mbti": {
+      "value": "ESTJ",
+      "confidence": 0.45
+    },
+    "archetype": {
+      "value": "执行者",
+      "confidence": 0.5
+    },
+    "runtime_hooks": {
+      "decision_style": {
+        "value": "先执行命令，再根据阻碍调整动作",
+        "confidence": 0.4
+      },
+      "risk_profile": {
+        "value": "中等，服从目标优先于个人稳妥",
+        "confidence": 0.38
+      },
+      "info_style": {
+        "value": "更重结果与命令，不重细说",
+        "confidence": 0.39
+      },
+      "social_strategy": {
+        "value": "压迫式推进，不以安抚为优先",
+        "confidence": 0.38
+      },
+      "conflict_style": {
+        "value": "正面施压，必要时快速升级",
+        "confidence": 0.41
+      },
+      "speech_rhythm": {
+        "value": "短句，直接，命令式",
+        "confidence": 0.44
+      },
+      "stress_response": {
+        "value": "更强硬，更少废话",
+        "confidence": 0.39
+      }
+    }
+  },
+  "uncertainties": [
+    "当前 seed 基于观察窗内的稳定倾向推断，不应把短期情绪直接写成长期人格。",
+    "若后续两个评估周期出现明显波动，应重新评估而不是直接升级为长期档案。"
+  ],
+  "source_window": {
+    "history_range": "last_12_turns",
+    "last_evaluated_at": 1775104026997
+  }
+}

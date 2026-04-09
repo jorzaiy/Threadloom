@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+
+<html class="light" lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Threadloom | The Living Manuscript</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,600;0,700;1,400;1,600&amp;family=Noto+Serif+SC:wght@400;600;700&amp;family=Work+Sans:wght@300;400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "tertiary-container": "#796952",
+                        "surface-bright": "#f9f9f7",
+                        "surface-container-lowest": "#ffffff",
+                        "inverse-surface": "#2f3130",
+                        "surface-dim": "#dadad8",
+                        "on-secondary": "#ffffff",
+                        "primary-fixed-dim": "#c6c7c5",
+                        "on-secondary-fixed-variant": "#394b3d",
+                        "on-primary-container": "#ededeb",
+                        "secondary-fixed-dim": "#b7ccba",
+                        "surface-variant": "#e2e3e1",
+                        "tertiary-fixed-dim": "#d8c4a8",
+                        "on-primary-fixed-variant": "#454746",
+                        "primary-container": "#6a6c6a",
+                        "surface-tint": "#5d5f5d",
+                        "primary": "#525452",
+                        "tertiary-fixed": "#f5dfc3",
+                        "inverse-primary": "#c6c7c5",
+                        "tertiary": "#60513b",
+                        "secondary-container": "#d3e8d5",
+                        "surface-container-low": "#f4f4f2",
+                        "inverse-on-surface": "#f1f1ef",
+                        "on-surface": "#1a1c1b",
+                        "surface": "#f9f9f7",
+                        "secondary": "#506354",
+                        "surface-container-high": "#e8e8e6",
+                        "outline-variant": "#c3c8c1",
+                        "on-tertiary-container": "#ffead0",
+                        "on-primary": "#ffffff",
+                        "error": "#ba1a1a",
+                        "secondary-fixed": "#d3e8d5",
+                        "on-tertiary": "#ffffff",
+                        "error-container": "#ffdad6",
+                        "primary-fixed": "#e2e3e0",
+                        "surface-container-highest": "#e2e3e1",
+                        "surface-container": "#eeeeec",
+                        "on-primary-fixed": "#1a1c1b",
+                        "on-surface-variant": "#434843",
+                        "on-secondary-fixed": "#0e1f14",
+                        "on-error": "#ffffff",
+                        "on-error-container": "#93000a",
+                        "on-tertiary-fixed": "#241a08",
+                        "outline": "#737873",
+                        "on-tertiary-fixed-variant": "#534530",
+                        "on-secondary-container": "#56695a",
+                        "background": "#f9f9f7",
+                        "on-background": "#1a1c1b"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0px",
+                        "lg": "0px",
+                        "xl": "0px",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Newsreader", "serif"],
+                        "body": ["Noto Serif SC", "serif"],
+                        "label": ["Work Sans", "sans-serif"]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+        }
+        body {
+            background-color: #f9f9f7;
+            font-family: 'Noto Serif SC', serif;
+            color: #1a1c1b;
+        }
+        .prose-content {
+            line-height: 2;
+            letter-spacing: 0.02em;
+        }
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c3c8c1;
+        }
+        .main-height {
+            height: calc(100vh - 80px); /* Adjust based on header height */
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden">
+<!-- Top Navigation -->
+<header class="fixed top-0 left-0 right-0 z-50 flex justify-between items-center px-8 h-20 w-full bg-[#f4f4f2]/95 dark:bg-[#252726]/95 backdrop-blur-md border-b border-[#c3c8c1]/15 transition-colors duration-300">
+<div class="flex items-center gap-8">
+<h1 class="font-['Newsreader'] italic text-2xl text-[#1a1c1b] dark:text-[#f9f9f7] tracking-tight">Threadloom</h1>
+<nav class="hidden md:flex gap-6 items-center">
+<a class="font-['Work_Sans'] uppercase tracking-widest text-[10px] text-[#506354] dark:text-[#d3e8d5] font-bold" href="#">Writing</a>
+<a class="font-['Work_Sans'] uppercase tracking-widest text-[10px] text-[#1a1c1b]/60 dark:text-[#f9f9f7]/60 hover:text-[#506354] transition-colors duration-300" href="#">Library</a>
+<a class="font-['Work_Sans'] uppercase tracking-widest text-[10px] text-[#1a1c1b]/60 dark:text-[#f9f9f7]/60 hover:text-[#506354] transition-colors duration-300" href="#">Chronicle</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="material-symbols-outlined text-[#506354] dark:text-[#d3e8d5]">settings</button>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="flex flex-1 pt-20 overflow-hidden">
+<!-- Chat Area (Left Column) -->
+<section class="flex-1 flex flex-col min-w-0 bg-background relative">
+<!-- Scrollable Message Area -->
+<div class="flex-1 overflow-y-auto px-6 md:px-12 lg:px-24 py-12 scroll-smooth">
+<div class="max-w-3xl mx-auto prose-content text-lg text-on-surface space-y-12">
+<div class="space-y-4">
+<span class="font-headline italic text-secondary text-sm block tracking-widest">CHAPTER IV</span>
+<h2 class="font-headline text-4xl font-bold border-b border-outline-variant/10 pb-4">古刹钟声</h2>
+</div>
+<p>檐角的铜铃在冷风中发出一声短促的哑响。幽云古刹的大门虚掩着，斑驳的红漆在昏暗的暮色中显得格外阴冷。你推开门，沉重的木轴转动声在寂静的院落中回荡，激起了一阵惊飞的寒鸦。</p>
+<p>院内荒草丛生，石经幢上爬满了枯死的藤萝。空气中弥漫着一股陈腐的香火味，混合着深秋泥土的潮气。你低头看向地面，青石板上有一道不明显的拖拽痕迹，似乎有什么重物曾在不久前被移向了大殿深处。</p>
+<p>那失踪的商队，最后一处目击记录便是在这方圆十里唯一的补给点。领队的马夫曾提到过，这庙里住着一个性情古怪的僧人，从不与外界往来。然而此刻，除了你的呼吸声，这里再无半分生息。</p>
+<div class="bg-surface-container-lowest p-8 border-l-2 border-secondary/30 italic text-on-surface-variant font-light shadow-sm">
+                        “在这乱世，最危险的往往不是刀剑，而是人心。”你回想起师父临行前的嘱托，手心不自觉地握紧了藏在袖中的断锋。
+                    </div>
+<p>大殿的阴影中，一个青色的身影缓缓走出。他手中并未握剑，但那一身凛冽的剑意却让周围的空气几乎凝固。那是青衣剑客，一个本不该出现在这里的江湖游侠。</p>
+<p>“你不该来的，”他淡淡开口，声音像是在井底磨过的寒玉，“这里的局，比你想象的要深。”</p>
+</div>
+</div>
+<!-- Composer Area (Fixed within Chat Column) -->
+<footer class="w-full bg-[#ffffff]/80 dark:bg-[#1a1c1b]/80 backdrop-blur-xl border-t border-[#c3c8c1]/15 px-6 md:px-12 py-6">
+<div class="max-w-3xl mx-auto space-y-4">
+<div class="relative group">
+<textarea class="w-full bg-surface-container-low border-b border-outline focus:border-secondary focus:ring-0 transition-all duration-300 resize-none py-3 text-on-surface placeholder:text-outline-variant font-body" placeholder="输入你的行动或对话..." rows="1"></textarea>
+<div class="flex justify-end gap-3 mt-3">
+<button class="flex items-center gap-2 text-[#1a1c1b] dark:text-[#f9f9f7] px-4 py-1.5 hover:opacity-80 transition-all scale-95 duration-200">
+<span class="material-symbols-outlined text-[18px]">refresh</span>
+<span class="font-['Work_Sans'] text-[10px] font-medium uppercase tracking-wider">Regenerate</span>
+</button>
+<button class="flex items-center gap-2 bg-gradient-to-tr from-[#506354] to-[#d3e8d5] text-white px-6 py-1.5 hover:opacity-90 transition-all scale-95 duration-200 shadow-md">
+<span class="material-symbols-outlined text-[18px]">send</span>
+<span class="font-['Work_Sans'] text-[10px] font-medium uppercase tracking-wider">Submit</span>
+</button>
+</div>
+</div>
+<div class="flex justify-between items-center opacity-40">
+<div class="flex gap-4">
+<span class="font-label text-[8px] uppercase tracking-widest">Words: 1,420</span>
+<span class="font-label text-[8px] uppercase tracking-widest">Tokens: 322/2k</span>
+</div>
+<div class="flex gap-2 items-center">
+<span class="material-symbols-outlined text-[14px]">history</span>
+<span class="font-['Work_Sans'] text-[8px] uppercase tracking-widest">System Log</span>
+</div>
+</div>
+</div>
+</footer>
+</section>
+<!-- Sidebar (Right Column) -->
+<aside class="w-80 hidden lg:flex flex-col bg-[#f4f4f2] dark:bg-[#1a1c1b] border-l border-[#c3c8c1]/15 overflow-hidden">
+<div class="flex-1 overflow-y-auto p-6 space-y-8">
+<!-- Header Identity -->
+<div class="space-y-4">
+<div class="aspect-square w-full bg-surface-container-highest group overflow-hidden relative shadow-sm">
+<img class="object-cover w-full h-full grayscale hover:grayscale-0 transition-all duration-700" data-alt="Mysterious portrait of a swordsman with a shadowed face, wearing traditional East Asian silk robes in muted emerald and charcoal tones, dramatic high-contrast lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDkaTs6Q3fgJEpJp9E0xGK7CZCpNr8pyZYJvwvaG5IjG0ZDTDVhKmasB4IJYAjr30EW5Tsa8T91AM3OxoMVAkdTjeqUXE__10GmpwIaTlrpPJjFhbhUzksEQgmiU2vMXjD_OUY6q1EyIg7elCRfuaLI-JKQd3oeu431TC9VsYIP1r66XuUOeEQ-QfYvs2HW0Dj6DdJmmYToDl3EMTdgG41zkxcHm2Rsdg9SDVfZPFwoRcRkq6HAZ6-Vx4L39zymgsuG2WJY3YH4NEWK"/>
+<div class="absolute inset-0 bg-secondary/10 pointer-events-none"></div>
+</div>
+<div>
+<h3 class="font-headline text-xl font-bold text-on-surface">碎影江湖</h3>
+<p class="font-label text-[10px] uppercase tracking-widest text-secondary mt-1">刃影迷局 · LEVEL 4 WEAVER</p>
+</div>
+</div>
+<!-- Tabs -->
+<nav class="flex flex-col gap-1">
+<button class="flex items-center gap-3 px-4 py-3 text-[#1a1c1b] dark:text-[#f9f9f7] border-r-2 border-[#506354] bg-[#e2e3e1] dark:bg-[#2d2f2e]">
+<span class="material-symbols-outlined text-sm">person</span>
+<span class="font-['Work_Sans'] uppercase tracking-widest text-[10px]">CHARACTER</span>
+</button>
+<button class="flex items-center gap-3 px-4 py-3 text-[#1a1c1b]/40 dark:text-[#f9f9f7]/40 hover:bg-[#e2e3e1]/50 dark:hover:bg-[#2d2f2e]/50 transition-colors">
+<span class="material-symbols-outlined text-sm">auto_stories</span>
+<span class="font-['Work_Sans'] uppercase tracking-widest text-[10px]">JOURNAL</span>
+</button>
+<button class="flex items-center gap-3 px-4 py-3 text-[#1a1c1b]/40 dark:text-[#f9f9f7]/40 hover:bg-[#e2e3e1]/50 dark:hover:bg-[#2d2f2e]/50 transition-colors">
+<span class="material-symbols-outlined text-sm">group</span>
+<span class="font-['Work_Sans'] uppercase tracking-widest text-[10px]">PEOPLE</span>
+</button>
+</nav>
+<!-- State Info -->
+<div class="space-y-6">
+<div class="space-y-3">
+<h4 class="font-label text-[10px] uppercase tracking-widest text-on-surface/40">Current Context</h4>
+<div class="space-y-2 text-sm">
+<div class="flex justify-between border-b border-outline-variant/10 pb-1">
+<span class="text-secondary opacity-70">时间</span>
+<span class="font-medium">戌时</span>
+</div>
+<div class="flex justify-between border-b border-outline-variant/10 pb-1">
+<span class="text-secondary opacity-70">地点</span>
+<span class="font-medium">幽云古刹</span>
+</div>
+</div>
+</div>
+<div class="space-y-3">
+<h4 class="font-label text-[10px] uppercase tracking-widest text-on-surface/40">Mission Data</h4>
+<div class="p-4 bg-surface-container-high/50 text-sm leading-relaxed border border-outline-variant/10">
+<p class="mb-2"><span class="text-secondary font-bold mr-2">●</span>调查失踪的商队</p>
+<p><span class="text-secondary font-bold mr-2">●</span>寻找关键线索</p>
+</div>
+</div>
+<div class="space-y-3">
+<h4 class="font-label text-[10px] uppercase tracking-widest text-on-surface/40">NPC Detail</h4>
+<div class="flex gap-3 items-start p-3 bg-surface-container-high/30">
+<div class="w-12 h-12 bg-surface-container-highest flex-shrink-0 grayscale">
+<img class="w-full h-full object-cover" data-alt="Traditional portrait of an Asian male swordsman in teal robes, stoic expression, high-end editorial photography style" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBxWyWPK2naUpSxkUWm9xlLgNVMEIP7czdh3Smg3EA42rT22RlOxWrbPxldWKOWEzgrZCEFaW0chPSZn7XMgSRo9sSBdyUSYM9EDzF_WnB7HgI2O1yxQkvFEiPy0KpBC4jfa02C52F5BMZr7RjojyB4xMeIRjRCkP8jGvbTvyUH9-wBhfzTABquPLl1lA_z4mfr2KTTLjimCQysnrgH-h1kAaJPwAEjLp9xndLW4ZnezfTXtxoVOi60sGM3RmAAVMPLJwb8aFcbnAT8"/>
+</div>
+<div>
+<p class="font-bold text-sm">青衣剑客</p>
+<p class="text-[11px] text-on-surface-variant leading-relaxed mt-1">江湖游侠，身份成谜。剑意深藏不露。</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Sidebar Footer -->
+<div class="p-6 border-t border-outline-variant/15 bg-surface-container-low">
+<button class="w-full py-3 bg-gradient-to-tr from-[#506354] to-[#d3e8d5] text-white font-label text-[10px] uppercase tracking-widest shadow-lg shadow-secondary/10 hover:opacity-90 transition-opacity">
+                    View Inventory
+                </button>
+</div>
+</aside>
+</main>
+</body></html>

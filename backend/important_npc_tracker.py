@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+from copy import deepcopy
+
+try:
+    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name
+except ImportError:
+    from name_sanitizer import sanitize_runtime_name, is_protagonist_name
+
+
+SERVICE_ROLE_TOKENS = ('掌柜', '伙计', '小二', '老板', '船夫', '艄公', '跑堂', '脚夫', '商贩', '店伙计', '店小二', '掌舵')
+THREAD_KIND_WEIGHT = {
+    'main': 2,
+    'risk': 1,
+    'clue': 1,
+    'arbiter': 1,
+}
+
+
+def _turn_pairs(history: list[dict]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    current_user = None
+    for item in history:
+        role = item.get('role')
+        content = item.get('content', '') or ''
+        if role == 'user':
+            current_user = content
+        elif role == 'assistant':
+            pairs.append((current_user or '', content))
+            current_user = None
+    return pairs
+
+
+def _count_mentions(history: list[dict], names: list[str]) -> tuple[int, int]:
+    user_mentions = 0
+    any_mentions = 0
+    for user_text, assistant_text in _turn_pairs(history):
+        matched = any(name and (name in user_text or name in assistant_text) for name in names)
+        if matched:
+            any_mentions += 1
+        if any(name and name in user_text for name in names):
+            user_mentions += 1
+    return user_mentions, any_mentions
+
+
+def _is_service_role(role_label: str) -> bool:
+    text = role_label or ''
+    return any(token in text for token in SERVICE_ROLE_TOKENS)
+
+
+def _important_key(label: str) -> str:
+    return f'important:{(label or "unknown").strip()}'
+
+
+def _service_lock_allowed(*, label: str, role_label: str, worldbook_candidate: bool, user_mentions: int, total_mentions: int, thread_weight: int, retained_entity: bool, latest_change: str) -> bool:
+    if worldbook_candidate:
+        return True
+    if not _is_service_role(role_label):
+        return True
+    if label == '伙计' and any(token in latest_change for token in ['探出半个身子', '喊了一声', '门口', '看热闹']):
+        return False
+    if user_mentions >= 2 and thread_weight >= 2:
+        return True
+    if total_mentions >= 5 and thread_weight >= 2 and retained_entity:
+        return True
+    return False
+
+
+def update_important_npcs(state: dict, history: list[dict], lorebook_candidates: list[dict] | None = None) -> dict:
+    current = deepcopy(state or {})
+    current_location = str(current.get('location', '') or '').strip()
+    current_main_event = str(current.get('main_event', '') or '').strip()
+    previous = current.get('important_npcs', []) if isinstance(current.get('important_npcs', []), list) else []
+    prev_by_key = {item.get('key'): item for item in previous if isinstance(item, dict) and item.get('key')}
+    lore_names = {str(item.get('name', '')).strip() for item in (lorebook_candidates or []) if str(item.get('name', '')).strip()}
+    hint_names = {
+        sanitize_runtime_name(item.get('primary_label', ''))
+        for item in (current.get('continuity_hints', []) or [])
+        if isinstance(item, dict) and sanitize_runtime_name(item.get('primary_label', ''))
+    }
+    thread_actor_names = set()
+    thread_weight_by_actor: dict[str, int] = {}
+    for item in current.get('active_threads', []) or []:
+        if not isinstance(item, dict):
+            continue
+        thread_weight = THREAD_KIND_WEIGHT.get(str(item.get('kind', '') or ''), 0)
+        for actor in item.get('actors', []) or []:
+            actor_name = sanitize_runtime_name(actor)
+            if actor_name:
+                thread_actor_names.add(actor_name)
+                thread_weight_by_actor[actor_name] = thread_weight_by_actor.get(actor_name, 0) + thread_weight
+
+    next_items: list[dict] = []
+    seen: set[str] = set()
+    for entity in current.get('scene_entities', []) or []:
+        if not isinstance(entity, dict):
+            continue
+        label = sanitize_runtime_name(entity.get('primary_label', ''))
+        if not label or is_protagonist_name(label):
+            continue
+        aliases = [sanitize_runtime_name(alias) for alias in (entity.get('aliases') or []) if sanitize_runtime_name(alias) and not is_protagonist_name(alias)]
+        names = [label] + aliases
+        role_label = str(entity.get('role_label', '') or '').strip()
+        latest_change = ' '.join(str(item.get('latest_change', '') or '') for item in (current.get('active_threads', []) or []) if isinstance(item, dict))
+        user_mentions, total_mentions = _count_mentions(history, names)
+        worldbook_candidate = label in lore_names
+        retained_entity = not bool(entity.get('onstage'))
+        previously_locked = _important_key(label) in prev_by_key
+        importance_score = 0
+        if entity.get('onstage'):
+            importance_score += 2
+        if label in (current.get('relevant_npcs', []) or []):
+            importance_score += 1
+        importance_score += min(thread_weight_by_actor.get(label, 0), 2)
+        if user_mentions >= 2:
+            importance_score += 2
+        if total_mentions >= 4:
+            importance_score += 1
+        if worldbook_candidate:
+            importance_score += 2
+        if label in hint_names:
+            importance_score += 3
+        if len(set(aliases)) >= 2:
+            importance_score += 1
+        if retained_entity:
+            importance_score += 1
+        if previously_locked:
+            importance_score += 2
+        if _is_service_role(role_label) and not worldbook_candidate:
+            if user_mentions == 0:
+                importance_score -= 2
+            if total_mentions < 3:
+                importance_score -= 1
+            if thread_weight_by_actor.get(label, 0) <= 1:
+                importance_score -= 1
+            if label == '伙计' and any(token in latest_change for token in ['探出半个身子', '喊了一声', '门口', '看热闹']):
+                importance_score -= 3
+        service_lock_ok = _service_lock_allowed(
+            label=label,
+            role_label=role_label,
+            worldbook_candidate=worldbook_candidate,
+            user_mentions=user_mentions,
+            total_mentions=total_mentions,
+            thread_weight=thread_weight_by_actor.get(label, 0),
+            retained_entity=retained_entity,
+            latest_change=latest_change,
+        )
+        if _is_service_role(role_label) and not service_lock_ok and not previously_locked:
+            continue
+        if importance_score < 3 and not previously_locked:
+            continue
+
+        key = _important_key(label)
+        prev = prev_by_key.get(key, {})
+        if key in seen:
+            continue
+        seen.add(key)
+        previously_locked = bool(prev.get('locked'))
+        present_now = bool(entity.get('onstage')) or label in (current.get('relevant_npcs', []) or [])
+        inactive_turns = 0 if present_now else int(prev.get('inactive_turns', 0) or 0) + 1
+        should_lock = service_lock_ok or not _is_service_role(role_label) or worldbook_candidate
+        next_items.append({
+            'key': key,
+            'primary_label': label,
+            'aliases': sorted({alias for alias in aliases + [sanitize_runtime_name(alias) for alias in prev.get('aliases', [])] if alias and not is_protagonist_name(alias)}),
+            'role_label': role_label or prev.get('role_label', '待确认'),
+            'anchor_type': 'continuous',
+            'worldbook_candidate': worldbook_candidate,
+            'importance_score': max(int(prev.get('importance_score', 0) or 0), importance_score),
+            'locked': should_lock,
+            'retained': retained_entity,
+            'present_now': present_now,
+            'inactive_turns': inactive_turns,
+            'last_location': current_location if present_now or not prev.get('last_location') else prev.get('last_location'),
+            'last_main_event': current_main_event if present_now or not prev.get('last_main_event') else prev.get('last_main_event'),
+            'newly_locked': not previously_locked,
+        })
+
+    for key, prev in prev_by_key.items():
+        if key in seen:
+            continue
+        label = sanitize_runtime_name(prev.get('primary_label', ''))
+        if not label or is_protagonist_name(label):
+            continue
+        carried = deepcopy(prev)
+        carried['aliases'] = [alias for alias in (carried.get('aliases') or []) if sanitize_runtime_name(alias) and not is_protagonist_name(alias)]
+        carried['retained'] = True
+        carried['present_now'] = False
+        carried['inactive_turns'] = int(prev.get('inactive_turns', 0) or 0) + 1
+        carried['newly_locked'] = False
+        next_items.append(carried)
+        seen.add(key)
+
+    current['important_npcs'] = next_items
+    return current
