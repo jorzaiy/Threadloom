@@ -1,0 +1,41 @@
+{
+  "providers": {
+    "custom-provider": {
+      "baseUrl": "https://your-provider.example/v1",
+      "apiKey": "",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "gpt-5.4",
+          "name": "gpt-5.4",
+          "reasoning": true,
+          "input": ["text"],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 1000000,
+          "maxTokens": 100000,
+          "api": "openai-completions"
+        },
+        {
+          "id": "Llama-3.3-70B",
+          "name": "Llama-3.3-70B",
+          "reasoning": false,
+          "input": ["text"],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 32768,
+          "maxTokens": 8192,
+          "api": "openai-completions"
+        }
+      ]
+    }
+  }
+}

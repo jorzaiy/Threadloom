@@ -45,12 +45,47 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - `frontend/`
 - `config/`
 - `prompts/`
+- `examples/`
 - `character/`
 - `memory/`
 - `runtime/`
 - `doc/`
 
 ## 启动
+
+1. 复制配置模板：
+
+```bash
+cp config/runtime.example.json config/runtime.json
+cp config/providers.example.json config/providers.json
+```
+
+2. 按你的环境填写：
+
+```bash
+config/runtime.json
+config/providers.json
+```
+
+3. 准备你自己的内容层：
+
+- `character/`
+- `memory/`
+- `runtime/persona-seeds/`
+- `USER.md`
+- `player-profile.json`
+- `player-profile.md`
+
+公开仓库同时附带一套最小模板内容：
+
+- `examples/character/`
+- `examples/memory/`
+- `examples/player-profile.*`
+- `examples/USER.md`
+
+如果你暂时还没有准备真实内容，可以先用 `examples/` 跑通最小链路，再逐步替换为自己的本地文件。
+
+4. 启动：
 
 ```bash
 cd /Threadloom/backend
@@ -85,16 +120,10 @@ http://127.0.0.1:8765
 配置模板：
 
 - `config/runtime.example.json`
+- `config/providers.example.json`
 
 说明：
 - 仓库不包含真实的 `config/runtime.json`
+- 仓库不包含真实的 `config/providers.json`
 - 发布版本默认保留配置模板，实际端点和 API key 需要本地自行填写
-
-## 当前状态
-
-这份 `/Threadloom` 目录已经可以作为独立项目目录继续整理和演进，但仍有几类事项在继续收尾：
-
-- 人物命名与旧 alias 污染的长期清理
-- NPC knowledge scope 的结构化落地
-- 进一步去除残留的 `runtime-web` 历史命名
-- 独立仓库化与部署脚本整理
+- 仓库默认提交的是 `examples/` 模板内容，而不是你的真实角色卡、memory、session 或用户档案

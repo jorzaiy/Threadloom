@@ -2,20 +2,20 @@
   "version": 1,
   "sources": {
     "runtime_rules": "prompts/runtime-rules.md",
-    "openclaw_models": "/path/to/models.json",
-    "character_core": "character/character-data.json",
-    "lorebook": "character/lorebook.json",
-    "user": "USER.md",
-    "player_profile_md": "player-profile.md",
-    "player_profile_json": "player-profile.json",
-    "preset_dir": "character/presets",
+    "openclaw_models": "config/providers.json",
+    "character_core": "examples/character/character-data.json",
+    "lorebook": "examples/character/lorebook.json",
+    "user": "examples/USER.md",
+    "player_profile_md": "examples/player-profile.md",
+    "player_profile_json": "examples/player-profile.json",
+    "preset_dir": "examples/character/presets",
     "active_preset": "world-sim-balanced",
-    "canon": "memory/canon.md",
-    "state": "memory/state.md",
-    "summary": "memory/summary.md",
-    "history": "memory/history.jsonl",
-    "npc_profiles_dir": "memory/npcs",
-    "persona_seeds_dir": "runtime/persona-seeds"
+    "canon": "examples/memory/canon.md",
+    "state": "examples/memory/state.md",
+    "summary": "examples/memory/summary.md",
+    "history": "examples/memory/history.jsonl",
+    "npc_profiles_dir": "examples/memory/npcs",
+    "persona_seeds_dir": "examples/runtime/persona-seeds"
   },
   "models": {
     "narrator": {

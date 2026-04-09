@@ -8,6 +8,8 @@ except ImportError:
     from paths import APP_ROOT, SHARED_ROOT
 
 CONFIG = APP_ROOT / 'config' / 'runtime.json'
+PROVIDERS_CONFIG = APP_ROOT / 'config' / 'providers.json'
+PROVIDERS_EXAMPLE = APP_ROOT / 'config' / 'providers.example.json'
 
 
 def read_json(path: Path):
@@ -24,6 +26,10 @@ def resolve_source(path_str: str) -> Path:
 
 
 def load_openclaw_models() -> dict:
+    if PROVIDERS_CONFIG.exists():
+        return read_json(PROVIDERS_CONFIG)
+    if PROVIDERS_EXAMPLE.exists():
+        return read_json(PROVIDERS_EXAMPLE)
     cfg = load_runtime_config()
     path = resolve_source(cfg.get('sources', {}).get('openclaw_models', ''))
     return read_json(path) if path.exists() else {}

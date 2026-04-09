@@ -9,5 +9,14 @@ backend/runtime-web.pid
 sessions/
 
 config/runtime.json
+config/providers.json
+
+USER.md
+player-profile.json
+player-profile.md
+
+character/
+memory/
+runtime/
 
 .DS_Store
