@@ -490,90 +490,27 @@ def recent_text(items, limit: int = 8) -> str:
 
 
 def infer_time(text: str) -> str:
-    for marker in ['清晨', '上午', '近午', '午后', '黄昏', '入夜', '深夜']:
-        if marker in text:
-            return f'承和十二年，三月初七，{marker}'
-    if '夜' in text:
-        return '承和十二年，三月初七，入夜'
-    return '待确认'
+    return ''
 
 
 def infer_location(text: str) -> str:
-    if any(k in text for k in ['后院', '后檐', '偏房', '柴房', '木榻', '水缸', '窗边', '窗下', '临水', '小舟', '船缆']):
-        return '临水后院与偏房一带'
-    if any(k in text for k in ['灶间', '后门', '后厨', '门帘', '灶房', '灶台', '前堂', '酒肆', '掌柜', '伙计']):
-        return '酒肆灶间与后门一带'
-    if '客栈' in text or '房' in text or '住下' in text:
-        return '渡口客栈一带'
-    if '码头' in text or '埠头' in text or '渡口' in text or '河' in text or '船' in text:
-        return '河岸与渡口一带'
-    if '客栈' in text or '房' in text or '住下' in text:
-        return '渡口客栈一带'
-    if '船' in text or '渡口' in text or '河' in text:
-        return '河岸与渡口一带'
-    if '药铺' in text:
-        return '药铺前后堂一带'
-    if '密林' in text or '树下' in text:
-        return '密林与树下藏身处一带'
-    return '待确认'
+    return ''
 
 
 def infer_main_event(text: str) -> str:
-    if any(k in text for k in ['柴房', '偏房', '木榻', '水缸', '窗边', '后墙', '翻出去', '躲在这', '搜门', '查门', '断船', '断路']):
-        return '在临时藏身处稳住伤势并寻找脱困路径。'
-    if any(k in text for k in ['堵门', '让开', '自己出来', '例行查问', '腰牌', '里面还有谁', '谁先说', '看住门']):
-        return '门口盘问、堵门对峙并试图逼出伤者身份。'
-    if any(k in text for k in ['灶间', '后门', '掌柜', '伙计']) and any(k in text for k in ['伤', '血', '官爷', '皂衣人', '门口']):
-        return '灶间藏人暴露后，皂衣人逼问并收紧局势。'
-    if any(k in text for k in ['住下', '睡', '歇', '过夜']):
-        return '安顿、休整并决定下一步去向。'
-    if any(k in text for k in ['住店', '客栈', '房钱', '通铺', '单间']):
-        return '寻找落脚处并安排过夜。'
-    if any(k in text for k in ['问船', '摆渡', '下船', '渡口']):
-        return '完成转场并寻找下一段路线。'
-    if any(k in text for k in ['追', '逃', '围杀', '搜捕']):
-        return '处理眼前追索、威胁或正面冲突。'
-    return '观察局势并等待新的明确变化。'
+    return ''
 
 
 def infer_scene_core(text: str) -> str:
-    bits = []
-    if any(k in text for k in ['柴房', '偏房', '木榻', '水缸', '窗边', '后墙', '搜门', '查门', '断船', '断路']):
-        bits.append('临时藏身处并不安全，外部搜查与出口封锁正在逼近')
-    if any(k in text for k in ['堵门', '门框', '门口', '让开', '自己出来', '例行查问', '腰牌', '里面还有谁']):
-        bits.append('门口对峙与身份盘问正在把局面逼实')
-    if any(k in text for k in ['灶间', '后门', '掌柜', '伙计']) and any(k in text for k in ['伤', '血', '藏', '里面', '官爷', '皂衣人']):
-        bits.append('藏人局面已经暴露，遮掩空间迅速缩小')
-    if any(k in text for k in ['睡', '歇', '安顿', '住下']):
-        bits.append('场面暂时转入安顿与恢复')
-    if any(k in text for k in ['住店', '客栈', '房钱', '通铺', '单间']):
-        bits.append('寻找落脚处与夜间安顿成为当前重点')
-    if any(k in text for k in ['问船', '渡口', '下船', '上船', '转场']):
-        bits.append('转场工具或逃离路径仍在影响局势选择')
-    if any(k in text for k in ['伤', '血', '痛']):
-        bits.append('伤势与风险压着场面')
-    if any(k in text for k in ['说', '问', '试探']):
-        bits.append('人物之间的话术试探正在重塑局面')
-    return '；'.join(bits) if bits else '局势仍在流动。'
+    return ''
 
 
 def infer_relevant_npcs(text: str, onstage: list[str]) -> list[str]:
-    relevant = []
-    for name in ['师兄', '褐袍人', '掌柜', '伙计', '老汉', '船夫', '皂衣人', '高个皂衣人', '少年', '姓苏的']:
-        if name in onstage:
-            continue
-        if name in text and name not in relevant:
-            relevant.append(name)
-    return relevant[:4]
+    return []
 
 
 def _legacy_state_signals(text: str) -> bool:
-    legacy_tokens = (
-        '师兄', '褐袍人', '掌柜', '伙计', '老汉', '船夫',
-        '皂衣人', '高个皂衣人', '姓苏的',
-        '柴房', '偏房', '木榻', '后门', '灶间', '客栈', '渡口', '药铺', '密林'
-    )
-    return any(token in text for token in legacy_tokens)
+    return False
 
 
 def infer_implicit_relevant(prev_state: dict, assistant_text: str, onstage: list[str], relevant: list[str]) -> list[str]:
@@ -658,24 +595,11 @@ def preserve_recent_names(prev_state: dict, assistant_text: str, onstage: list[s
 
 
 def infer_carryover_clues(text: str) -> list[str]:
-    clues = []
-    if any(k in text for k in ['柴房', '偏房', '木榻', '水缸', '窗边', '后墙', '搜门', '查门', '断船', '断路']):
-        clues.append('藏身处周边的出口、墙根与搜查路径仍在持续变化。')
-    if any(k in text for k in ['掌柜', '伙计', '后门', '灶间']) and any(k in text for k in ['皂衣人', '官爷', '盘问', '堵门']):
-        clues.append('掌柜与伙计的立场、胆量与后续站位仍会影响局势。')
-    if any(k in text for k in ['追兵', '搜捕', '盘问']) and not any(k in text for k in ['眼前', '立刻', '逼近']):
-        clues.append('外部追索仍在背景层存在。')
-    if any(k in text for k in ['伤', '血', '伤者']):
-        clues.append('伤势与恢复进度仍会影响后续节奏。')
-    return clues[:3]
+    return []
 
 
 def infer_onstage_npcs(text: str) -> list[str]:
-    names = []
-    for name in ['师兄', '褐袍人', '掌柜', '伙计', '老汉', '船夫', '皂衣人', '高个皂衣人', '少年', '姓苏的']:
-        if name in text and name not in names:
-            names.append(name)
-    return names[:4]
+    return []
 
 
 OBJECT_MEASURE_PREFIX = re.compile(r'^(那|这|一|几|数)(?:个|件|封|卷|包|把|枚|只|本|张|份|块|柄)?')
@@ -914,37 +838,6 @@ def infer_tracked_objects(text: str, prev_state: dict | None = None) -> tuple[li
 
 
 def infer_focal_entity(text: str) -> dict | None:
-    if not text:
-        return None
-    injury_markers = ['伤', '血', '还活着', '扶住', '扶着', '伤口', '失血', '半昏半醒', '站不稳', '肋下']
-    conflict_markers = ['围攻', '追', '拿下', '砍', '死了', '冲出', '被围']
-
-    if any(token in text for token in injury_markers):
-        aliases = []
-        for token in ['那人', '那名劲装人', '劲装人', '青年', '被围攻的人', '伤者']:
-            if token in text and token not in aliases:
-                aliases.append(token)
-        return {
-            'primary_label': '伤者',
-            'aliases': aliases or ['伤者'],
-            'role_label': '当前伤者 / 冲突核心对象',
-            'onstage': True,
-            'possible_link': None,
-        }
-
-    if any(token in text for token in conflict_markers):
-        aliases = []
-        for token in ['那人', '被围攻的人', '中间那人', '劲装人', '青年']:
-            if token in text and token not in aliases:
-                aliases.append(token)
-        return {
-            'primary_label': '被围攻者',
-            'aliases': aliases or ['被围攻者'],
-            'role_label': '当前被围攻对象 / 冲突核心对象',
-            'onstage': True,
-            'possible_link': None,
-        }
-
     return None
 
 
@@ -962,121 +855,27 @@ def infer_focal_entity_generic(text: str, prev_state: dict, context: dict, histo
     }
 
 
-def infer_group_hints(text: str) -> dict[str, dict]:
-    hints: dict[str, dict] = {}
-    patterns = {
-        '皂衣人': r'([一二三四五六七八九十两几半]+)(?:名|道|个)?皂衣人',
-        '伙计': r'([一二三四五六七八九十两几半]+)(?:名|个)?伙计',
-        '船夫': r'([一二三四五六七八九十两几半]+)(?:名|个)?船夫',
-    }
-    for label, pattern in patterns.items():
-        m = __import__('re').search(pattern, text)
-        if m:
-            hints[label] = {
-                'collective': True,
-                'count_hint': m.group(1),
-            }
-    return hints
-
-
 def filter_transient_npcs(text: str, onstage: list[str]) -> list[str]:
-    filtered = []
-    for name in onstage:
-        if name == '伙计' and any(token in text for token in ['探出半个身子', '喊了一声', '门口', '看热闹', '有人真朝这边喊了一声']):
-            continue
-        filtered.append(name)
-    return filtered[:4]
+    return list(onstage)[:6]
 
 
 def prioritize_scene_targets(text: str, onstage: list[str]) -> list[str]:
-    current = list(onstage)
-    if not text:
-        return current
-    legacy_anchor_count = sum(
-        1 for token in ('师兄', '褐袍人', '掌柜', '伙计', '老汉', '船夫', '皂衣人', '高个皂衣人', '姓苏的')
-        if token in text
-    )
-    if legacy_anchor_count == 0:
-        return current[:4]
-
-    target_weights = {
-        '师兄': 0,
-        '褐袍人': 0,
-        '掌柜': 0,
-        '伙计': 0,
-        '老汉': 0,
-        '船夫': 0,
-        '皂衣人': 0,
-        '高个皂衣人': 0,
-        '少年': 0,
-        '姓苏的': 0,
-    }
-
-    for name in target_weights:
-        if name not in text:
-            continue
-        target_weights[name] += 1
-        if any(token in text for token in ['砍', '围攻', '追', '拿下', '死', '伤', '血', '扶住', '救命', '怎么样', '还活着']):
-            if name in ['师兄', '褐袍人', '少年']:
-                target_weights[name] += 3
-            elif name in ['皂衣人', '高个皂衣人']:
-                target_weights[name] += 2
-            else:
-                target_weights[name] -= 1
-        if any(token in text for token in ['喊', '问他', '扶起', '护', '救']):
-            if name in ['师兄', '褐袍人', '少年']:
-                target_weights[name] += 2
-        if name == '伙计' and any(token in text for token in ['酒肆门口', '探出半个身子', '喊了一声', '路人', '旁边']):
-            target_weights[name] -= 2
-
-    ranked = sorted(target_weights.items(), key=lambda item: item[1], reverse=True)
-    prioritized = [name for name, score in ranked if score > 0]
-    merged = []
-    for name in prioritized + current:
-        if name not in merged:
-            merged.append(name)
-    return merged[:4]
+    return list(onstage)[:6]
 
 
 def build_scene_entities(onstage: list[str], text: str = '', focal_entity: dict | None = None) -> list[dict]:
-    group_hints = infer_group_hints(text)
     entities = []
     for idx, name in enumerate(onstage, start=1):
         entity = {
             'entity_id': f'scene_npc_{idx:02d}',
             'primary_label': name,
             'aliases': [name],
-            'role_label': '待确认',
+            'role_label': infer_role_label(name),
             'onstage': True,
             'possible_link': None,
-            'collective': group_hints.get(name, {}).get('collective', False),
-            'count_hint': group_hints.get(name, {}).get('count_hint'),
+            'collective': False,
+            'count_hint': None,
         }
-        if name == '师兄':
-            entity['role_label'] = '同行伤者 / 师兄'
-        elif name == '褐袍人':
-            entity['role_label'] = '褐袍同行者'
-            entity['possible_link'] = '师兄（待验证是否为同一人）'
-        elif name == '掌柜':
-            entity['role_label'] = '掌柜'
-        elif name == '伙计':
-            entity['role_label'] = '伙计'
-        elif name == '老汉':
-            entity['role_label'] = '掌舵老汉'
-        elif name == '船夫':
-            entity['role_label'] = '船夫'
-        elif name == '皂衣人':
-            entity['role_label'] = '镇北司皂衣人'
-            if '高个皂衣人' in onstage:
-                entity['possible_link'] = '高个皂衣人（待确认是否为其领头者）'
-        elif name == '高个皂衣人':
-            entity['role_label'] = '镇北司高个皂衣人'
-            if '皂衣人' in onstage:
-                entity['possible_link'] = '皂衣人群体（待确认是否同属一批追索者）'
-        elif name == '少年':
-            entity['role_label'] = '抱包少年'
-        elif name == '姓苏的':
-            entity['role_label'] = '待确认公子 / 苏姓青年'
         entities.append(entity)
     if focal_entity and focal_entity.get('primary_label'):
         names = {item['primary_label'] for item in entities}
@@ -1124,36 +923,11 @@ def build_scene_entities_generic(onstage: list[str], prev_state: dict, context: 
 
 
 def infer_immediate_goal(text: str) -> str:
-    if any(k in text for k in ['柴房', '偏房', '木榻', '水缸', '窗边', '后墙', '翻出去', '搜门', '查门', '断船', '断路']):
-        return '先稳住伤势，再判断藏身处出口与脱困路径。'
-    if any(k in text for k in ['堵门', '门口', '让开', '里面还有谁', '自己出来', '腰牌', '谁先说']):
-        return '先稳住门口局势，避免伤者身份立刻暴露。'
-    if any(k in text for k in ['灶间', '后门', '掌柜', '伙计']) and any(k in text for k in ['伤', '血', '藏', '官爷', '皂衣人']):
-        return '先拖住皂衣人，再决定是继续隐瞒、谈条件还是强行突围。'
-    if any(k in text for k in ['睡', '住下', '过夜']):
-        return '先安顿下来，恢复体力，等下一步。'
-    if any(k in text for k in ['住店', '客栈', '房钱', '通铺', '单间']):
-        return '先把落脚和过夜问题安排稳。'
-    if any(k in text for k in ['问船', '渡口']):
-        return '先确认下一段路线和落脚方式。'
-    if any(k in text for k in ['追', '逃', '搜捕']):
-        return '先稳住眼前局势，避免被截住或失手。'
-    return '先看清局势，再决定下一步。'
+    return ''
 
 
 def infer_immediate_risks(text: str) -> list[str]:
-    risks = []
-    if any(k in text for k in ['柴房', '偏房', '木榻', '水缸', '窗边', '后墙', '搜门', '查门', '断船', '断路']):
-        risks.append('藏身处出口正在被逐步封死，搜查可能很快贴近。')
-    if any(k in text for k in ['堵门', '让开', '自己出来', '里面还有谁', '看住门', '谁先说']):
-        risks.append('伤者身份与藏身位置正在迅速暴露。')
-    if any(k in text for k in ['追兵', '搜捕', '搜查', '盘问']):
-        risks.append('场景中的追索或盘问压力仍可能迅速回到前台。')
-    if any(k in text for k in ['伤', '血', '痛']):
-        risks.append('场景中的伤势与失血仍可能限制下一步行动。')
-    if any(k in text for k in ['船', '客栈', '药铺', '渡口']):
-        risks.append('当前落脚点或转场路径的安全性尚未完全坐实。')
-    return risks[:3]
+    return []
 
 
 def update_state(session_id: str) -> dict:

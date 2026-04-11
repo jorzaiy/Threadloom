@@ -94,13 +94,15 @@ def resolve_opening_choice(text: str) -> str | None:
 
 def build_opening_choice_reply(choice: str) -> str:
     title, detail = parse_hook(choice)
-    lines = [
-        '承和十二年，三月初七，入夜。',
-        '',
-        f'开局已定：{title}。',
-        '',
-        detail,
-    ]
+    bootstrap = opening_bootstrap()
+    time_label = bootstrap.get('time', '')
+    lines = []
+    if time_label:
+        lines.append(f'{time_label}。')
+        lines.append('')
+    lines.append(f'开局已定：{title}。')
+    lines.append('')
+    lines.append(detail)
     return '\n'.join(lines)
 
 

@@ -6,14 +6,11 @@ import json
 try:
     from .persona_runtime import build_persona_seed
     from .runtime_store import load_history, load_persona_index, load_state, save_persona_seed, session_paths
+    from .card_hints import get_service_role_tokens
 except ImportError:
     from persona_runtime import build_persona_seed
     from runtime_store import load_history, load_persona_index, load_state, save_persona_seed, session_paths
-
-
-SERVICE_ROLE_TOKENS = (
-    '掌柜', '伙计', '小二', '老板', '船夫', '艄公', '跑堂', '脚夫', '商贩', '店伙计', '店小二', '掌舵'
-)
+    from card_hints import get_service_role_tokens
 
 SCENE_SEED_MIN_STREAK = 5
 LONGTERM_SEED_MIN_STREAK = 7
@@ -167,8 +164,11 @@ def _count_consecutive_quiet_turns(history: list[dict], name: str, aliases: list
 
 
 def _is_service_npc(name: str, role_label: str) -> bool:
+    tokens = get_service_role_tokens()
+    if not tokens:
+        return False
     combined = f'{name} {role_label}'
-    return any(token in combined for token in SERVICE_ROLE_TOKENS)
+    return any(token in combined for token in tokens)
 
 
 def _has_proper_name(name: str) -> bool:
@@ -179,7 +179,8 @@ def _has_proper_name(name: str) -> bool:
         return True
     if cleaned[0] in COMMON_SURNAME_PREFIXES and 2 <= len(cleaned) <= 4:
         return True
-    for token in SERVICE_ROLE_TOKENS:
+    tokens = get_service_role_tokens()
+    for token in tokens:
         if token in cleaned and cleaned != token:
             prefix = cleaned.split(token, 1)[0].strip()
             if prefix and (prefix[0] in COMMON_SURNAME_PREFIXES or prefix.startswith('阿')):

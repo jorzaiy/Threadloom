@@ -8,9 +8,11 @@ from typing import Iterable
 try:
     from .continuity_hints import match_continuity_hint
     from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names
+    from .card_hints import get_known_npc_role
 except ImportError:
     from continuity_hints import match_continuity_hint
     from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names
+    from card_hints import get_known_npc_role
 
 
 def extract_section_lines(text: str, section: str) -> list[str]:
@@ -102,26 +104,9 @@ def extract_scene_entities(text: str) -> list[dict]:
 
 
 def infer_role_label(name: str) -> str:
-    if name == '师兄':
-        return '同行伤者 / 师兄'
-    if name == '褐袍人':
-        return '褐袍同行者'
-    if name == '掌柜':
-        return '掌柜'
-    if name == '伙计':
-        return '伙计'
-    if name == '老汉':
-        return '掌舵老汉'
-    if name == '船夫':
-        return '船夫'
-    if name == '皂衣人':
-        return '镇北司皂衣人'
-    if name == '高个皂衣人':
-        return '镇北司高个皂衣人'
-    if name == '少年':
-        return '抱包少年'
-    if name == '姓苏的':
-        return '待确认公子 / 苏姓青年'
+    card_role = get_known_npc_role(name)
+    if card_role:
+        return card_role
     return '待确认'
 
 

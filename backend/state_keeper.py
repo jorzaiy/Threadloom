@@ -19,6 +19,11 @@ try:
     from .model_config import load_runtime_config
     from .state_fragment import build_state_from_fragment
     from .name_sanitizer import is_protagonist_name, protagonist_names
+    from .card_hints import (
+        get_environment_tokens, get_transient_group_tokens,
+        get_non_character_object_tokens, get_generic_target_tokens,
+        get_known_npc_role, get_canonical_name,
+    )
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
@@ -27,6 +32,11 @@ except ImportError:
     from model_config import load_runtime_config
     from state_fragment import build_state_from_fragment
     from name_sanitizer import is_protagonist_name, protagonist_names
+    from card_hints import (
+        get_environment_tokens, get_transient_group_tokens,
+        get_non_character_object_tokens, get_generic_target_tokens,
+        get_known_npc_role, get_canonical_name,
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -35,10 +45,7 @@ logger = logging.getLogger(__name__)
 STRING_FIELDS = ('time', 'location', 'main_event', 'scene_core', 'immediate_goal')
 LIST_FIELDS = ('onstage_npcs', 'relevant_npcs', 'immediate_risks', 'carryover_clues', 'scene_entities')
 LOW_SIGNAL_TOKENS = ('待确认', '暂无', 'unknown', '未明', '不明')
-ENVIRONMENT_ENTITY_TOKENS = ('巷口', '雨', '刀光', '积水', '灯火', '灯影', '竹梯', '破箩筐', '砖墙', '青石', '檐角', '风灯', '车辕', '独轮车')
-TRANSIENT_GROUP_TOKENS = ('更夫', '闲人', '行人', '旁人', '路人', '众人', '几人', '那几人', '几名', '外头的人', '巷外的人', '围观的人', '看热闹的人')
-NON_CHARACTER_OBJECT_TOKENS = ('油布包', '纸卷', '竹筒', '账目', '名录', '令牌', '银袋', '包裹', '短镖', '铁镖', '铁牌', '木牌')
-GENERIC_TARGET_TOKENS = ('深衣人', '被围', '被围之人', '被围的人', '青年', '年轻男人', '年轻人', '男人', '那人', '目标人物', '伤者')
+
 
 
 STATE_KEEPER_SYSTEM = """你是 RP 结构化状态提取器，只做事实提取，不写叙事。
@@ -369,14 +376,7 @@ def _normalize_object_label(text: str) -> str:
     if not value:
         return ''
     value = value.split('（', 1)[0].split('(', 1)[0].strip()
-    translations = {
-        'paper_note': '纸条',
-        'note': '纸条',
-        'slip': '纸条',
-        'knife': '短刀',
-        'short_blade': '短刀',
-    }
-    return translations.get(value, value)
+    return value
 
 
 def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> dict:
@@ -722,7 +722,8 @@ def _looks_like_environment_entity(name: str, role_label: str) -> bool:
     text = f'{name} {role_label}'.strip()
     if not text:
         return True
-    if any(token in name for token in ENVIRONMENT_ENTITY_TOKENS):
+    env_tokens = get_environment_tokens()
+    if env_tokens and any(token in name for token in env_tokens):
         return True
     if any(token in role_label for token in ('环境', '地点', '物件', '道具', '光影')):
         return True
@@ -733,9 +734,10 @@ def _looks_like_transient_group(name: str, role_label: str) -> bool:
     text = f'{name} {role_label}'.strip()
     if not text:
         return True
-    if any(token in text for token in TRANSIENT_GROUP_TOKENS):
+    group_tokens = get_transient_group_tokens()
+    if group_tokens and any(token in text for token in group_tokens):
         return True
-    if any(token in name for token in ('（', '）', '和', '以及')) and not any(key in name for key in ('皂衣人', '高个皂衣人')):
+    if any(token in name for token in ('（', '）', '和', '以及')):
         return True
     return False
 
@@ -744,7 +746,8 @@ def _looks_like_non_character_object(name: str, role_label: str) -> bool:
     text = f'{name} {role_label}'.strip()
     if not text:
         return True
-    if any(token in name for token in NON_CHARACTER_OBJECT_TOKENS):
+    obj_tokens = get_non_character_object_tokens()
+    if obj_tokens and any(token in name for token in obj_tokens):
         return True
     if any(token in role_label for token in ('物件', '证物', '道具', '包裹', '卷宗', '账册')):
         return True
@@ -757,37 +760,24 @@ def _canonical_character_name(name: str, known_names: set[str]) -> str:
         return ''
     if text in known_names:
         return text
-    if '皂衣人' in text:
-        return '高个皂衣人' if '高个' in text or '领头' in text else '皂衣人'
-    if any(token in text for token in GENERIC_TARGET_TOKENS):
-        for candidate in ('伤者', '师兄', '褐袍人', '少年'):
-            if candidate in known_names:
+    canonical = get_canonical_name(text)
+    if canonical:
+        return canonical
+    target_tokens = get_generic_target_tokens()
+    if target_tokens and any(token in text for token in target_tokens):
+        for candidate in known_names:
+            if candidate:
                 return candidate
-        return '伤者'
-    if '掌柜' in text:
-        return '掌柜'
-    if '伙计' in text:
-        return '伙计'
-    if '师兄' in text:
-        return '师兄'
     return text
 
 
 def _canonical_candidate_name(surface: str, role_hint: str, known_names: set[str], scene_hint: str) -> str:
     text = _canonical_character_name(surface, known_names)
-    combined = f'{surface} {role_hint} {scene_hint}'.strip()
     if text in known_names:
         return text
-    if '皂衣人' in combined:
-        return '高个皂衣人' if any(token in combined for token in ('高个', '领头', '头领')) else '皂衣人'
-    if any(token in combined for token in ('围攻', '围杀', '被围', '伤', '血', '受伤', '目标', '深衣', '青年', '男人', '伤者')):
-        return '伤者'
-    if '师兄' in combined:
-        return '师兄'
-    if '掌柜' in combined:
-        return '掌柜'
-    if '伙计' in combined:
-        return '伙计'
+    canonical = get_canonical_name(surface)
+    if canonical:
+        return canonical
     return text
 
 
@@ -795,43 +785,21 @@ def _slot_hint_for_candidate(item: dict, scene_hint: str) -> str:
     slot = str(item.get('slot_hint', 'unknown') or 'unknown').strip().lower()
     if slot in {'conflict_target', 'pursuer', 'observer', 'key_object', 'ambient_group'}:
         return slot
-    surface = str(item.get('surface', '') or '').strip()
-    role_hint = str(item.get('role_hint', '') or '').strip()
-    combined = f'{surface} {role_hint} {scene_hint}'.strip()
     entity_type = str(item.get('entity_type', 'character') or 'character').strip().lower()
     if entity_type == 'object':
         return 'key_object'
     if entity_type == 'ambient_group':
         return 'ambient_group'
-    if any(token in combined for token in ('围攻', '围杀', '被围', '受伤', '伤口', '血', '目标', '深衣', '年轻男人', '青年', '那人')):
-        return 'conflict_target'
-    if any(token in combined for token in ('皂衣人', '镇北司', '追兵', '围攻者', '持弩', '头领', '封路')):
-        return 'pursuer'
-    if any(token in combined for token in ('旁观', '观察', '躲在巷口', '檐影', '巷口外', '外头观察')):
-        return 'observer'
     return 'unknown'
-
-
-def _default_name_for_slot(slot: str) -> str:
-    return {
-        'conflict_target': '伤者',
-        'pursuer': '皂衣人',
-        'observer': '旁观者',
-        'key_object': '关键物件',
-        'ambient_group': '背景人群',
-    }.get(slot, '')
 
 
 def _role_label_for_name(name: str, role_label: str, scene_hint: str) -> str:
     text = str(role_label or '').strip()
     if text and text != '待确认':
         return text
-    if name == '伤者':
-        return '当前伤者 / 冲突核心对象'
-    if name == '被围攻者':
-        return '当前被围攻对象 / 冲突核心对象'
-    if any(token in scene_hint for token in ('围攻', '围杀', '追索', '伤', '血')) and name in {'伤者', '师兄', '褐袍人', '少年'}:
-        return '当前伤者 / 冲突核心对象'
+    card_role = get_known_npc_role(name)
+    if card_role:
+        return card_role
     inferred = infer_role_label(name)
     return inferred if inferred else '待确认'
 
@@ -884,10 +852,6 @@ def _semantic_cleanup(payload: dict, prev_state: dict, state_fragment: dict) -> 
                 target.append(canonical)
         return cleaned_entities, onstage_names[:6], [name for name in relevant_names if name not in onstage_names][:6]
 
-    def looks_like_attacker(entity: dict) -> bool:
-        text = f"{entity.get('primary_label', '')} {entity.get('role_label', '')}".strip()
-        return any(token in text for token in ('皂衣人', '镇北司', '围攻者', '敌人'))
-
     def merge_entities(primary_entities: list[dict], fallback_entities: list[dict]) -> list[dict]:
         merged = []
         seen = set()
@@ -899,16 +863,6 @@ def _semantic_cleanup(payload: dict, prev_state: dict, state_fragment: dict) -> 
                 continue
             seen.add(primary)
             merged.append(item)
-        if any(token in scene_hint for token in ('围攻', '围杀', '追索', '伤', '血')):
-            non_attackers = [item for item in merged if not looks_like_attacker(item)]
-            if not non_attackers:
-                for item in fallback_entities:
-                    if not looks_like_attacker(item):
-                        primary = str(item.get('primary_label', '') or '').strip()
-                        if primary and primary not in seen:
-                            seen.add(primary)
-                            merged.append(item)
-                            break
         return merged
 
     legacy_entities, legacy_onstage, legacy_relevant = clean_legacy_entities()

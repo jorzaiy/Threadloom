@@ -5,11 +5,10 @@ from copy import deepcopy
 
 try:
     from .name_sanitizer import sanitize_runtime_name, is_protagonist_name
+    from .card_hints import get_service_role_tokens
 except ImportError:
     from name_sanitizer import sanitize_runtime_name, is_protagonist_name
-
-
-SERVICE_ROLE_TOKENS = ('掌柜', '伙计', '小二', '老板', '船夫', '艄公', '跑堂', '脚夫', '商贩', '店伙计', '店小二', '掌舵')
+    from card_hints import get_service_role_tokens
 THREAD_KIND_WEIGHT = {
     'main': 2,
     'risk': 1,
@@ -46,7 +45,10 @@ def _count_mentions(history: list[dict], names: list[str]) -> tuple[int, int]:
 
 def _is_service_role(role_label: str) -> bool:
     text = role_label or ''
-    return any(token in text for token in SERVICE_ROLE_TOKENS)
+    tokens = get_service_role_tokens()
+    if not tokens:
+        return False
+    return any(token in text for token in tokens)
 
 
 def _important_key(label: str) -> str:
