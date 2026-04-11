@@ -2,7 +2,7 @@
   "providers": {
     "custom-provider": {
       "baseUrl": "https://your-provider.example/v1",
-      "apiKey": "",
+      "apiKey": "env:THREADLOOM_CUSTOM_PROVIDER_API_KEY",
       "api": "openai-completions",
       "models": [
         {

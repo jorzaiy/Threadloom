@@ -17,6 +17,7 @@ try:
     from .model_config import resolve_provider_model
     from .model_client import call_model
     from .narrator_input import build_narrator_input
+    from .paths import normalize_session_id
     from .state_fragment import build_state_fragment, build_state_from_fragment
     from .state_keeper import call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from .summary_updater import update_summary
@@ -37,6 +38,7 @@ except ImportError:
     from model_config import resolve_provider_model
     from model_client import call_model
     from narrator_input import build_narrator_input
+    from paths import normalize_session_id
     from state_fragment import build_state_fragment, build_state_from_fragment
     from state_keeper import call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from summary_updater import update_summary
@@ -130,13 +132,17 @@ def update_stub_state(state: dict, text: str, context: dict) -> dict:
 
 
 def validate_message_payload(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    session_id = str(payload.get('session_id', '') or '').strip()
+    raw_session_id = str(payload.get('session_id', '') or '').strip()
     text = str(payload.get('text', '') or '').strip()
     client_turn_id = str(payload.get('client_turn_id', '') or '').strip()
     meta = payload.get('meta', {}) or {}
 
-    if not session_id:
+    if not raw_session_id:
         return False, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id is required'}}
+    try:
+        session_id = normalize_session_id(raw_session_id)
+    except ValueError as err:
+        return False, {'error': {'code': 'INVALID_INPUT', 'message': str(err)}}
     if not text:
         return False, {'error': {'code': 'INVALID_INPUT', 'message': 'text is required'}}
 

@@ -6,11 +6,11 @@ from pathlib import Path
 try:
     from .persona_runtime import infer_persona_traits
     from .name_sanitizer import sanitize_runtime_name
-    from .paths import APP_ROOT, SHARED_ROOT, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, resolve_layered_source, resolve_session_dir, shared_path
+    from .paths import APP_ROOT, SHARED_ROOT, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
 except ImportError:
     from persona_runtime import infer_persona_traits
     from name_sanitizer import sanitize_runtime_name
-    from paths import APP_ROOT, SHARED_ROOT, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, resolve_layered_source, resolve_session_dir, shared_path
+    from paths import APP_ROOT, SHARED_ROOT, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
@@ -260,21 +260,58 @@ def save_state(session_id: str, state: dict) -> None:
 
 
 def trace_path(session_id: str, turn_id: str) -> Path:
+    path = _trace_file_path(session_id, turn_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _trace_file_path(session_id: str, turn_id: str) -> Path:
     paths = session_paths(session_id)
     trace_dir = paths['trace_dir']
-    trace_dir.mkdir(parents=True, exist_ok=True)
-    safe_turn_id = str(turn_id or 'turn-unknown').strip() or 'turn-unknown'
+    safe_turn_id = normalize_turn_id(turn_id)
     return trace_dir / f'{safe_turn_id}.json'
 
 
+def trace_runtime_settings() -> dict:
+    trace = load_runtime_web_config().get('trace', {})
+    if not isinstance(trace, dict):
+        trace = {}
+    try:
+        keep_last_turns = int(trace.get('keep_last_turns', 40) or 40)
+    except (TypeError, ValueError):
+        keep_last_turns = 40
+    keep_last_turns = max(1, keep_last_turns)
+    return {
+        'enabled': bool(trace.get('enabled', True)),
+        'keep_last_turns': keep_last_turns,
+    }
+
+
+def _prune_trace_files(trace_dir: Path, keep_last_turns: int) -> None:
+    files = sorted(
+        [path for path in trace_dir.glob('*.json') if path.is_file()],
+        key=lambda path: path.name,
+    )
+    for path in files[:-keep_last_turns]:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+
+
 def save_turn_trace(session_id: str, turn_id: str, trace: dict) -> Path:
-    path = trace_path(session_id, turn_id)
+    settings = trace_runtime_settings()
+    path = _trace_file_path(session_id, turn_id)
+    if not settings['enabled']:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(trace, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    _prune_trace_files(path.parent, settings['keep_last_turns'])
     return path
 
 
 def load_turn_trace(session_id: str, turn_id: str) -> dict:
-    path = trace_path(session_id, turn_id)
+    path = _trace_file_path(session_id, turn_id)
     if not path.exists():
         return {}
     try:

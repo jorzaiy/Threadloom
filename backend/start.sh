@@ -3,6 +3,15 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
+APP_ROOT="$(cd "$DIR/.." && pwd)"
+
+if [[ -f "$APP_ROOT/.env.local" ]]; then
+  # Load user-local secrets for provider config env:VAR references.
+  set -a
+  # shellcheck disable=SC1091
+  . "$APP_ROOT/.env.local"
+  set +a
+fi
 
 PID_FILE="$DIR/threadloom.pid"
 LOG_FILE="$DIR/threadloom.log"

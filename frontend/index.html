@@ -20,12 +20,19 @@
             <p class="brand-subtitle">The Living Manuscript</p>
           </div>
           <div class="topbar-actions">
-            <div class="session-pill" id="sessionIndicator">story-live</div>
-            <button id="settingsBtn" class="icon-btn" type="button" aria-haspopup="dialog" aria-controls="settingsPanel" aria-expanded="false">
-              <span class="material-symbols-outlined">settings</span>
-              <span>设置</span>
-            </button>
-          </div>
+            <div class="session-dock-wrap topbar-session-dock">
+              <button id="sessionIndicator" class="session-pill session-indicator-trigger" type="button" aria-expanded="false" aria-controls="sessionDockPanel">
+                <span id="sessionIndicatorLabel" class="session-indicator-label">story-live</span>
+                <span class="material-symbols-outlined session-indicator-chevron" aria-hidden="true">expand_more</span>
+              </button>
+              <div id="sessionDockPanel" class="session-dock-panel" hidden>
+                <div id="sessionDockList" class="session-dock-list"></div>
+              </div>
+            </div>
+        <button id="settingsBtn" class="icon-btn settings-icon-btn" type="button" aria-haspopup="dialog" aria-controls="settingsPanel" aria-expanded="false" aria-label="打开设置">
+          <span class="material-symbols-outlined">settings</span>
+        </button>
+      </div>
         </header>
         <section id="messages" class="messages"></section>
         <form id="composer" class="composer">
@@ -74,8 +81,8 @@
     <aside id="settingsPanel" class="settings-panel" aria-hidden="true">
       <div class="settings-header">
         <div>
-          <p class="settings-kicker">Settings</p>
-          <h2>设置与存档</h2>
+          <p class="settings-kicker">Config</p>
+          <h2>模型与站点</h2>
         </div>
         <button id="settingsCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭设置">
           <span class="material-symbols-outlined">close</span>
@@ -84,22 +91,49 @@
 
       <div class="settings-body">
         <section class="settings-section">
-          <h3>会话管理</h3>
-          <div class="session-bar session-bar-panel">
-            <label for="sessionId">Session</label>
-            <input id="sessionId" value="story-live" />
-            <select id="sessionList"></select>
-          </div>
-          <div class="settings-actions">
-            <button id="reloadBtn" type="button">刷新</button>
-            <button id="newGameBtn" type="button">开始新游戏</button>
-            <button id="deleteSessionBtn" type="button" class="danger-btn">删除当前</button>
-          </div>
-        </section>
+          <div class="settings-stack">
+            <section class="settings-subsection">
+              <h3>站点配置</h3>
+              <div class="config-grid">
+                <label class="field field-wide">
+                  <span>URL</span>
+                  <input id="siteBaseUrlInput" type="url" placeholder="https://your-provider.example/v1" />
+                </label>
+                <label class="field">
+                  <span>API 类型</span>
+                  <select id="siteApiTypeSelect"></select>
+                </label>
+                <label class="field">
+                  <span>API Key</span>
+                  <input id="siteApiKeyInput" type="password" placeholder="留空表示保持不变" />
+                </label>
+              </div>
+              <div class="settings-actions">
+                <button id="discoverSiteModelsBtn" type="button" class="subtle-btn">获取模型</button>
+                <button id="saveSiteConfigBtn" type="button">保存站点</button>
+              </div>
+              <div id="siteStatusNote" class="inline-feedback"></div>
+            </section>
 
-        <section class="settings-section muted-section">
-          <h3>模型与运行</h3>
-          <p>此区先保留布局入口。LLM 管理后续按现有运行链逐步接入，不在本次改动中做完整实现。</p>
+            <section class="settings-subsection">
+              <h3>模型选择</h3>
+              <div class="config-grid">
+                <label class="field">
+                  <span>Narrator</span>
+                  <select id="narratorModelSelect"></select>
+                </label>
+                <label class="field">
+                  <span>State Keeper</span>
+                  <select id="stateKeeperModelSelect"></select>
+                </label>
+              </div>
+              <div id="modelConfigNote" class="inline-feedback">温度和最大输出长度已固定到默认配置，由管理员维护。</div>
+            </section>
+
+            <div class="settings-actions">
+              <button id="saveModelConfigBtn" type="button">保存模型配置</button>
+            </div>
+          </div>
         </section>
       </div>
     </aside>

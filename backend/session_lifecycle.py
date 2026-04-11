@@ -11,12 +11,12 @@ from pathlib import Path
 try:
     from .bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from .opening import build_opening_reply, initialize_opening_state
-    from .paths import iter_session_dirs, resolve_session_dir, session_archive_target
+    from .paths import iter_session_dirs, managed_session_id_from_path, normalize_session_id, resolve_session_dir, session_archive_target
     from .runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, save_summary, session_paths
 except ImportError:
     from bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from opening import build_opening_reply, initialize_opening_state
-    from paths import iter_session_dirs, resolve_session_dir, session_archive_target
+    from paths import iter_session_dirs, managed_session_id_from_path, normalize_session_id, resolve_session_dir, session_archive_target
     from runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, save_summary, session_paths
 
 
@@ -25,6 +25,7 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _archive_target(session_id: str) -> Path:
+    session_id = normalize_session_id(session_id)
     session_dir = resolve_session_dir(session_id)
     return session_archive_target(session_dir, session_id)
 
@@ -68,6 +69,42 @@ def _session_updated_at(session_dir: Path) -> int:
     return max(mtimes) if mtimes else 0
 
 
+def _session_last_message_ts(session_dir: Path) -> int:
+    history_path = session_dir / 'memory' / 'history.jsonl'
+    if not history_path.exists():
+        return 0
+    try:
+        with history_path.open('rb') as f:
+            f.seek(0, 2)
+            end = f.tell()
+            if end <= 0:
+                return 0
+            buffer = b''
+            step = 4096
+            pos = end
+            while pos > 0:
+                read_size = step if pos >= step else pos
+                pos -= read_size
+                f.seek(pos)
+                buffer = f.read(read_size) + buffer
+                lines = buffer.splitlines()
+                while lines:
+                    raw = lines.pop()
+                    if not raw.strip():
+                        continue
+                    try:
+                        item = json.loads(raw.decode('utf-8'))
+                    except Exception:
+                        continue
+                    try:
+                        return int(item.get('ts', 0) or 0)
+                    except (TypeError, ValueError):
+                        return 0
+            return 0
+    except Exception:
+        return 0
+
+
 def _session_has_persisted_content(session_dir: Path) -> bool:
     if not session_dir.exists():
         return False
@@ -78,6 +115,7 @@ def _session_has_persisted_content(session_dir: Path) -> bool:
 
 
 def archive_session(session_id: str) -> str | None:
+    session_id = normalize_session_id(session_id)
     session_dir = resolve_session_dir(session_id, create=False)
     if not session_dir.exists():
         return None
@@ -88,12 +126,25 @@ def archive_session(session_id: str) -> str | None:
     return str(target.relative_to(ROOT))
 
 
-def _resolve_relative_session_dir(path_str: str | None) -> Path | None:
-    if not path_str:
+def _resolve_linked_session_dir(context: dict | None) -> Path | None:
+    if not isinstance(context, dict):
         return None
-    path = Path(path_str)
-    abs_path = path if path.is_absolute() else (ROOT / path)
-    return abs_path if abs_path.exists() else None
+    linked_session_id = context.get('archived_previous_session_id')
+    if linked_session_id:
+        try:
+            linked_session_id = normalize_session_id(str(linked_session_id))
+        except ValueError:
+            linked_session_id = None
+    if not linked_session_id:
+        path_str = context.get('archived_previous_session_to')
+        if path_str:
+            path = Path(path_str)
+            abs_path = path if path.is_absolute() else (ROOT / path)
+            linked_session_id = managed_session_id_from_path(abs_path)
+    if not linked_session_id:
+        return None
+    linked_dir = resolve_session_dir(linked_session_id, create=False)
+    return linked_dir if linked_dir.exists() else None
 
 
 def _load_context_file(session_dir: Path) -> dict:
@@ -114,7 +165,7 @@ def _collect_session_lineage(session_dir: Path) -> list[Path]:
         seen.add(current)
         to_delete.append(current)
         context = _load_context_file(current)
-        next_dir = _resolve_relative_session_dir(context.get('archived_previous_session_to'))
+        next_dir = _resolve_linked_session_dir(context)
         current = next_dir
     return to_delete
 
@@ -128,7 +179,7 @@ def _lineage_neighbors() -> dict[Path, set[Path]]:
     for session_dir in _all_session_dirs():
         mapping.setdefault(session_dir, set())
         context = _load_context_file(session_dir)
-        linked = _resolve_relative_session_dir(context.get('archived_previous_session_to'))
+        linked = _resolve_linked_session_dir(context)
         if linked and linked.exists():
             mapping.setdefault(linked, set())
             mapping[session_dir].add(linked)
@@ -154,6 +205,7 @@ def _collect_connected_lineage(session_dir: Path) -> list[Path]:
 
 
 def start_new_game(session_id: str) -> dict:
+    session_id = normalize_session_id(session_id)
     archived_to = archive_session(session_id)
     new_session_id = _new_session_id(session_id)
     ensure_session_dirs(new_session_id)
@@ -175,6 +227,7 @@ def start_new_game(session_id: str) -> dict:
         'lorebook_path': sources.get('lorebook'),
         'active_preset': sources.get('active_preset'),
         'new_game_initialized': True,
+        'archived_previous_session_id': session_id if archived_to else None,
         'archived_previous_session_to': archived_to,
     })
     save_meta(new_session_id, {'last_turn_id': 0, 'processed_client_turn_ids': {}})
@@ -196,6 +249,7 @@ def start_new_game(session_id: str) -> dict:
 
 
 def delete_session(session_id: str) -> dict:
+    session_id = normalize_session_id(session_id)
     paths = session_paths(session_id)
     session_dir = paths['session_dir']
     deleted_paths: list[str] = []
@@ -239,7 +293,8 @@ def list_sessions() -> list[dict]:
             'replay': bool(replay_bootstrap),
             'active_preset': context.get('active_preset'),
             'bootstrapped_main_event': context.get('bootstrapped_main_event'),
+            'last_message_ts': _session_last_message_ts(session_dir),
             'updated_at_ns': _session_updated_at(session_dir),
         })
-    items.sort(key=lambda item: (item['archived'], item['replay'], -item['updated_at_ns'], item['session_id']))
+    items.sort(key=lambda item: (item['archived'], item['replay'], -(item.get('last_message_ts') or 0), -item['updated_at_ns'], item['session_id']))
     return items

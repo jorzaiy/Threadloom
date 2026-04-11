@@ -10,6 +10,7 @@ sessions/
 
 config/runtime.json
 config/providers.json
+.env.local
 
 USER.md
 player-profile.json

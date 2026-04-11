@@ -6,6 +6,7 @@ import json
 import shutil
 from pathlib import Path
 
+from paths import normalize_session_id, resolve_session_dir
 from continuity_hints import normalized_hint_entries
 from continuity_resolver import resolve_important_npc_continuity
 from important_npc_tracker import update_important_npcs
@@ -100,8 +101,10 @@ def _reset_runtime_layers(session_id: str) -> None:
 
 
 def _prepare_target_session(source_session: str, target_session: str, *, force_recreate: bool = False) -> list[dict]:
+    source_session = normalize_session_id(source_session)
+    target_session = normalize_session_id(target_session)
     source_paths = session_paths(source_session)
-    raw_target_dir = ROOT / 'sessions' / target_session
+    raw_target_dir = resolve_session_dir(target_session, create=False)
     if raw_target_dir.exists():
         if force_recreate or _safe_empty_dir(raw_target_dir) or _is_rebuild_artifact(raw_target_dir, source_session=source_session):
             _remove_target_dir(raw_target_dir)
@@ -121,6 +124,9 @@ def _prepare_target_session(source_session: str, target_session: str, *, force_r
 
 
 def rebuild_session_from_history(source_session: str, *, target_session: str | None = None, max_pairs: int | None = None, force_recreate: bool = False) -> dict:
+    source_session = normalize_session_id(source_session)
+    if target_session:
+        target_session = normalize_session_id(target_session)
     session_id = target_session or source_session
     using_target_copy = bool(target_session and target_session != source_session)
     try:
@@ -130,7 +136,7 @@ def rebuild_session_from_history(source_session: str, *, target_session: str | N
             full_history = load_history(session_id)
     except Exception:
         if using_target_copy:
-            raw_target_dir = ROOT / 'sessions' / session_id
+            raw_target_dir = resolve_session_dir(session_id, create=False)
             if _safe_empty_dir(raw_target_dir):
                 shutil.rmtree(raw_target_dir, ignore_errors=True)
         raise
@@ -185,7 +191,7 @@ def rebuild_session_from_history(source_session: str, *, target_session: str | N
         return report
     except Exception:
         if using_target_copy:
-            raw_target_dir = ROOT / 'sessions' / session_id
+            raw_target_dir = resolve_session_dir(session_id, create=False)
             if _safe_empty_dir(raw_target_dir):
                 shutil.rmtree(raw_target_dir, ignore_errors=True)
         raise
@@ -200,8 +206,8 @@ def main() -> int:
     args = parser.parse_args()
 
     report = rebuild_session_from_history(
-        args.session,
-        target_session=args.target_session,
+        normalize_session_id(args.session),
+        target_session=normalize_session_id(args.target_session) if args.target_session else None,
         max_pairs=args.max_pairs,
         force_recreate=args.force_recreate,
     )

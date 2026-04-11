@@ -7,6 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from paths import normalize_session_id, normalize_turn_id, resolve_session_dir
 from continuity_hints import normalized_hint_entries
 from continuity_resolver import resolve_important_npc_continuity
 from important_npc_tracker import update_important_npcs
@@ -43,8 +44,10 @@ def _copy_optional_file(src: Path, dst: Path) -> None:
 
 
 def _bootstrap_replay_session(source_session: str, target_session: str, trace: dict) -> None:
+    source_session = normalize_session_id(source_session)
+    target_session = normalize_session_id(target_session)
     source_paths = session_paths(source_session)
-    raw_target_dir = ROOT / 'sessions' / target_session
+    raw_target_dir = resolve_session_dir(target_session, create=False)
     if raw_target_dir.exists() and any(raw_target_dir.iterdir()):
         raise RuntimeError(f'target session already exists and is not empty: {target_session}')
     target_paths = session_paths(target_session)
@@ -114,6 +117,9 @@ def _restore_pre_turn(trace: dict, target_session: str) -> None:
 
 
 def replay_turn_trace(source_session: str, turn_id: str, target_session: str) -> dict:
+    source_session = normalize_session_id(source_session)
+    turn_id = normalize_turn_id(turn_id)
+    target_session = normalize_session_id(target_session)
     trace = load_turn_trace(source_session, turn_id)
     if not trace:
         raise RuntimeError(f'trace not found: session={source_session} turn={turn_id}')
@@ -211,8 +217,10 @@ def main() -> int:
     parser.add_argument('--target-session', help='Optional replay target session id')
     args = parser.parse_args()
 
-    target_session = args.target_session or f'replay-{args.source_session}-{args.turn_id}'
-    report = replay_turn_trace(args.source_session, args.turn_id, target_session)
+    source_session = normalize_session_id(args.source_session)
+    turn_id = normalize_turn_id(args.turn_id)
+    target_session = normalize_session_id(args.target_session or f'replay-{source_session}-{turn_id}')
+    report = replay_turn_trace(source_session, turn_id, target_session)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 

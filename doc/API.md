@@ -5,6 +5,11 @@
 当前已实现的接口：
 - `GET /`
 - `GET /api/health`
+- `GET /api/site-config`
+- `POST /api/site-config`
+- `POST /api/site-models/discover`
+- `GET /api/model-config`
+- `POST /api/model-config`
 - `GET /api/sessions`
 - `GET /api/state?session_id=...`
 - `GET /api/history?session_id=...`
@@ -16,6 +21,31 @@
 
 当前未实现但文档中偶尔会提到的接口：
 - `POST /api/admin/adjust`
+
+## GET /api/site-config
+
+返回当前用户的单站点配置快照，以及已获取的模型列表。
+
+## POST /api/site-config
+
+更新当前用户的站点 URL / API Key / API 类型。
+
+## POST /api/site-models/discover
+
+向当前站点请求 `/models`，并刷新当前用户可选模型列表。
+
+## GET /api/model-config
+
+返回当前用户的 `Narrator / State Keeper` 模型选择。
+
+## POST /api/model-config
+
+更新当前用户的 `Narrator / State Keeper` 模型选择。
+
+### Notes
+
+- `temperature` 与 `max_output_tokens` 当前不再由普通用户在前端设置
+- 这两个参数统一来自 `config/runtime.json -> model_defaults`
 
 ## GET /api/health
 
@@ -170,6 +200,7 @@ partial 相关行为：
 - `INVALID_INPUT`
 - `NOT_FOUND`
 - `ENTITY_NOT_FOUND`
+- `SESSION_NOT_FOUND`
 - `NO_PARTIAL_TURN`
 - `INTERNAL_ERROR`
 
@@ -259,6 +290,11 @@ partial 相关行为：
 - `session_id` 必填
 - `entity_id` 必填
 
+### Notes
+
+- 对不存在的 `session_id`，当前会返回 `SESSION_NOT_FOUND`
+- 这个接口当前不会再因为查询实体而隐式 bootstrap 新 session
+
 ### Response
 
 ```json
@@ -287,6 +323,11 @@ partial 相关行为：
 ## GET /api/sessions
 
 返回当前角色卡下可切换的 session 列表。
+
+### Frontend Note
+
+- 当前前端不会再在设置页里管理 session
+- 用户通过点击顶部当前会话名展开最近会话下拉来切换、删除或开始新游戏
 
 ### Response
 

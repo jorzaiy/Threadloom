@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from bootstrap_session import bootstrap_session, load_runtime_config, resolve_source, read_text, resolve_source_from_config
+from paths import normalize_session_id, resolve_session_dir
 from runtime_store import append_history, build_state_snapshot, save_canon, save_context, save_meta, save_state, save_summary, seed_default_state, session_paths
 from state_bridge import parse_root_state_markdown
 
@@ -137,6 +138,7 @@ def _infer_chat_names(metadata: dict, chat_items: list[dict]) -> tuple[str | Non
 
 
 def _bootstrap_import_session(session_id: str, *, source_path: Path, metadata: dict, character_name: str | None, user_name: str | None) -> dict:
+    session_id = normalize_session_id(session_id)
     cfg = load_runtime_config()
     sources = cfg.get('sources', {})
     root_canon = read_text(resolve_source_from_config(sources, 'canon', 'character.canon'))
@@ -178,8 +180,8 @@ def import_sillytavern_jsonl(source_path: Path, *, target_session: str | None = 
         raise RuntimeError('no importable chat messages found')
 
     suggested_base = metadata.get('character_name') or source_path.stem
-    session_id = target_session or f"import-{_slug(suggested_base)}"
-    raw_session_dir = ROOT / 'sessions' / session_id
+    session_id = normalize_session_id(target_session or f"import-{_slug(suggested_base)}")
+    raw_session_dir = resolve_session_dir(session_id, create=False)
     if raw_session_dir.exists() and any(raw_session_dir.iterdir()):
         raise RuntimeError(f'target session already exists and is not empty: {session_id}')
     paths = session_paths(session_id)

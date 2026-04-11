@@ -9,9 +9,20 @@ from urllib.parse import parse_qs, urlparse
 
 from bootstrap_session import bootstrap_session
 from handler_message import handle_message
+from model_config import (
+    delete_provider_config,
+    discover_provider_models,
+    discover_site_models,
+    get_model_config_snapshot,
+    get_site_config_snapshot,
+    list_provider_configs,
+    update_model_config,
+    update_site_config,
+    upsert_provider_config,
+)
 from regenerate_turn import regenerate_last_partial
 from session_lifecycle import delete_session, list_sessions, start_new_game
-from paths import resolve_session_dir
+from paths import normalize_session_id, resolve_session_dir
 from runtime_store import build_entity_map, build_state_snapshot, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 
 
@@ -41,6 +52,9 @@ class Handler(BaseHTTPRequestHandler):
     def _session_exists(self, session_id: str) -> bool:
         session_dir = resolve_session_dir(session_id, create=False)
         return session_dir.exists() and (session_dir / 'context.json').exists()
+
+    def _invalid_input(self, message: str):
+        return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': message}})
 
     def _send(self, status: int, payload: dict):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -81,7 +95,11 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == '/api/state':
                 if not session_id:
-                    return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id is required'}})
+                    return self._invalid_input('session_id is required')
+                try:
+                    session_id = normalize_session_id(session_id)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
                 if not self._session_exists(session_id):
                     return self._send(200, {
                         'session_id': session_id,
@@ -107,9 +125,29 @@ class Handler(BaseHTTPRequestHandler):
                     'web': web_runtime_settings(),
                 })
 
+            if parsed.path == '/api/providers':
+                payload = list_provider_configs()
+                payload['web'] = web_runtime_settings()
+                return self._send(200, payload)
+
+            if parsed.path == '/api/site-config':
+                payload = get_site_config_snapshot()
+                payload['supported_api_types'] = list_provider_configs()['supported_api_types']
+                payload['web'] = web_runtime_settings()
+                return self._send(200, payload)
+
+            if parsed.path == '/api/model-config':
+                payload = get_model_config_snapshot()
+                payload['web'] = web_runtime_settings()
+                return self._send(200, payload)
+
             if parsed.path == '/api/history':
                 if not session_id:
-                    return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id is required'}})
+                    return self._invalid_input('session_id is required')
+                try:
+                    session_id = normalize_session_id(session_id)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
                 if not self._session_exists(session_id):
                     return self._send(200, {
                         'session_id': session_id,
@@ -129,8 +167,13 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/entity':
                 entity_id = (qs.get('entity_id') or [''])[0].strip()
                 if not session_id or not entity_id:
-                    return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id and entity_id are required'}})
-                bootstrap_session(session_id)
+                    return self._invalid_input('session_id and entity_id are required')
+                try:
+                    session_id = normalize_session_id(session_id)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                if not self._session_exists(session_id):
+                    return self._send(404, {'error': {'code': 'SESSION_NOT_FOUND', 'message': 'session not found'}})
                 state = load_state(session_id)
                 entities = build_entity_map(state, session_id=session_id)
                 entity = entities.get(entity_id)
@@ -215,21 +258,33 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/new-game':
                 session_id = str(payload.get('session_id', '') or '').strip()
                 if not session_id:
-                    return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id is required'}})
+                    return self._invalid_input('session_id is required')
+                try:
+                    session_id = normalize_session_id(session_id)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
                 with self._session_lock(session_id):
                     return self._send(200, start_new_game(session_id))
 
             if parsed.path == '/api/delete-session':
                 session_id = str(payload.get('session_id', '') or '').strip()
                 if not session_id:
-                    return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id is required'}})
+                    return self._invalid_input('session_id is required')
+                try:
+                    session_id = normalize_session_id(session_id)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
                 with self._session_lock(session_id):
                     return self._send(200, delete_session(session_id))
 
             if parsed.path == '/api/regenerate-last':
                 session_id = str(payload.get('session_id', '') or '').strip()
                 if not session_id:
-                    return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id is required'}})
+                    return self._invalid_input('session_id is required')
+                try:
+                    session_id = normalize_session_id(session_id)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
                 with self._session_lock(session_id):
                     result = regenerate_last_partial(session_id)
                 status = 200 if 'error' not in result else 400
@@ -238,12 +293,77 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/message':
                 session_id = str(payload.get('session_id', '') or '').strip()
                 if not session_id:
-                    return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id is required'}})
+                    return self._invalid_input('session_id is required')
+                try:
+                    session_id = normalize_session_id(session_id)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                payload['session_id'] = session_id
                 with self._session_lock(session_id):
                     result = handle_message(payload)
                 status = 200 if 'error' not in result else 400
                 return self._send(status, result)
 
+            if parsed.path == '/api/providers':
+                try:
+                    result = upsert_provider_config(payload)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                result['supported_api_types'] = list_provider_configs()['supported_api_types']
+                return self._send(200, result)
+
+            if parsed.path == '/api/site-config':
+                try:
+                    result = update_site_config(payload)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                result['supported_api_types'] = list_provider_configs()['supported_api_types']
+                return self._send(200, result)
+
+            if parsed.path == '/api/model-config':
+                try:
+                    result = update_model_config(payload)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                return self._send(200, result)
+
+            if parsed.path == '/api/providers/discover':
+                try:
+                    result = discover_provider_models(str(payload.get('name', '') or ''))
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                result['supported_api_types'] = list_provider_configs()['supported_api_types']
+                return self._send(200, result)
+
+            if parsed.path == '/api/site-models/discover':
+                try:
+                    result = discover_site_models()
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                result['supported_api_types'] = list_provider_configs()['supported_api_types']
+                return self._send(200, result)
+
+            return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
+        except Exception as err:
+            return self._handle_exception(err, route=parsed.path)
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        length = int(self.headers.get('Content-Length', '0') or 0)
+        raw = self.rfile.read(length) if length > 0 else b'{}'
+        try:
+            payload = json.loads(raw.decode('utf-8'))
+        except Exception:
+            return self._invalid_input('invalid json')
+
+        try:
+            if parsed.path == '/api/providers':
+                try:
+                    result = delete_provider_config(str(payload.get('name', '') or ''))
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                result['supported_api_types'] = list_provider_configs()['supported_api_types']
+                return self._send(200, result)
             return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
         except Exception as err:
             return self._handle_exception(err, route=parsed.path)

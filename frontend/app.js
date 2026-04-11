@@ -2,13 +2,8 @@ const messagesEl = document.getElementById('messages');
 const stateEl = document.getElementById('state');
 const entityEl = document.getElementById('entityDetail');
 const debugEl = document.getElementById('debugDetail');
-const sessionInput = document.getElementById('sessionId');
-const sessionList = document.getElementById('sessionList');
 const composer = document.getElementById('composer');
 const input = document.getElementById('input');
-const reloadBtn = document.getElementById('reloadBtn');
-const deleteSessionBtn = document.getElementById('deleteSessionBtn');
-const newGameBtn = document.getElementById('newGameBtn');
 const regenerateBtn = document.getElementById('regenerateBtn');
 const statusBar = document.getElementById('statusBar');
 const debugPanel = document.getElementById('debugPanel');
@@ -18,16 +13,31 @@ const settingsPanel = document.getElementById('settingsPanel');
 const settingsBackdrop = document.getElementById('settingsBackdrop');
 const settingsCloseBtn = document.getElementById('settingsCloseBtn');
 const sessionIndicator = document.getElementById('sessionIndicator');
+const sessionIndicatorLabel = document.getElementById('sessionIndicatorLabel');
 const characterNameEl = document.getElementById('characterName');
 const characterSubtitleEl = document.getElementById('characterSubtitle');
 const characterCoverEl = document.getElementById('characterCover');
 const characterCoverFallbackEl = document.getElementById('characterCoverFallback');
+const sessionDockPanel = document.getElementById('sessionDockPanel');
+const sessionDockList = document.getElementById('sessionDockList');
+const saveModelConfigBtn = document.getElementById('saveModelConfigBtn');
+const narratorModelSelect = document.getElementById('narratorModelSelect');
+const stateKeeperModelSelect = document.getElementById('stateKeeperModelSelect');
+const siteBaseUrlInput = document.getElementById('siteBaseUrlInput');
+const siteApiTypeSelect = document.getElementById('siteApiTypeSelect');
+const siteApiKeyInput = document.getElementById('siteApiKeyInput');
+const saveSiteConfigBtn = document.getElementById('saveSiteConfigBtn');
+const discoverSiteModelsBtn = document.getElementById('discoverSiteModelsBtn');
+const siteStatusNote = document.getElementById('siteStatusNote');
+const modelConfigNote = document.getElementById('modelConfigNote');
 
 let lastDebug = null;
 let lastCharacterCard = null;
 let shouldStickToBottom = true;
 let pendingUserMessage = null;
 let lastHistoryItems = [];
+let currentSessionId = '';
+let sessionItems = [];
 let webConfig = {
   default_debug: false,
   history_page_size: 80,
@@ -36,6 +46,25 @@ let webConfig = {
 };
 let coverLoadToken = 0;
 let lastCharacterCoverUrl = null;
+let siteApiTypes = [];
+let siteConfig = {
+  base_url: '',
+  api: 'openai-completions',
+  api_key_configured: false,
+  api_key_masked: '',
+  api_key_reference: null,
+  status: 'invalid',
+  status_label: '未配置',
+  models: [],
+};
+let modelConfig = {
+  narrator: {
+    model: '',
+  },
+  state_keeper: {
+    model: '',
+  },
+};
 
 function applyWebConfig(nextConfig = {}) {
   webConfig = {
@@ -71,10 +100,37 @@ function closeSettings() {
   settingsBtn?.setAttribute('aria-expanded', 'false');
 }
 
+function toggleSessionDock(forceOpen) {
+  if (!sessionDockPanel) return;
+  const nextOpen = typeof forceOpen === 'boolean' ? forceOpen : sessionDockPanel.hidden;
+  sessionDockPanel.hidden = !nextOpen;
+  sessionIndicator?.setAttribute('aria-expanded', String(nextOpen));
+}
+
 function updateSessionIndicator() {
-  if (sessionIndicator) {
-    sessionIndicator.textContent = sessionId() || '未选择';
+  if (sessionIndicatorLabel) {
+    sessionIndicatorLabel.textContent = currentSessionId || '未选择';
   }
+}
+
+function sessionId() {
+  return currentSessionId.trim();
+}
+
+function topSessions(items) {
+  return (items || [])
+    .filter(item => !item.archived && !item.replay)
+    .sort((a, b) => {
+      const messageGap = (b.last_message_ts || 0) - (a.last_message_ts || 0);
+      if (messageGap !== 0) return messageGap;
+      return (b.updated_at_ns || 0) - (a.updated_at_ns || 0);
+    })
+    .slice(0, 5);
+}
+
+function setStatus(text, kind = 'info') {
+  statusBar.textContent = text;
+  statusBar.dataset.kind = kind;
 }
 
 function renderCharacterCard(card) {
@@ -143,51 +199,283 @@ function resetSidePanels() {
   renderDebug(null);
 }
 
-function setStatus(text, kind = 'info') {
-  statusBar.textContent = text;
-  statusBar.dataset.kind = kind;
+function setSelectOptions(selectEl, items, selectedValue, formatter) {
+  if (!selectEl) return;
+  selectEl.innerHTML = '';
+  for (const item of items) {
+    const option = document.createElement('option');
+    option.value = item.value;
+    option.textContent = formatter(item);
+    if (option.value === selectedValue) {
+      option.selected = true;
+    }
+    selectEl.appendChild(option);
+  }
+  if (!selectEl.value && selectEl.options.length > 0) {
+    selectEl.selectedIndex = 0;
+  }
 }
 
-function sessionId() {
-  return sessionInput.value.trim();
+function currentSiteModelChoices() {
+  return (siteConfig.models || []).map(item => ({value: item.id, label: item.name || item.id}));
 }
 
-function formatSessionOption(item) {
-  const tags = [];
-  if (item.archived) tags.push('archive');
-  if (item.replay) tags.push('replay');
-  return tags.length ? `${item.session_id} [${tags.join(',')}]` : item.session_id;
+function renderSiteConfig() {
+  siteBaseUrlInput.value = siteConfig.base_url || '';
+  setSelectOptions(
+    siteApiTypeSelect,
+    siteApiTypes.map(item => ({value: item.value, label: item.label})),
+    siteConfig.api,
+    item => item.label,
+  );
+  siteApiKeyInput.value = '';
+  if (siteStatusNote) {
+    siteStatusNote.textContent = siteConfig.status_label || '未配置';
+    siteStatusNote.dataset.kind = siteConfig.status === 'ready' ? 'ok' : (siteConfig.status === 'invalid' ? 'error' : '');
+  }
+}
+
+function renderModelConfig() {
+  const models = currentSiteModelChoices();
+  setSelectOptions(narratorModelSelect, models, modelConfig.narrator?.model, item => item.label);
+  setSelectOptions(stateKeeperModelSelect, models, modelConfig.state_keeper?.model, item => item.label);
+  if (modelConfigNote && !modelConfigNote.dataset.kind) {
+    modelConfigNote.textContent = '温度和最大输出长度已固定到默认配置，由管理员维护。';
+  }
+}
+
+function validateSiteDraft(draft) {
+  if (!draft.baseUrl) return '站点 URL 不能为空';
+  if (!/^https?:\/\//.test(draft.baseUrl)) return '站点 URL 必须以 http:// 或 https:// 开头';
+  if (!draft.api) return 'API 类型不能为空';
+  return '';
+}
+
+function validateRuntimeDraft(draft) {
+  const available = new Set((siteConfig.models || []).map(item => item.id));
+  if (!draft.narrator.model) return 'Narrator 模型不能为空';
+  if (!draft.state_keeper.model) return 'State Keeper 模型不能为空';
+  if (available.size === 0) return '当前还没有模型列表，请先点击“获取模型”';
+  if (!available.has(draft.narrator.model)) return 'Narrator 模型不在当前站点模型列表中';
+  if (!available.has(draft.state_keeper.model)) return 'State Keeper 模型不在当前站点模型列表中';
+  return '';
+}
+
+async function apiJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.error?.message || `request failed: ${url}`);
+  }
+  return data;
 }
 
 async function loadSessions() {
-  const res = await fetch('/api/sessions');
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || 'session list load failed');
+  const data = await apiJson('/api/sessions');
   applyWebConfig(data.web || {});
   renderCharacterCard(data.character_card || lastCharacterCard);
-  if (!sessionList) return;
-  const current = sessionId();
-  const recommended = data.default_session_id || (data.sessions || []).find(item => !item.archived && !item.replay)?.session_id || '';
-  const availableIds = new Set((data.sessions || []).map(item => item.session_id));
-  if (current && !availableIds.has(current)) {
-    sessionInput.value = '';
+  sessionItems = data.sessions || [];
+  const availableIds = new Set(sessionItems.map(item => item.session_id));
+  const recommended = data.default_session_id || topSessions(sessionItems)[0]?.session_id || '';
+  if (currentSessionId && !availableIds.has(currentSessionId)) {
+    currentSessionId = '';
   }
-  if (!sessionInput.value.trim() && recommended) {
-    sessionInput.value = recommended;
-  }
-  sessionList.innerHTML = '';
-  const placeholder = document.createElement('option');
-  placeholder.value = '';
-  placeholder.textContent = '选择已有 session';
-  sessionList.appendChild(placeholder);
-  for (const item of data.sessions || []) {
-    const option = document.createElement('option');
-    option.value = item.session_id;
-    option.textContent = formatSessionOption(item);
-    if (item.session_id === sessionId()) option.selected = true;
-    sessionList.appendChild(option);
+  if (!currentSessionId && recommended) {
+    currentSessionId = recommended;
   }
   updateSessionIndicator();
+  renderSessionDock();
+}
+
+function renderSessionDock() {
+  if (!sessionDockList) return;
+  sessionDockList.innerHTML = '';
+  const items = topSessions(sessionItems);
+
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'session-dock-item';
+    if (item.session_id === sessionId()) row.dataset.active = 'true';
+
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'session-dock-open';
+    openBtn.textContent = item.session_id;
+    openBtn.addEventListener('click', async () => {
+      currentSessionId = item.session_id;
+      updateSessionIndicator();
+      setStatus('切换会话中...', 'working');
+      try {
+        resetSidePanels();
+        await loadHistory();
+        await loadState();
+        renderSessionDock();
+        toggleSessionDock(false);
+        setStatus('已切换', 'ok');
+      } catch (err) {
+        setStatus(`错误：${err.message}`, 'error');
+      }
+    });
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'session-dock-delete';
+    deleteBtn.setAttribute('aria-label', `删除 ${item.session_id}`);
+    deleteBtn.innerHTML = '<span class="material-symbols-outlined">skull</span>';
+    deleteBtn.addEventListener('click', async () => {
+      setStatus('删除会话中...', 'working');
+      try {
+        await deleteSession(item.session_id);
+        renderSessionDock();
+        setStatus('会话已删除', 'ok');
+      } catch (err) {
+        setStatus(`错误：${err.message}`, 'error');
+      }
+    });
+
+    row.appendChild(openBtn);
+    row.appendChild(deleteBtn);
+    sessionDockList.appendChild(row);
+  }
+
+  const newGameRow = document.createElement('div');
+  newGameRow.className = 'session-dock-item session-dock-new';
+  const newGameAction = document.createElement('button');
+  newGameAction.type = 'button';
+  newGameAction.className = 'session-dock-new-btn';
+  newGameAction.textContent = '开始新游戏';
+  newGameAction.addEventListener('click', async () => {
+    setStatus('新游戏初始化中...', 'working');
+    try {
+      await startNewGame();
+      renderSessionDock();
+      toggleSessionDock(false);
+      setStatus('新游戏已开始', 'ok');
+    } catch (err) {
+      setStatus(`错误：${err.message}`, 'error');
+    }
+  });
+  newGameRow.appendChild(newGameAction);
+  sessionDockList.appendChild(newGameRow);
+}
+
+async function loadSiteConfig() {
+  const data = await apiJson('/api/site-config');
+  siteConfig = {
+    ...siteConfig,
+    ...data,
+  };
+  siteApiTypes = data.supported_api_types || siteApiTypes;
+  applyWebConfig(data.web || {});
+  renderSiteConfig();
+  renderModelConfig();
+}
+
+async function saveSiteConfig() {
+  const draft = {
+    baseUrl: siteBaseUrlInput.value.trim(),
+    api: siteApiTypeSelect.value,
+    replace_api_key: siteApiKeyInput.value.trim().length > 0,
+    apiKey: siteApiKeyInput.value.trim(),
+  };
+  const validationError = validateSiteDraft(draft);
+  if (validationError) {
+    setStatus(`错误：${validationError}`, 'error');
+    if (siteStatusNote) {
+      siteStatusNote.textContent = validationError;
+      siteStatusNote.dataset.kind = 'error';
+    }
+    return;
+  }
+  setStatus('保存站点中...', 'working');
+  const data = await apiJson('/api/site-config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(draft),
+  });
+  siteConfig = {
+    ...siteConfig,
+    ...data,
+  };
+  renderSiteConfig();
+  setStatus('站点已保存', 'ok');
+}
+
+async function discoverSiteModels() {
+  setStatus('获取模型中...', 'working');
+  const data = await apiJson('/api/site-models/discover', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({}),
+  });
+  siteConfig = {
+    ...siteConfig,
+    ...data,
+  };
+  renderSiteConfig();
+  renderModelConfig();
+  setStatus('模型列表已更新', 'ok');
+}
+
+async function loadModelConfig() {
+  const data = await apiJson('/api/model-config');
+  modelConfig = {
+    ...modelConfig,
+    ...data,
+  };
+  applyWebConfig(data.web || {});
+  if (data.site) {
+    siteConfig = {
+      ...siteConfig,
+      ...data.site,
+    };
+  }
+  renderSiteConfig();
+  renderModelConfig();
+}
+
+async function saveModelRuntimeConfig() {
+  const draft = {
+    narrator: {
+      model: narratorModelSelect.value,
+    },
+    state_keeper: {
+      model: stateKeeperModelSelect.value,
+    },
+  };
+  const validationError = validateRuntimeDraft(draft);
+  if (validationError) {
+    if (modelConfigNote) {
+      modelConfigNote.textContent = validationError;
+      modelConfigNote.dataset.kind = 'error';
+    }
+    return;
+  }
+  if (modelConfigNote) {
+    modelConfigNote.textContent = '保存模型配置中...';
+    modelConfigNote.dataset.kind = '';
+  }
+  const data = await apiJson('/api/model-config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(draft),
+  });
+  modelConfig = {
+    ...modelConfig,
+    ...data,
+  };
+  if (data.site) {
+    siteConfig = {
+      ...siteConfig,
+      ...data.site,
+    };
+  }
+  renderSiteConfig();
+  renderModelConfig();
+  if (modelConfigNote) {
+    modelConfigNote.textContent = '模型配置已保存';
+    modelConfigNote.dataset.kind = 'ok';
+  }
 }
 
 function renderMessages(items) {
@@ -201,15 +489,12 @@ function renderMessages(items) {
     const article = document.createElement('article');
     article.className = `msg ${item.role}`;
     if (item.pending) article.classList.add('pending');
-
     const label = document.createElement('div');
     label.className = 'msg-label';
     label.textContent = item.role === 'user' ? 'Player' : 'World';
-
     const body = document.createElement('div');
     body.className = 'msg-body';
     body.textContent = item.content;
-
     article.appendChild(label);
     article.appendChild(body);
     messagesEl.appendChild(article);
@@ -247,14 +532,6 @@ function isNearBottom(threshold = 96) {
   return distance <= threshold;
 }
 
-function npcLink(name, entityId) {
-  const btn = document.createElement('button');
-  btn.className = 'npc-link';
-  btn.textContent = name;
-  btn.onclick = () => loadEntity(entityId);
-  return btn;
-}
-
 function renderState(state) {
   stateEl.innerHTML = '';
   const rows = [
@@ -279,155 +556,6 @@ function renderState(state) {
     table.appendChild(tr);
   }
   stateEl.appendChild(table);
-
-  function buildNpcTable(title, items) {
-    const wrap = document.createElement('div');
-    wrap.className = 'npc-block';
-    const heading = document.createElement('strong');
-    heading.textContent = title;
-    wrap.appendChild(heading);
-
-    const table = document.createElement('table');
-    table.className = 'state-table npc-table';
-    const tbody = document.createElement('tbody');
-
-    if (!items || items.length === 0) {
-      const tr = document.createElement('tr');
-      const emptyTh = document.createElement('th');
-      emptyTh.textContent = '状态';
-      const emptyTd = document.createElement('td');
-      emptyTd.textContent = '暂无';
-      tr.appendChild(emptyTh);
-      tr.appendChild(emptyTd);
-      tbody.appendChild(tr);
-    } else {
-      items.forEach((item, idx) => {
-        const tr = document.createElement('tr');
-        const th = document.createElement('th');
-        th.textContent = `${idx + 1}`;
-        const td = document.createElement('td');
-        const name = item?.name || '待确认';
-        const entityId = item?.entity_id || null;
-        const roleLabel = item?.role_label || '';
-        const ambiguous = Boolean(item?.ambiguous);
-        const label = roleLabel ? `${name} / ${roleLabel}` : name;
-
-        if (entityId && !ambiguous) {
-          td.appendChild(npcLink(label, entityId));
-        } else if (ambiguous) {
-          const span = document.createElement('span');
-          span.className = 'npc-fallback';
-          span.textContent = `${label}（存在多个同名实体）`;
-          td.appendChild(span);
-        } else {
-          const span = document.createElement('span');
-          span.className = 'npc-fallback';
-          span.textContent = label;
-          td.appendChild(span);
-        }
-        tr.appendChild(th);
-        tr.appendChild(td);
-        tbody.appendChild(tr);
-      });
-    }
-
-    table.appendChild(tbody);
-    wrap.appendChild(table);
-    return wrap;
-  }
-
-  stateEl.appendChild(buildNpcTable('Onstage NPCs', state.onstage_entities || []));
-  stateEl.appendChild(buildNpcTable('Relevant NPCs', state.relevant_entities || []));
-
-  const objects = state.tracked_objects || [];
-  const possession = state.possession_state || [];
-  const visibility = state.object_visibility || [];
-  const possessionById = Object.fromEntries((possession || []).map(item => [item.object_id, item]));
-  const visibilityById = Object.fromEntries((visibility || []).map(item => [item.object_id, item]));
-
-  const objectWrap = document.createElement('div');
-  objectWrap.className = 'npc-block';
-  const objectHeading = document.createElement('strong');
-  objectHeading.textContent = 'Tracked Objects';
-  objectWrap.appendChild(objectHeading);
-
-  const objectTable = document.createElement('table');
-  objectTable.className = 'state-table npc-table';
-  const objectBody = document.createElement('tbody');
-  if (!objects.length) {
-    const tr = document.createElement('tr');
-    const oTh = document.createElement('th');
-    oTh.textContent = '状态';
-    const oTd = document.createElement('td');
-    oTd.textContent = '暂无';
-    tr.appendChild(oTh);
-    tr.appendChild(oTd);
-    objectBody.appendChild(tr);
-  } else {
-    objects.slice(0, 6).forEach((item, idx) => {
-      const tr = document.createElement('tr');
-      const th = document.createElement('th');
-      th.textContent = `${idx + 1}`;
-      const td = document.createElement('td');
-      const holder = possessionById[item.object_id]?.holder || '未指明';
-      const status = possessionById[item.object_id]?.status || '未指明';
-      const vis = visibilityById[item.object_id]?.visibility || '未指明';
-      const kind = item?.kind || 'item';
-      const lines = [
-        `${item.label || item.object_id} / ${kind}`,
-        `持有者：${holder}`,
-        `状态：${status}`,
-        `可见性：${vis}`,
-      ];
-      lines.forEach(line => {
-        const div = document.createElement('div');
-        div.className = 'object-line';
-        div.textContent = line;
-        td.appendChild(div);
-      });
-      tr.appendChild(th);
-      tr.appendChild(td);
-      objectBody.appendChild(tr);
-    });
-  }
-  objectTable.appendChild(objectBody);
-  objectWrap.appendChild(objectTable);
-  stateEl.appendChild(objectWrap);
-
-  const threads = state.active_threads || [];
-  const threadWrap = document.createElement('div');
-  threadWrap.className = 'npc-block';
-  const threadHeading = document.createElement('strong');
-  threadHeading.textContent = 'Active Threads';
-  threadWrap.appendChild(threadHeading);
-
-  const threadTable = document.createElement('table');
-  threadTable.className = 'state-table npc-table';
-  const threadBody = document.createElement('tbody');
-  if (!threads.length) {
-    const tr = document.createElement('tr');
-    const tTh = document.createElement('th');
-    tTh.textContent = '状态';
-    const tTd = document.createElement('td');
-    tTd.textContent = '暂无';
-    tr.appendChild(tTh);
-    tr.appendChild(tTd);
-    threadBody.appendChild(tr);
-  } else {
-    threads.slice(0, 5).forEach((item, idx) => {
-      const tr = document.createElement('tr');
-      const th = document.createElement('th');
-      th.textContent = `${idx + 1}`;
-      const td = document.createElement('td');
-      td.textContent = `${item.thread_id || 'thread'} / ${item.status || 'active'} / ${item.label || '待确认'}`;
-      tr.appendChild(th);
-      tr.appendChild(td);
-      threadBody.appendChild(tr);
-    });
-  }
-  threadTable.appendChild(threadBody);
-  threadWrap.appendChild(threadTable);
-  stateEl.appendChild(threadWrap);
 }
 
 function renderDebug(debug) {
@@ -455,13 +583,11 @@ function renderDebug(debug) {
 }
 
 async function regenerateLast() {
-  const res = await fetch('/api/regenerate-last', {
+  const data = await apiJson('/api/regenerate-last', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({session_id: sessionId()})
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || 'regenerate failed');
   pendingUserMessage = null;
   await loadHistory();
   renderState(data.state_snapshot || {});
@@ -477,9 +603,7 @@ async function loadHistory() {
     updateSessionIndicator();
     return;
   }
-  const res = await fetch(`/api/history?session_id=${encodeURIComponent(sessionId())}`);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || 'history load failed');
+  const data = await apiJson(`/api/history?session_id=${encodeURIComponent(sessionId())}`);
   applyWebConfig(data.web || {});
   const wasNearBottom = isNearBottom();
   pendingUserMessage = null;
@@ -497,9 +621,7 @@ async function loadState() {
     updateSessionIndicator();
     return;
   }
-  const res = await fetch(`/api/state?session_id=${encodeURIComponent(sessionId())}`);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || 'state load failed');
+  const data = await apiJson(`/api/state?session_id=${encodeURIComponent(sessionId())}`);
   applyWebConfig(data.web || {});
   renderCharacterCard(data.character_card || lastCharacterCard);
   updateSessionIndicator();
@@ -507,14 +629,12 @@ async function loadState() {
 }
 
 async function startNewGame() {
-  const res = await fetch('/api/new-game', {
+  const data = await apiJson('/api/new-game', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({session_id: sessionId() || 'story-live'})
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || 'new game failed');
-  sessionInput.value = data.session_id || sessionId();
+  currentSessionId = data.session_id || sessionId();
   pendingUserMessage = null;
   renderMessages(data.messages || []);
   renderState(data.state_snapshot || {});
@@ -522,34 +642,35 @@ async function startNewGame() {
   resetSidePanels();
   renderDebug({new_game: {session_id: data.session_id || sessionId(), archived_to: data.archived_to || null}});
   updateSessionIndicator();
-  closeSettings();
   shouldStickToBottom = true;
   focusLatestAssistant({ smooth: false });
 }
 
-async function deleteSession() {
-  const current = sessionId();
-  const res = await fetch('/api/delete-session', {
+async function deleteSession(targetSessionId = sessionId()) {
+  const current = targetSessionId;
+  const activeBeforeDelete = sessionId();
+  const data = await apiJson('/api/delete-session', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({session_id: current})
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || 'delete session failed');
   const next = (data.sessions || []).find(item => !item.archived && !item.replay)?.session_id || '';
-  sessionInput.value = next;
-  await loadSessions();
-  if (next) {
-    await loadHistory();
-    await loadState();
-  } else {
-    renderMessages([]);
-    renderState({});
+  if (current === activeBeforeDelete) {
+    currentSessionId = next;
   }
-  resetSidePanels();
-  renderDebug({session_deleted: {session_id: current, next_session: next, deleted_paths: data.deleted_paths || []}});
-  updateSessionIndicator();
-  closeSettings();
+  await loadSessions();
+  if (current === activeBeforeDelete) {
+    if (next) {
+      await loadHistory();
+      await loadState();
+    } else {
+      renderMessages([]);
+      renderState({});
+    }
+    resetSidePanels();
+    renderDebug({session_deleted: {session_id: current, next_session: next, deleted_paths: data.deleted_paths || []}});
+    updateSessionIndicator();
+  }
 }
 
 async function loadEntity(entityId) {
@@ -574,7 +695,7 @@ composer.addEventListener('submit', async (e) => {
   input.value = '';
   renderMessages(lastHistoryItems);
   try {
-    const res = await fetch('/api/message', {
+    const data = await apiJson('/api/message', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -584,8 +705,6 @@ composer.addEventListener('submit', async (e) => {
         meta: {source: 'web', debug: webConfig.default_debug}
       })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error?.message || 'message send failed');
     pendingUserMessage = null;
     shouldStickToBottom = true;
     await loadHistory();
@@ -607,59 +726,10 @@ composer.addEventListener('submit', async (e) => {
   }
 });
 
-deleteSessionBtn.addEventListener('click', async () => {
-  setStatus('删除会话中...', 'working');
-  try {
-    await deleteSession();
-    setStatus('会话已删除', 'ok');
-  } catch (err) {
-    setStatus(`错误：${err.message}`, 'error');
-  }
-});
-
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     composer.requestSubmit();
-  }
-});
-
-reloadBtn.addEventListener('click', async () => {
-  setStatus('刷新中...', 'working');
-  try {
-    resetSidePanels();
-    await loadSessions();
-    await loadHistory();
-    await loadState();
-    closeSettings();
-    setStatus('已刷新', 'ok');
-  } catch (err) {
-    setStatus(`错误：${err.message}`, 'error');
-  }
-});
-
-sessionList.addEventListener('change', async () => {
-  if (!sessionList.value) return;
-  sessionInput.value = sessionList.value;
-  setStatus('切换会话中...', 'working');
-  try {
-    resetSidePanels();
-    await loadHistory();
-    await loadState();
-    closeSettings();
-    setStatus('已切换', 'ok');
-  } catch (err) {
-    setStatus(`错误：${err.message}`, 'error');
-  }
-});
-
-newGameBtn.addEventListener('click', async () => {
-  setStatus('新游戏初始化中...', 'working');
-  try {
-    await startNewGame();
-    setStatus('新游戏已开始', 'ok');
-  } catch (err) {
-    setStatus(`错误：${err.message}`, 'error');
   }
 });
 
@@ -685,12 +755,60 @@ settingsBtn?.addEventListener('click', () => {
   }
 });
 
+sessionIndicator?.addEventListener('click', () => {
+  toggleSessionDock();
+});
+
+document.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Node)) return;
+  if (sessionDockPanel?.hidden) return;
+  if (sessionDockPanel.contains(target) || sessionIndicator?.contains(target)) return;
+  toggleSessionDock(false);
+});
+
 settingsCloseBtn?.addEventListener('click', closeSettings);
 settingsBackdrop?.addEventListener('click', closeSettings);
+
+saveSiteConfigBtn?.addEventListener('click', async () => {
+  try {
+    await saveSiteConfig();
+  } catch (err) {
+    setStatus(`错误：${err.message}`, 'error');
+    if (siteStatusNote) {
+      siteStatusNote.textContent = err.message;
+      siteStatusNote.dataset.kind = 'error';
+    }
+  }
+});
+
+discoverSiteModelsBtn?.addEventListener('click', async () => {
+  try {
+    await discoverSiteModels();
+  } catch (err) {
+    setStatus(`错误：${err.message}`, 'error');
+    if (siteStatusNote) {
+      siteStatusNote.textContent = err.message;
+      siteStatusNote.dataset.kind = 'error';
+    }
+  }
+});
+
+saveModelConfigBtn?.addEventListener('click', async () => {
+  try {
+    await saveModelRuntimeConfig();
+  } catch (err) {
+    if (modelConfigNote) {
+      modelConfigNote.textContent = err.message;
+      modelConfigNote.dataset.kind = 'error';
+    }
+  }
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeSettings();
+    toggleSessionDock(false);
   }
 });
 
@@ -698,10 +816,15 @@ document.addEventListener('keydown', (e) => {
   setStatus('初始化中...', 'working');
   try {
     resetSidePanels();
-    await loadSessions();
+    await Promise.all([
+      loadSessions(),
+      loadSiteConfig(),
+      loadModelConfig(),
+    ]);
     await loadHistory();
     await loadState();
     closeSettings();
+    toggleSessionDock(false);
     shouldStickToBottom = true;
     focusLatestAssistant({ smooth: false });
     setStatus('就绪', 'ok');

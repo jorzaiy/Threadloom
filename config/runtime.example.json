@@ -17,63 +17,6 @@
     "npc_profiles_dir": "examples/memory/npcs",
     "persona_seeds_dir": "examples/runtime/persona-seeds"
   },
-  "models": {
-    "narrator": {
-      "provider": "custom-provider",
-      "model": "gpt-5.4",
-      "temperature": 0.9,
-      "max_output_tokens": 1200,
-      "stream": true
-    },
-    "turn_analyzer": {
-      "provider": "openai-compatible",
-      "model": "heuristic-or-llm",
-      "temperature": 0.2,
-      "max_output_tokens": 700,
-      "stream": false
-    },
-    "state_keeper": {
-      "provider": "local-gemma",
-      "model": "your-local-model.gguf",
-      "base_url": "http://127.0.0.1:8080/v1",
-      "apiKey": "",
-      "temperature": 0.1,
-      "max_output_tokens": 480,
-      "stream": false
-    },
-    "state_keeper_candidate": {
-      "provider": "custom-provider",
-      "model": "Llama-3.3-70B",
-      "temperature": 0.0,
-      "max_output_tokens": 120,
-      "stream": false
-    },
-    "arbiter": {
-      "provider": "openai-compatible",
-      "model": "",
-      "temperature": 0.2,
-      "max_output_tokens": 800,
-      "stream": false
-    }
-  },
-  "roles": {
-    "narrator": {
-      "provider": "llm",
-      "model_role": "narrator"
-    },
-    "turn_analyzer": {
-      "provider": "heuristic",
-      "model_role": "turn_analyzer"
-    },
-    "state_keeper": {
-      "provider": "llm",
-      "model_role": "state_keeper"
-    },
-    "state_keeper_candidate": {
-      "provider": "llm",
-      "model_role": "state_keeper_candidate"
-    }
-  },
   "bootstrap": {
     "must_load_runtime_rules_first": true
   },
@@ -94,6 +37,18 @@
     "deep_refresh_on_scene_change": true,
     "deep_refresh_on_onstage_shift": true
   },
+  "model_defaults": {
+    "narrator": {
+      "temperature": 0.9,
+      "max_output_tokens": 1200,
+      "stream": true
+    },
+    "state_keeper": {
+      "temperature": 0.1,
+      "max_output_tokens": 480,
+      "stream": false
+    }
+  },
   "state_policy": {
     "max_onstage_npcs": 6,
     "max_relevant_npcs": 6,
@@ -111,5 +66,9 @@
     "history_page_size": 80,
     "show_state_panel": true,
     "show_debug_panel": false
+  },
+  "trace": {
+    "enabled": true,
+    "keep_last_turns": 40
   }
 }

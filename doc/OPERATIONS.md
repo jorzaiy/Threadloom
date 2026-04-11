@@ -25,9 +25,24 @@
 推荐：
 
 ```bash
+cp /Threadloom/.env.local.example /Threadloom/.env.local
 cd /Threadloom/backend
 ./start.sh
 ```
+
+说明：
+- `backend/start.sh` 会自动加载 `/Threadloom/.env.local`
+- 推荐把真实密钥只放在 `.env.local`，`config/*.json` 中使用 `env:VAR` 引用
+- 当前用户自己的站点与模型配置会写到 `runtime-data/<user>/config/`
+- `config/runtime.json` 继续承载共享内容层与全局策略，不再作为用户站点管理的主存储
+- 当前用户模型/站点文件：
+  - `runtime-data/default-user/config/site.json`
+  - `runtime-data/default-user/config/model-runtime.json`
+- 当前设置页已简化为单站点模式：
+  - 用户只维护一个站点 URL / API Key / API 类型
+  - 先点“获取模型”
+  - 再给 Narrator / State Keeper 选模型
+  - `temperature / max_output_tokens` 不再暴露给普通用户，统一走 `config/runtime.json -> model_defaults`
 
 也可以直接：
 
@@ -68,14 +83,14 @@ http://127.0.0.1:8765
 - `GET /api/entity`
 
 当前前端支持：
-- session 输入和 session 下拉切换
-- 会话刷新
-- 删除当前 session
-- 开始新游戏
+- 点击顶部当前会话名，展开最近会话下拉
+- 最近会话下拉支持切换、删除、开始新游戏
+- 最近会话按最后一条消息时间从新到旧排列
 - 发送消息
 - partial 时重新生成上一条
 - 右侧状态面板和 NPC 详情查看
 - 折叠调试区
+- 居中设置弹窗
 
 ## 当前运行特点
 
@@ -84,6 +99,7 @@ http://127.0.0.1:8765
 - opening 已经是独立状态机，不再只是输出一段开局提示
 - 同一 `session_id` 的 HTTP 写请求现在会串行执行，降低并发覆盖风险
 - 每个 turn 现在会额外落一份 `turn-trace/turn-XXXX.json`，用于单回合精确回放
+- `runtime.json -> trace.enabled / trace.keep_last_turns` 可控制 trace 是否启用以及最多保留多少轮
 - partial assistant 回复会显示，但不会继续污染事实层
 - `regenerate-last` 会回滚最后一对 `user -> assistant(partial)` 再重试
 - `state_keeper` 优先，`state_updater` 兜底
