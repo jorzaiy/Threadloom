@@ -99,65 +99,20 @@ def extract_lorebook_npc_candidates(entries: list[dict], onstage: list[str], rel
     return candidates
 
 
-def _split_cast_names(text: str) -> list[str]:
+def _extract_keyword_names(entries: list[dict], names_in_use: set[str]) -> list[str]:
+    """Extract NPC names from lorebook entry keywords."""
     names: list[str] = []
-    bad_tokens = {
-        '既正又黑', '待确认', '年轻强势', '极具争议', '谦谦君子', '侠之大者', '理想主义的灯塔',
-        '物流巨头', '重要中枢', '冷酷高效的杀手帝国', '盘踞西域', '现实主义秩序维护者',
-        '体制内的正道领袖', '江湖名义上的秩序维护者'
-    }
-    chunks = text.replace('。', '，').replace('；', '，').split('，')
-    for chunk in chunks:
-        piece = chunk.strip()
-        if not piece:
-            continue
-        if '包括' in piece:
-            piece = piece.split('包括', 1)[1].strip()
-        if '分别是：' in piece:
-            piece = piece.split('分别是：', 1)[1].strip()
-        if '分别是' in piece:
-            piece = piece.split('分别是', 1)[1].strip()
-        if '其领袖' in piece:
-            piece = piece.split('其领袖', 1)[1].strip()
-        if piece.startswith('其首徒'):
-            piece = piece[len('其首徒'):].strip()
-        if piece.startswith('现任盟主'):
-            piece = piece[len('现任盟主'):].strip()
-        if piece.startswith('楼主'):
-            piece = piece[len('楼主'):].strip()
-        if piece.startswith('掌门'):
-            piece = piece[len('掌门'):].strip()
-        if piece.startswith('总镖头'):
-            piece = piece[len('总镖头'):].strip()
-        if piece.startswith('皇帝'):
-            piece = piece[len('皇帝'):].strip()
-        if piece.endswith('则'):
-            piece = piece[:-1].strip()
-        if '是' in piece and len(piece) > 8:
-            left, right = piece.split('是', 1)
-            if len(left) <= 6 and len(right) >= 2:
-                piece = left.strip()
-        if '（' in piece:
-            piece = piece.split('（', 1)[0].strip()
-        if '常用化名' in piece:
-            piece = piece.split('常用化名', 1)[0].strip()
-        if ' / ' in piece:
-            primary = piece.split(' / ', 1)[0].strip()
-            if primary:
-                piece = primary
-        if any(token in piece for token in ['楼主', '掌门', '首徒', '总镖头']) and '是' in piece:
-            piece = piece.split('是', 1)[0].strip()
-        if piece in bad_tokens:
-            continue
-        if piece.endswith(('者', '感', '帝国', '中枢')):
-            continue
-        if not any(ch in piece for ch in ['萧', '苏', '沈', '秦', '裴', '谢', '宋', '月', '风', '沙', '漠', '柳', '阿', '韩', '顾', '陆', '刑', '血', '凌', '白', '武', '听', '天', '百', '黄', '七']) and not piece.endswith(('派', '楼', '府', '阁', '门', '局', '教', '司', '军', '盟')):
-            continue
-        if len(piece) < 2 or len(piece) > 8:
-            continue
-        if piece in names:
-            continue
-        names.append(piece)
+    for entry in entries:
+        for kw in entry.get('keywords', []) or []:
+            token = (kw or '').strip()
+            if not token or len(token) < 2 or len(token) > 8:
+                continue
+            title = (entry.get('title') or '').strip()
+            if token == title:
+                continue
+            if token in names_in_use or token in names:
+                continue
+            names.append(token)
     return names
 
 
@@ -165,18 +120,19 @@ def build_featured_cast(lorebook_path: Path, trigger_text: str, onstage: list[st
     data = read_json(lorebook_path)
     entries = data.get('entries', [])
     names_in_use = set(onstage or []) | set(relevant or [])
-    featured_titles = {
-        '关键人物总览',
-        '皇家成员',
-        '朝堂相关要员',
-        '太子势力',
-        '北境内部势力与 NPC',
-        '北境外部势力与 NPC',
-        '拜月教势力与 NPC',
-        '七绝门势力与 NPC',
-        '江湖势力与代表 NPC',
-    }
-    featured_entries = [entry for entry in entries if (entry.get('title') or '').strip() in featured_titles]
+
+    featured_entries = [
+        entry for entry in entries
+        if entry.get('entryType') == 'cast'
+        or entry.get('featured')
+        or (entry.get('priority', 0) or 0) >= 50
+    ]
+    if not featured_entries:
+        featured_entries = [
+            entry for entry in entries
+            if (entry.get('priority', 0) or 0) >= 20
+            and not (entry.get('title') or '').strip().startswith('NPC：')
+        ]
 
     trigger_lower = trigger_text.lower()
     scored: list[tuple[int, dict]] = []
@@ -185,32 +141,21 @@ def build_featured_cast(lorebook_path: Path, trigger_text: str, onstage: list[st
         title = (entry.get('title') or '').strip()
         content = (entry.get('content') or '').strip()
         base_score = int(entry.get('priority', 0) or 0)
-        title_bonus = 0
-        if title in {'关键人物总览', '江湖势力与代表 NPC'}:
-            title_bonus += 5
         keywords = entry.get('keywords', []) or []
         keyword_bonus = 0
         if any((kw or '').lower() in trigger_lower for kw in keywords):
             keyword_bonus += 8
-        candidate_names: list[str] = []
-        for kw in keywords:
-            token = (kw or '').strip()
-            if not token or len(token) < 2 or len(token) > 8:
-                continue
-            if token in featured_titles or token in {'皇帝', '公主', '朝堂', '北境', '西南', '鬼山', '复国', '北方草原', '血月', '太子势力'}:
-                continue
-            candidate_names.append(token)
-        candidate_names.extend(_split_cast_names(content))
+        candidate_names = _extract_keyword_names([entry], names_in_use)
         for name in candidate_names:
             if name in names_in_use or name in seen:
                 continue
             seen.add(name)
-            score = base_score + title_bonus + keyword_bonus
+            score = base_score + keyword_bonus
             if name in trigger_text:
                 score += 10
             scored.append((score, {
                 'name': name,
-                'title': f'世界书人物总览 / {title}',
+                'title': f'世界书 / {title}',
                 'summary': content,
                 'priority': score,
             }))

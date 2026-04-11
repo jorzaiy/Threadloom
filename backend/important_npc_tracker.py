@@ -60,8 +60,7 @@ def _service_lock_allowed(*, label: str, role_label: str, worldbook_candidate: b
         return True
     if not _is_service_role(role_label):
         return True
-    if label == '伙计' and any(token in latest_change for token in ['探出半个身子', '喊了一声', '门口', '看热闹']):
-        return False
+
     if user_mentions >= 2 and thread_weight >= 2:
         return True
     if total_mentions >= 5 and thread_weight >= 2 and retained_entity:
@@ -136,8 +135,7 @@ def update_important_npcs(state: dict, history: list[dict], lorebook_candidates:
                 importance_score -= 1
             if thread_weight_by_actor.get(label, 0) <= 1:
                 importance_score -= 1
-            if label == '伙计' and any(token in latest_change for token in ['探出半个身子', '喊了一声', '门口', '看热闹']):
-                importance_score -= 3
+
         service_lock_ok = _service_lock_allowed(
             label=label,
             role_label=role_label,

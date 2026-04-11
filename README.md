@@ -21,6 +21,8 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - skeleton keeper + fill-mode keeper 的双层状态链
 - session 级串行锁与 partial 污染隔离
 - 动态角色卡名称、副标题与侧栏封面图
+- **泛化架构**：所有卡特定逻辑已从代码移到 `character-data.json["hints"]`，支持任意角色卡
+- API Key 支持环境变量引用（`$VAR` 或 `env:VAR`）
 
 ## 当前 keeper 结构
 

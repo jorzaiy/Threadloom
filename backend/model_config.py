@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 from pathlib import Path
 
 try:
@@ -35,6 +36,17 @@ def load_openclaw_models() -> dict:
     return read_json(path) if path.exists() else {}
 
 
+def _resolve_api_key(value: str) -> str:
+    """Resolve an API key value. If it starts with '$' or 'env:', treat it
+    as an environment variable reference and look it up."""
+    text = (value or '').strip()
+    if text.startswith('$'):
+        return os.environ.get(text[1:], '')
+    if text.startswith('env:'):
+        return os.environ.get(text[4:], '')
+    return text
+
+
 def resolve_provider_model(role: str = 'narrator') -> dict:
     """解析指定角色的模型配置。
 
@@ -48,7 +60,7 @@ def resolve_provider_model(role: str = 'narrator') -> dict:
     # --- 本地模型路径 ---
     provider_type = role_cfg.get('provider', '')
     if provider_type == 'local-gemma':
-        api_key = role_cfg.get('apiKey', role_cfg.get('api_key', ''))
+        api_key = _resolve_api_key(role_cfg.get('apiKey', role_cfg.get('api_key', '')))
         return {
             'provider_name': 'local-gemma',
             'provider': {
@@ -74,14 +86,11 @@ def resolve_provider_model(role: str = 'narrator') -> dict:
     if preferred_provider and preferred_provider in providers:
         provider_name = preferred_provider
         provider = providers[preferred_provider]
-    elif 'custom-x-yuzh' in providers:
-        provider_name = 'custom-x-yuzh'
-        provider = providers[provider_name]
     elif providers:
         provider_name = next(iter(providers.keys()))
         provider = providers[provider_name]
     else:
-        raise RuntimeError('No provider available from OpenClaw models.json')
+        raise RuntimeError('No provider available from providers.json')
 
     model = None
     if preferred_model:
@@ -89,19 +98,18 @@ def resolve_provider_model(role: str = 'narrator') -> dict:
             if item.get('id') == preferred_model:
                 model = item
                 break
-    if model is None:
-        for item in provider.get('models', []):
-            if item.get('id') == 'gpt-5.4':
-                model = item
-                break
     if model is None and provider.get('models'):
         model = provider['models'][0]
     if model is None:
         raise RuntimeError(f'No model configured for provider {provider_name}')
 
+    resolved_provider = dict(provider)
+    if resolved_provider.get('apiKey'):
+        resolved_provider['apiKey'] = _resolve_api_key(resolved_provider['apiKey'])
+
     return {
         'provider_name': provider_name,
-        'provider': provider,
+        'provider': resolved_provider,
         'model': model,
         'temperature': role_cfg.get('temperature', 0.9),
         'max_output_tokens': role_cfg.get('max_output_tokens', 1200),

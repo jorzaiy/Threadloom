@@ -270,7 +270,12 @@ function renderState(state) {
   table.className = 'state-table';
   for (const [label, value] of rows) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<th>${label}</th><td>${value || '待确认'}</td>`;
+    const th = document.createElement('th');
+    th.textContent = label;
+    const td = document.createElement('td');
+    td.textContent = value || '待确认';
+    tr.appendChild(th);
+    tr.appendChild(td);
     table.appendChild(tr);
   }
   stateEl.appendChild(table);
@@ -288,7 +293,12 @@ function renderState(state) {
 
     if (!items || items.length === 0) {
       const tr = document.createElement('tr');
-      tr.innerHTML = '<th>状态</th><td>暂无</td>';
+      const emptyTh = document.createElement('th');
+      emptyTh.textContent = '状态';
+      const emptyTd = document.createElement('td');
+      emptyTd.textContent = '暂无';
+      tr.appendChild(emptyTh);
+      tr.appendChild(emptyTd);
       tbody.appendChild(tr);
     } else {
       items.forEach((item, idx) => {
@@ -346,7 +356,12 @@ function renderState(state) {
   const objectBody = document.createElement('tbody');
   if (!objects.length) {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<th>状态</th><td>暂无</td>';
+    const oTh = document.createElement('th');
+    oTh.textContent = '状态';
+    const oTd = document.createElement('td');
+    oTd.textContent = '暂无';
+    tr.appendChild(oTh);
+    tr.appendChild(oTd);
     objectBody.appendChild(tr);
   } else {
     objects.slice(0, 6).forEach((item, idx) => {
@@ -364,7 +379,12 @@ function renderState(state) {
         `状态：${status}`,
         `可见性：${vis}`,
       ];
-      td.innerHTML = lines.map(line => `<div class="object-line">${line}</div>`).join('');
+      lines.forEach(line => {
+        const div = document.createElement('div');
+        div.className = 'object-line';
+        div.textContent = line;
+        td.appendChild(div);
+      });
       tr.appendChild(th);
       tr.appendChild(td);
       objectBody.appendChild(tr);
@@ -386,7 +406,12 @@ function renderState(state) {
   const threadBody = document.createElement('tbody');
   if (!threads.length) {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<th>状态</th><td>暂无</td>';
+    const tTh = document.createElement('th');
+    tTh.textContent = '状态';
+    const tTd = document.createElement('td');
+    tTd.textContent = '暂无';
+    tr.appendChild(tTh);
+    tr.appendChild(tTd);
     threadBody.appendChild(tr);
   } else {
     threads.slice(0, 5).forEach((item, idx) => {

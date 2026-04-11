@@ -67,6 +67,10 @@ def load_card_hints() -> dict:
             return {str(k).strip(): str(v).strip() for k, v in value.items() if str(k).strip()}
         return {}
 
+    persona_archetypes = raw.get('persona_archetypes', [])
+    if not isinstance(persona_archetypes, list):
+        persona_archetypes = []
+
     return {
         'environment_tokens': _tuple_field('environment_tokens'),
         'transient_group_tokens': _tuple_field('transient_group_tokens'),
@@ -76,6 +80,7 @@ def load_card_hints() -> dict:
         'known_npc_roles': _dict_field('known_npc_roles'),
         'npc_canonical_mappings': _dict_field('npc_canonical_mappings'),
         'time_era_prefix': str(raw.get('time_era_prefix', '') or '').strip(),
+        'persona_archetypes': persona_archetypes,
     }
 
 
@@ -116,3 +121,9 @@ def get_canonical_name(surface: str) -> str:
 
 def get_time_era_prefix() -> str:
     return load_card_hints()['time_era_prefix']
+
+
+def get_persona_archetypes() -> list[dict]:
+    """Return persona archetype definitions from card hints.
+    Each entry has 'match_tokens' (list[str]) and trait fields."""
+    return load_card_hints()['persona_archetypes']

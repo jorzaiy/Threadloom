@@ -11,9 +11,10 @@
 - `context_builder.py`：runtime 上下文装配
 - `narrator_input.py`：narrator prompt 拼装
 - `model_config.py` / `model_client.py`：模型配置与模型调用
+- `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
 - `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接
-- `state_keeper.py`：优先用统一模型调用链提取结构化 state
-- `state_updater.py`：`state_keeper` 失败时的 fallback
+- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）
+- `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary
 - `persona_updater.py` / `persona_runtime.py`：session-local persona 流转与展示骨架
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
@@ -55,10 +56,43 @@
 - 当前 keeper 主链组合已经是：`skeleton keeper -> fill-mode keeper -> heuristic fallback`
 - turn_analyzer 可在 narrator 不变前提下评估是否跟着切本地
 
+## 泛化架构
+
+所有卡特定逻辑已从代码移到数据层：
+
+- `character-data.json["hints"]` 定义卡级语义提示（实体分类 token、NPC 角色映射、persona 原型等）
+- `card_hints.py` 提供统一的查询接口，所有模块通过它读取配置
+- 没有 hints 的角色卡也能正常工作：token 过滤器为空（不误杀实体），role_label 回退为 `待确认`，LLM keeper 承担全部语义理解
+- state_keeper / state_bridge / important_npc_tracker / persona_runtime / persona_updater 均已改为数据驱动
+- state_updater 的 legacy heuristic 已简化为保守延续策略，不再包含卡特定推理
+
+### hints 字段说明
+
+```json
+{
+  "hints": {
+    "environment_tokens": ["巷口", "雨", ...],
+    "transient_group_tokens": ["路人", "闲人", ...],
+    "non_character_object_tokens": ["油布包", "纸卷", ...],
+    "generic_target_tokens": ["被围", "伤者", ...],
+    "service_role_tokens": ["掌柜", "伙计", ...],
+    "known_npc_roles": {"师兄": "同行伤者 / 师兄", ...},
+    "npc_canonical_mappings": {"领头皂衣人": "高个皂衣人", ...},
+    "time_era_prefix": "承和十二年",
+    "persona_archetypes": [
+      {"match_tokens": ["掌柜", "老板"], "mbti": "ISTJ", "archetype": "秩序维护者", ...}
+    ]
+  }
+}
+```
+
+## API Key 安全
+
+`model_config.py` 支持环境变量引用：在 `providers.json` 的 `apiKey` 字段中使用 `$ENV_VAR_NAME` 或 `env:ENV_VAR_NAME` 格式即可从环境变量读取密钥。
+
 ## 当前仍不稳定的部分
 
 - `state_keeper` 仍主要从 narrator prose 反提 state
-- fallback `state_updater` 仍是启发式兜底，不宜当主路
 - arbiter 仍主要覆盖少数高风险事件类型
 - analyzer / state keeper 虽已分模，但默认配置仍偏实验态
 - 主角 runtime 与已解决事件归档层仍未独立落地

@@ -3,6 +3,11 @@ from __future__ import annotations
 
 import time
 
+try:
+    from .card_hints import get_persona_archetypes
+except ImportError:
+    from card_hints import get_persona_archetypes
+
 
 def merge_identity(previous: dict | None, role_label: str = '待确认', *, faction: str | None = None, base_region: str | None = None) -> dict:
     previous = previous or {}
@@ -39,95 +44,43 @@ def _trait_block(
     }
 
 
+def _match_archetype(name: str, role_label: str) -> dict | None:
+    """Match name/role against card-defined persona archetypes."""
+    archetypes = get_persona_archetypes()
+    combined = f'{name} {role_label}'
+    for entry in archetypes:
+        tokens = entry.get('match_tokens', [])
+        if not isinstance(tokens, list):
+            continue
+        if any(token in combined for token in tokens):
+            return entry
+    return None
+
+
 def infer_persona_traits(name: str, role_label: str = '待确认') -> dict:
     name = (name or '').strip()
     role_label = (role_label or '').strip()
-    combined = f'{name} {role_label}'
 
-    if '掌柜' in combined or '老板' in combined:
+    match = _match_archetype(name, role_label)
+    if match:
+        def _hook(key: str) -> tuple[str, float]:
+            value = match.get(key, '待确认')
+            if isinstance(value, list) and len(value) >= 2:
+                return (str(value[0]), float(value[1]))
+            return (str(value), 0.35)
+
         return _trait_block(
-            mbti='ISTJ',
-            mbti_conf=0.38,
-            archetype='秩序维护者',
-            archetype_conf=0.44,
-            decision_style=('先止损，再判断，再决定是否担责', 0.43),
-            social_strategy=('先摆规矩，见对方识趣才给余地', 0.46),
-            conflict_style=('先压场、再切割，最后才公开翻脸', 0.42),
-            speech_rhythm=('短句，少形容，不说满', 0.48),
-            stress_response=('更硬，更快，更少解释', 0.41),
+            mbti=str(match.get('mbti', 'unknown')),
+            mbti_conf=float(match.get('mbti_conf', 0.35)),
+            archetype=str(match.get('archetype', '待确认')),
+            archetype_conf=float(match.get('archetype_conf', 0.35)),
+            decision_style=_hook('decision_style'),
+            social_strategy=_hook('social_strategy'),
+            conflict_style=_hook('conflict_style'),
+            speech_rhythm=_hook('speech_rhythm'),
+            stress_response=_hook('stress_response'),
         )
-    if '伙计' in combined or '小二' in combined or '跑堂' in combined:
-        return _trait_block(
-            mbti='ESFJ',
-            mbti_conf=0.34,
-            archetype='热心帮手',
-            archetype_conf=0.4,
-            decision_style=('先看眼前活计和人情，再决定帮到哪一步', 0.39),
-            social_strategy=('比掌柜更容易搭话，也更容易被使唤', 0.41),
-            conflict_style=('不主动顶硬局，真急了会立刻去叫人', 0.38),
-            speech_rhythm=('短到中句，偏口语', 0.43),
-            stress_response=('先慌，再赶紧补位', 0.37),
-        )
-    if '船夫' in combined or '艄公' in combined or '掌舵' in combined or '老汉' in combined:
-        return _trait_block(
-            mbti='ISTP',
-            mbti_conf=0.35,
-            archetype='老练看路人',
-            archetype_conf=0.39,
-            decision_style=('先看水势、风向和当下实际情况', 0.4),
-            social_strategy=('能少说就少说，必要时点一句要紧的', 0.39),
-            conflict_style=('优先稳工具和位置，不为闲气起冲突', 0.38),
-            speech_rhythm=('短句，平，带行路经验', 0.42),
-            stress_response=('更专注手上活，不轻易乱动', 0.37),
-        )
-    if '师兄' in combined or '同行' in combined or '伤者' in combined:
-        return _trait_block(
-            mbti='ISTJ',
-            mbti_conf=0.41,
-            archetype='克制同行者',
-            archetype_conf=0.46,
-            decision_style=('先忍耐，再判断，再在必要时出手或表态', 0.42),
-            social_strategy=('先保持距离，确认可信后才松口', 0.4),
-            conflict_style=('受伤或受压时更偏防守与克制', 0.39),
-            speech_rhythm=('短句，克制，少废话', 0.45),
-            stress_response=('更沉默，更硬撑，必要时突然变得很直接', 0.4),
-        )
-    if '皂衣人' in combined or '追索者' in combined or '官面执行者' in combined:
-        return _trait_block(
-            mbti='ESTJ',
-            mbti_conf=0.39,
-            archetype='执行者',
-            archetype_conf=0.44,
-            decision_style=('先执行命令，再根据阻碍调整动作', 0.4),
-            social_strategy=('压迫式推进，不以安抚为优先', 0.39),
-            conflict_style=('正面施压，必要时快速升级', 0.41),
-            speech_rhythm=('短句，直接，命令式', 0.44),
-            stress_response=('更强硬，更少废话', 0.39),
-        )
-    if '少年' in combined:
-        return _trait_block(
-            mbti='ISFP',
-            mbti_conf=0.31,
-            archetype='被卷入者',
-            archetype_conf=0.36,
-            decision_style=('先保命，再看谁能救自己', 0.36),
-            social_strategy=('本能依附眼前更强的一方', 0.35),
-            conflict_style=('多逃、多躲，少正面硬顶', 0.34),
-            speech_rhythm=('短句，急，容易露慌', 0.38),
-            stress_response=('更惊、更乱、更依赖别人判断', 0.35),
-        )
-    if '公子' in combined or '苏' in combined or '黑衣' in combined or '短褐' in combined:
-        return _trait_block(
-            mbti='INTJ',
-            mbti_conf=0.34,
-            archetype='试探者',
-            archetype_conf=0.39,
-            decision_style=('先观察，再试探，再决定是否亮底牌', 0.38),
-            social_strategy=('先测边界，再决定靠近还是抽离', 0.38),
-            conflict_style=('偏好控制节奏，不急着一次摊牌', 0.36),
-            speech_rhythm=('短到中句，留白较多', 0.4),
-            stress_response=('更冷，更收，更不轻易表态', 0.37),
-        )
+
     return _trait_block(
         mbti='unknown',
         mbti_conf=0.0,

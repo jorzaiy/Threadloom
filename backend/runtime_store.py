@@ -17,6 +17,16 @@ RUNTIME_WEB = APP_ROOT
 SESSIONS_DIR = current_sessions_root()
 CONFIG = RUNTIME_WEB / 'config' / 'runtime.json'
 
+_history_cache: dict[str, tuple[float, list]] = {}
+
+
+def invalidate_history_cache(session_id: str | None = None) -> None:
+    """Clear cached history. Call after appending to history."""
+    if session_id:
+        _history_cache.pop(session_id, None)
+    else:
+        _history_cache.clear()
+
 
 def character_data_path() -> Path:
     layered = character_source_root() / 'character-data.json'
@@ -127,6 +137,13 @@ def load_history(session_id: str) -> list:
     path = session_paths(session_id)['history']
     if not path.exists():
         return []
+    try:
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = 0.0
+    cached = _history_cache.get(session_id)
+    if cached and cached[0] == mtime:
+        return list(cached[1])
     items = []
     for line in path.read_text(encoding='utf-8').splitlines():
         s = line.strip()
@@ -136,7 +153,8 @@ def load_history(session_id: str) -> list:
             items.append(json.loads(s))
         except Exception:
             continue
-    return items
+    _history_cache[session_id] = (mtime, items)
+    return list(items)
 
 
 def is_complete_assistant_item(item: dict) -> bool:
@@ -150,6 +168,7 @@ def append_history(session_id: str, item: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a', encoding='utf-8') as f:
         f.write(json.dumps(item, ensure_ascii=False) + '\n')
+    invalidate_history_cache(session_id)
 
 
 def save_history(session_id: str, items: list[dict]) -> None:
@@ -511,6 +530,14 @@ def web_runtime_settings() -> dict:
     }
 
 
+MAX_IDEMPOTENCY_CACHE = 50
+
+
 def save_meta(session_id: str, meta: dict) -> None:
+    cache = meta.get('processed_client_turn_ids', {})
+    if isinstance(cache, dict) and len(cache) > MAX_IDEMPOTENCY_CACHE:
+        sorted_keys = sorted(cache.keys())
+        for key in sorted_keys[:len(cache) - MAX_IDEMPOTENCY_CACHE]:
+            del cache[key]
     path = session_paths(session_id)['meta']
     path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

@@ -187,10 +187,20 @@ def _contains_seed_name_exactly(body: str, name: str) -> bool:
     return re.search(pattern, body) is not None
 
 
+_jieba_tokenizer = None
+
+
+def _get_jieba_tokenizer():
+    global _jieba_tokenizer
+    if _jieba_tokenizer is None and jieba is not None:
+        _jieba_tokenizer = jieba.Tokenizer()
+    return _jieba_tokenizer
+
+
 def _jieba_token_set(body: str, seeded: list[str]) -> set[str]:
-    if jieba is None:
+    tokenizer = _get_jieba_tokenizer()
+    if tokenizer is None:
         return set()
-    tokenizer = jieba.Tokenizer()
     for name in seeded:
         if name:
             try:
@@ -948,20 +958,12 @@ def update_state(session_id: str) -> dict:
     generic_time = infer_time_generic(assistant_focus, state)
     generic_location = infer_location_generic(assistant_focus)
     focal_entity = infer_focal_entity_generic(base_text, state, context, history)
-    if focal_entity is None and _legacy_state_signals(base_text):
-        focal_entity = infer_focal_entity(base_text)
     inferred_onstage = [sanitize_runtime_name(name) for name in infer_onstage_npcs_generic(base_text, state, context, history) if sanitize_runtime_name(name)]
-    if not inferred_onstage:
-        inferred_onstage = [sanitize_runtime_name(name) for name in infer_onstage_npcs(base_text) if sanitize_runtime_name(name)]
     inferred_onstage = _prune_generic_appellations(inferred_onstage, state, context, history)
-    inferred_onstage = filter_transient_npcs(assistant_focus or focus_text, inferred_onstage)
-    inferred_onstage = prioritize_scene_targets(base_text, inferred_onstage)
     if focal_entity and focal_entity['primary_label'] not in inferred_onstage:
         inferred_onstage = [focal_entity['primary_label']] + inferred_onstage
         inferred_onstage = inferred_onstage[:4]
     inferred_relevant = infer_relevant_npcs_generic(broad_text, inferred_onstage, state, context, history)
-    if not inferred_relevant and _legacy_state_signals(broad_text):
-        inferred_relevant = infer_relevant_npcs(broad_text, inferred_onstage)
     inferred_relevant = _prune_generic_appellations(inferred_relevant, state, context, history)
     inferred_relevant = infer_implicit_relevant(state, assistant_focus or focus_text, inferred_onstage, inferred_relevant)
     prev_effective_location = str(state.get('location', '') or '').strip()
@@ -985,23 +987,14 @@ def update_state(session_id: str) -> dict:
         if current_location in {'', '待确认', '待根据开局建立'} or current_main_event.startswith('开局：'):
             opening_locked = False
 
-    inferred_time = generic_time or infer_time(focus_text)
-    inferred_location = generic_location or infer_location(assistant_focus or focus_text)
-    inferred_main_event = infer_main_event_generic(user_focus, assistant_focus, inferred_location, str(state.get('location', '') or '').strip())
-    inferred_scene_core = infer_scene_core_generic(user_focus, assistant_focus, inferred_location, str(state.get('location', '') or '').strip(), onstage_count=len(inferred_onstage))
-    inferred_goal = infer_immediate_goal_generic(user_focus, assistant_focus, inferred_location, str(state.get('location', '') or '').strip())
-    inferred_risks = infer_immediate_risks_generic(user_focus, assistant_focus, inferred_location, str(state.get('location', '') or '').strip(), onstage_count=len(inferred_onstage))
-    inferred_clues = infer_carryover_clues_generic(user_focus, assistant_focus, inferred_location, str(state.get('location', '') or '').strip())
-    if not inferred_main_event:
-        inferred_main_event = infer_main_event(focus_text)
-    if not inferred_scene_core:
-        inferred_scene_core = infer_scene_core(focus_text)
-    if not inferred_goal:
-        inferred_goal = infer_immediate_goal(focus_text)
-    if not inferred_risks:
-        inferred_risks = infer_immediate_risks(focus_text)
-    if not inferred_clues:
-        inferred_clues = infer_carryover_clues(broad_text)
+    prev_location = str(state.get('location', '') or '').strip()
+    inferred_time = generic_time
+    inferred_location = generic_location
+    inferred_main_event = infer_main_event_generic(user_focus, assistant_focus, inferred_location, prev_location)
+    inferred_scene_core = infer_scene_core_generic(user_focus, assistant_focus, inferred_location, prev_location, onstage_count=len(inferred_onstage))
+    inferred_goal = infer_immediate_goal_generic(user_focus, assistant_focus, inferred_location, prev_location)
+    inferred_risks = infer_immediate_risks_generic(user_focus, assistant_focus, inferred_location, prev_location, onstage_count=len(inferred_onstage))
+    inferred_clues = infer_carryover_clues_generic(user_focus, assistant_focus, inferred_location, prev_location)
     tracked_objects, possession_state, object_visibility = infer_tracked_objects(broad_text, state)
     scene_entities = build_scene_entities_generic(inferred_onstage, state, context, history, text=base_text, focal_entity=focal_entity)
     if not scene_entities:
