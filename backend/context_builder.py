@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from runtime_store import is_complete_assistant_item, load_canon, load_context, load_history, load_persona_index, load_state, load_summary
-from paths import APP_ROOT, SHARED_ROOT
+from paths import APP_ROOT, SHARED_ROOT, resolve_layered_source
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
@@ -224,7 +224,7 @@ def load_runtime_config() -> dict:
 
 
 def resolve_source(path_str: str) -> Path:
-    return ROOT / path_str
+    return resolve_layered_source(path_str)
 
 
 def extract_prefixed_value(text: str, prefix: str, fallback: str = '待确认') -> str:

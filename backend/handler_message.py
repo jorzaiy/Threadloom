@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import copy
 import time
 from typing import Any
 
@@ -9,7 +10,7 @@ try:
     from .continuity_hints import normalized_hint_entries
     from .important_npc_tracker import update_important_npcs
     from .thread_tracker import apply_thread_tracker
-    from .runtime_store import append_history, build_state_snapshot, load_history, load_meta, load_state, save_meta, save_state, seed_default_state, web_runtime_settings
+    from .runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
     from .context_builder import build_runtime_context
     from .bootstrap_session import bootstrap_session
     from .opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
@@ -29,7 +30,7 @@ except ImportError:
     from continuity_hints import normalized_hint_entries
     from important_npc_tracker import update_important_npcs
     from thread_tracker import apply_thread_tracker
-    from runtime_store import append_history, build_state_snapshot, load_history, load_meta, load_state, save_meta, save_state, seed_default_state, web_runtime_settings
+    from runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
     from context_builder import build_runtime_context
     from bootstrap_session import bootstrap_session
     from opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
@@ -42,6 +43,69 @@ except ImportError:
     from state_updater import update_state
     from persona_updater import update_persona
     from state_fragment import merge_state_skeleton
+
+
+TRACE_PROMPT_LIMIT = 4000
+def _trim_trace_text(text: str, limit: int = TRACE_PROMPT_LIMIT) -> str:
+    value = str(text or '')
+    if len(value) <= limit:
+        return value
+    return value[:limit] + '\n...[truncated]'
+
+
+def _trace_context_excerpt(context: dict) -> dict:
+    if not isinstance(context, dict):
+        return {}
+    scene = context.get('scene_facts', {}) if isinstance(context.get('scene_facts', {}), dict) else {}
+    preset = context.get('active_preset', {}) if isinstance(context.get('active_preset', {}), dict) else {}
+    return {
+        'active_preset': preset.get('name'),
+        'scene_facts': copy.deepcopy(scene),
+        'persona_names': [item.get('name') for item in (context.get('persona', []) or []) if isinstance(item, dict)],
+        'lorebook_npc_candidates': [
+            {
+                'name': item.get('name'),
+                'title': item.get('title'),
+                'summary': item.get('summary'),
+                'priority': item.get('priority'),
+            }
+            for item in (context.get('lorebook_npc_candidates', []) or [])
+            if isinstance(item, dict) and item.get('name')
+        ],
+        'recent_history_count': len(context.get('recent_history', []) or []),
+    }
+
+
+def _build_turn_trace_base(session_id: str, turn_id: str, *, ts: int, client_turn_id: str, text: str, request_meta: dict, prev_state: dict, meta: dict) -> dict:
+    return {
+        'trace_version': 1,
+        'session_id': session_id,
+        'turn_id': turn_id,
+        'ts': ts,
+        'client_turn_id': client_turn_id,
+        'request': {
+            'text': text,
+            'meta': copy.deepcopy(request_meta),
+        },
+        'pre_turn': {
+            'last_turn_id': meta.get('last_turn_id', 0),
+            'state': copy.deepcopy(prev_state),
+            'state_snapshot': build_state_snapshot(prev_state),
+            'summary_text': load_summary(session_id),
+            'canon_text': load_canon(session_id),
+            'history_items': load_history(session_id),
+            'persona_layers': load_session_persona_layers(session_id),
+            'continuity_hints': load_continuity_hints(session_id),
+            'history_count': len(load_history(session_id)),
+        },
+    }
+
+
+def _save_turn_trace_safe(session_id: str, turn_id: str, trace: dict) -> None:
+    try:
+        save_turn_trace(session_id, turn_id, trace)
+    except Exception:
+        pass
 
 
 def update_stub_state(state: dict, text: str, context: dict) -> dict:
@@ -102,6 +166,23 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
 
     turn_id = f"turn-{meta['last_turn_id'] + 1:04d}"
     ts = int(time.time() * 1000)
+    prev_state = load_state(session_id)
+    turn_trace = _build_turn_trace_base(
+        session_id,
+        turn_id,
+        ts=ts,
+        client_turn_id=client_turn_id,
+        text=text,
+        request_meta=request_meta,
+        prev_state=prev_state if isinstance(prev_state, dict) else {},
+        meta=meta,
+    )
+
+    def finalize_response(response: dict[str, Any], *, trace: dict | None = None) -> dict[str, Any]:
+        active_trace = trace if isinstance(trace, dict) else turn_trace
+        active_trace['response'] = copy.deepcopy(response)
+        _save_turn_trace_safe(session_id, turn_id, active_trace)
+        return response
 
     def finalize_opening_choice(choice: str) -> dict[str, Any]:
         state = initialize_opening_choice_state(session_id, choice)
@@ -143,7 +224,26 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         if client_turn_id:
             meta['processed_client_turn_ids'][client_turn_id] = response
         save_meta(session_id, meta)
-        return response
+        trace = copy.deepcopy(turn_trace)
+        trace['mode'] = 'opening-choice'
+        trace['opening'] = {
+            'choice': choice,
+            'opening_prompt': opening_prompt,
+        }
+        trace['runtime'] = {
+            'context': _trace_context_excerpt(context),
+            'narrator': {
+                'system_prompt': _trim_trace_text(system_prompt),
+                'user_prompt': _trim_trace_text(user_prompt),
+                'reply': reply,
+                'usage': copy.deepcopy(usage),
+            },
+        }
+        trace['post_turn'] = {
+            'state': copy.deepcopy(state),
+            'state_snapshot': build_state_snapshot(state),
+        }
+        return finalize_response(response, trace=trace)
 
     append_history(session_id, {'ts': ts, 'role': 'user', 'content': text})
 
@@ -177,7 +277,13 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         if client_turn_id:
             meta['processed_client_turn_ids'][client_turn_id] = response
         save_meta(session_id, meta)
-        return response
+        trace = copy.deepcopy(turn_trace)
+        trace['mode'] = 'opening-menu'
+        trace['post_turn'] = {
+            'state': copy.deepcopy(state),
+            'state_snapshot': build_state_snapshot(state),
+        }
+        return finalize_response(response, trace=trace)
 
     if meta['last_turn_id'] == 0:
         choice = resolve_opening_choice(text)
@@ -209,7 +315,13 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         if client_turn_id:
             meta['processed_client_turn_ids'][client_turn_id] = response
         save_meta(session_id, meta)
-        return response
+        trace = copy.deepcopy(turn_trace)
+        trace['mode'] = 'opening-guard'
+        trace['post_turn'] = {
+            'state': copy.deepcopy(state),
+            'state_snapshot': build_state_snapshot(state),
+        }
+        return finalize_response(response, trace=trace)
 
     if meta['last_turn_id'] == 0 and is_opening_command(text):
         state = initialize_opening_state(session_id)
@@ -237,19 +349,37 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         if client_turn_id:
             meta['processed_client_turn_ids'][client_turn_id] = response
         save_meta(session_id, meta)
-        return response
+        trace = copy.deepcopy(turn_trace)
+        trace['mode'] = 'opening'
+        trace['post_turn'] = {
+            'state': copy.deepcopy(state),
+            'state_snapshot': build_state_snapshot(state),
+        }
+        return finalize_response(response, trace=trace)
 
     context = build_runtime_context(session_id)
     if not state:
         state = seed_default_state(session_id)
     scene = context.get('scene_facts', {})
+    turn_trace['mode'] = 'runtime'
+    turn_trace['runtime'] = {
+        'context': _trace_context_excerpt(context),
+    }
     arbiter = run_arbiter(text, scene)
     arbiter_result = arbiter.get('results', []) if arbiter.get('arbiter_needed') else None
     state_fragment = build_state_fragment(state, scene, user_text=text, arbiter=arbiter)
+    turn_trace['runtime']['arbiter'] = copy.deepcopy(arbiter)
+    turn_trace['runtime']['state_fragment_initial'] = copy.deepcopy(state_fragment)
     skeleton_keeper_diagnostics = None
+    skeleton_keeper_trace = None
+    state_keeper_trace = None
     context = dict(context)
     context['state_fragment'] = state_fragment
     system_prompt, user_prompt = build_narrator_input(context, text, arbiter_result=arbiter_result)
+    turn_trace['runtime']['narrator'] = {
+        'system_prompt': _trim_trace_text(system_prompt),
+        'user_prompt': _trim_trace_text(user_prompt),
+    }
     model_cfg = resolve_provider_model('narrator')
     model_error = None
     try:
@@ -265,13 +395,20 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if not reply.strip():
         reply = f"[fallback] 当前主事件：{scene.get('main_event', '待确认')} | 收到输入：{text}"
+    turn_trace['runtime']['narrator']['reply'] = reply
+    turn_trace['runtime']['narrator']['usage'] = copy.deepcopy(usage)
+    turn_trace['runtime']['narrator']['model_error'] = model_error
     finish_reason = usage.get('finish_reason')
     completion_status = 'partial' if finish_reason == 'length' else 'complete'
     append_history(session_id, {'ts': ts + 1, 'role': 'assistant', 'content': reply, 'completion_status': completion_status})
+    turn_trace['runtime']['completion'] = {
+        'completion_status': completion_status,
+        'finish_reason': finish_reason,
+    }
 
     if completion_status == 'complete' and skeleton_keeper_enabled():
         try:
-            skeleton_fragment, skeleton_usage = call_skeleton_keeper(state, state_fragment, reply)
+            skeleton_fragment, skeleton_usage, skeleton_keeper_trace = call_skeleton_keeper(state, state_fragment, reply, return_trace=True)
         except Exception as err:
             skeleton_keeper_diagnostics = {
                 'provider_requested': 'llm',
@@ -292,6 +429,11 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'fallback_reason': None,
                 'skeleton_fragment': skeleton_fragment,
             }
+    turn_trace['runtime']['skeleton_keeper'] = {
+        'diagnostics': copy.deepcopy(skeleton_keeper_diagnostics),
+        'trace': copy.deepcopy(skeleton_keeper_trace),
+    }
+    turn_trace['runtime']['state_fragment_final'] = copy.deepcopy(state_fragment)
 
     if completion_status == 'partial':
         response = {
@@ -318,12 +460,22 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         if client_turn_id:
             meta['processed_client_turn_ids'][client_turn_id] = response
         save_meta(session_id, meta)
-        return response
+        turn_trace['post_turn'] = {
+            'state': copy.deepcopy(state),
+            'state_snapshot': build_state_snapshot(state),
+        }
+        return finalize_response(response)
 
     state_error = None
     state_keeper_diagnostics = None
     try:
-        state = call_state_keeper(session_id, reply, state_fragment=state_fragment)
+        state, state_keeper_trace = call_state_keeper(
+            session_id,
+            reply,
+            state_fragment=state_fragment,
+            user_text=text,
+            return_trace=True,
+        )
         state_keeper_diagnostics = state.get('state_keeper_diagnostics', {})
     except Exception as err:
         state_error = str(err)
@@ -336,7 +488,32 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'fallback_reason': state_error,
         }
         save_state(session_id, fragment_state)
-        state = update_state(session_id)
+        try:
+            state = update_state(session_id)
+        except Exception as fallback_err:
+            turn_trace['runtime']['state_keeper'] = {
+                'diagnostics': {
+                    'provider_requested': 'llm',
+                    'provider_used': 'fragment-baseline',
+                    'model_usage': None,
+                    'fallback_used': True,
+                    'fallback_reason': state_error,
+                },
+                'trace': copy.deepcopy(state_keeper_trace),
+                'state_error': state_error,
+                'fallback_update_error': str(fallback_err),
+            }
+            turn_trace['post_turn'] = {
+                'state': copy.deepcopy(fragment_state),
+                'state_snapshot': build_state_snapshot(fragment_state),
+            }
+            turn_trace['failure'] = {
+                'type': type(fallback_err).__name__,
+                'message': str(fallback_err),
+                'stage': 'state_updater_fallback',
+            }
+            _save_turn_trace_safe(session_id, turn_id, turn_trace)
+            raise
         state_keeper_diagnostics = {
             'provider_requested': 'llm',
             'provider_used': 'fragment+heuristic-fallback',
@@ -345,6 +522,12 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'fallback_reason': state_error,
         }
         state['state_keeper_diagnostics'] = state_keeper_diagnostics
+    turn_trace['runtime']['state_keeper'] = {
+        'diagnostics': copy.deepcopy(state_keeper_diagnostics),
+        'trace': copy.deepcopy(state_keeper_trace),
+        'state_error': state_error,
+    }
+    turn_trace['runtime']['state_after_keeper'] = copy.deepcopy(state)
     state = merge_arbiter_state(state, arbiter)
     state = apply_thread_tracker(state, user_text=text, narrator_reply=reply, arbiter=arbiter)
     state['continuity_hints'] = normalized_hint_entries(session_id)
@@ -403,4 +586,10 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     if client_turn_id:
         meta['processed_client_turn_ids'][client_turn_id] = response
     save_meta(session_id, meta)
-    return response
+    turn_trace['post_turn'] = {
+        'state': copy.deepcopy(state),
+        'state_snapshot': build_state_snapshot(state),
+        'summary_updated': True,
+        'persona_counts': copy.deepcopy(persona_counts),
+    }
+    return finalize_response(response)

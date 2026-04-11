@@ -78,6 +78,9 @@ def build_state_fragment(prev_state: dict, scene_facts: dict, user_text: str = '
         'immediate_risks': normalize_text_list(scene.get('immediate_risks', []) or prev.get('immediate_risks', []), limit=6),
         'carryover_clues': normalize_text_list(scene.get('carryover_clues', []) or prev.get('carryover_clues', []), limit=6),
         'scene_entities': deepcopy(scene.get('scene_entities', []) or prev.get('scene_entities', [])),
+        'tracked_objects': deepcopy(scene.get('tracked_objects', []) or prev.get('tracked_objects', [])),
+        'possession_state': deepcopy(scene.get('possession_state', []) or prev.get('possession_state', [])),
+        'object_visibility': deepcopy(scene.get('object_visibility', []) or prev.get('object_visibility', [])),
     }
 
     merged = merge_arbiter_state(base, arbiter) if arbiter else base
@@ -92,6 +95,9 @@ def build_state_fragment(prev_state: dict, scene_facts: dict, user_text: str = '
         'immediate_risks': merged.get('immediate_risks', []),
         'carryover_clues': merged.get('carryover_clues', []),
         'scene_entities': merged.get('scene_entities', []),
+        'tracked_objects': merged.get('tracked_objects', []),
+        'possession_state': merged.get('possession_state', []),
+        'object_visibility': merged.get('object_visibility', []),
         'turn_mode': _turn_mode(analysis),
         'arbiter_events': [
             {
@@ -117,7 +123,7 @@ def build_state_from_fragment(prev_state: dict, state_fragment: dict, session_id
         if value and value != '待确认':
             next_state[field] = value
 
-    for field in ('onstage_npcs', 'relevant_npcs', 'immediate_risks', 'carryover_clues', 'scene_entities'):
+    for field in ('onstage_npcs', 'relevant_npcs', 'immediate_risks', 'carryover_clues', 'scene_entities', 'tracked_objects', 'possession_state', 'object_visibility'):
         value = fragment.get(field)
         if isinstance(value, list) and value:
             next_state[field] = deepcopy(value)

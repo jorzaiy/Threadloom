@@ -6,18 +6,37 @@ from pathlib import Path
 try:
     from .persona_runtime import infer_persona_traits
     from .name_sanitizer import sanitize_runtime_name
-    from .paths import APP_ROOT, SHARED_ROOT, shared_path
+    from .paths import APP_ROOT, SHARED_ROOT, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, resolve_layered_source, resolve_session_dir, shared_path
 except ImportError:
     from persona_runtime import infer_persona_traits
     from name_sanitizer import sanitize_runtime_name
-    from paths import APP_ROOT, SHARED_ROOT, shared_path
+    from paths import APP_ROOT, SHARED_ROOT, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, resolve_layered_source, resolve_session_dir, shared_path
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
-SESSIONS_DIR = RUNTIME_WEB / 'sessions'
-ROOT_PERSONA_DIR = shared_path('runtime', 'persona-seeds')
+SESSIONS_DIR = current_sessions_root()
 CONFIG = RUNTIME_WEB / 'config' / 'runtime.json'
-CHARACTER_DATA = shared_path('character', 'character-data.json')
+
+
+def character_data_path() -> Path:
+    layered = character_source_root() / 'character-data.json'
+    if layered.exists():
+        return layered
+    return shared_path('character', 'character-data.json')
+
+
+def root_persona_dir() -> Path:
+    layered = character_runtime_persona_root()
+    if layered.exists():
+        return layered
+    return shared_path('runtime', 'persona-seeds')
+
+
+def character_npc_profiles_dir() -> Path:
+    layered = character_npcs_root()
+    if layered.exists():
+        return layered
+    return shared_path('memory', 'npcs')
 
 
 def load_runtime_web_config() -> dict:
@@ -42,7 +61,7 @@ def resolve_character_cover_path() -> Path | None:
     small_cover = RUNTIME_WEB / 'frontend' / 'character-cover-small.png'
     if small_cover.exists():
         return small_cover
-    data = _read_json_file(CHARACTER_DATA)
+    data = _read_json_file(character_data_path())
     notes = str(data.get('notes', '') or '')
     match = re.search(r'character/imported/([^.]+)\.raw-card\.json', notes)
     candidates: list[Path] = []
@@ -59,7 +78,7 @@ def resolve_character_cover_path() -> Path | None:
 
 
 def load_character_card_meta() -> dict:
-    data = _read_json_file(CHARACTER_DATA)
+    data = _read_json_file(character_data_path())
     core = data.get('coreDescription', {}) if isinstance(data.get('coreDescription', {}), dict) else {}
     cover_path = resolve_character_cover_path()
     return {
@@ -73,7 +92,7 @@ def load_character_card_meta() -> dict:
 
 
 def ensure_session_dirs(session_id: str) -> Path:
-    session_dir = SESSIONS_DIR / session_id
+    session_dir = resolve_session_dir(session_id, create=True)
     (session_dir / 'memory').mkdir(parents=True, exist_ok=True)
     (session_dir / 'persona' / 'scene').mkdir(parents=True, exist_ok=True)
     (session_dir / 'persona' / 'archive').mkdir(parents=True, exist_ok=True)
@@ -85,6 +104,7 @@ def session_paths(session_id: str) -> dict:
     session_dir = ensure_session_dirs(session_id)
     memory_dir = session_dir / 'memory'
     persona_dir = session_dir / 'persona'
+    trace_dir = session_dir / 'turn-trace'
     return {
         'session_dir': session_dir,
         'memory_dir': memory_dir,
@@ -92,6 +112,7 @@ def session_paths(session_id: str) -> dict:
         'persona_scene_dir': persona_dir / 'scene',
         'persona_archive_dir': persona_dir / 'archive',
         'persona_longterm_dir': persona_dir / 'longterm',
+        'trace_dir': trace_dir,
         'history': memory_dir / 'history.jsonl',
         'state': memory_dir / 'state.json',
         'continuity_hints': memory_dir / 'continuity_hints.json',
@@ -219,6 +240,30 @@ def save_state(session_id: str, state: dict) -> None:
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
+def trace_path(session_id: str, turn_id: str) -> Path:
+    paths = session_paths(session_id)
+    trace_dir = paths['trace_dir']
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    safe_turn_id = str(turn_id or 'turn-unknown').strip() or 'turn-unknown'
+    return trace_dir / f'{safe_turn_id}.json'
+
+
+def save_turn_trace(session_id: str, turn_id: str, trace: dict) -> Path:
+    path = trace_path(session_id, turn_id)
+    path.write_text(json.dumps(trace, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    return path
+
+
+def load_turn_trace(session_id: str, turn_id: str) -> dict:
+    path = trace_path(session_id, turn_id)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
 def build_state_snapshot(state: dict) -> dict:
     scene_entities = state.get('scene_entities', []) if isinstance(state.get('scene_entities', []), list) else []
     entity_index = {
@@ -265,6 +310,9 @@ def build_state_snapshot(state: dict) -> dict:
         'immediate_goal': state.get('immediate_goal', '待确认'),
         'immediate_risks': state.get('immediate_risks', []),
         'carryover_clues': state.get('carryover_clues', []),
+        'tracked_objects': state.get('tracked_objects', []),
+        'possession_state': state.get('possession_state', []),
+        'object_visibility': state.get('object_visibility', []),
     }
 
 
@@ -288,6 +336,37 @@ def _load_persona_dir(directory: Path) -> dict[str, dict]:
     return out
 
 
+def load_session_persona_layers(session_id: str) -> dict[str, dict[str, dict]]:
+    paths = session_paths(session_id)
+    return {
+        'scene': _load_persona_dir(paths['persona_scene_dir']),
+        'archive': _load_persona_dir(paths['persona_archive_dir']),
+        'longterm': _load_persona_dir(paths['persona_longterm_dir']),
+    }
+
+
+def save_session_persona_layers(session_id: str, layers: dict[str, dict[str, dict]] | None) -> None:
+    paths = session_paths(session_id)
+    normalized = layers if isinstance(layers, dict) else {}
+    layer_dirs = {
+        'scene': paths['persona_scene_dir'],
+        'archive': paths['persona_archive_dir'],
+        'longterm': paths['persona_longterm_dir'],
+    }
+    for layer, directory in layer_dirs.items():
+        directory.mkdir(parents=True, exist_ok=True)
+        for path in directory.glob('*.json'):
+            path.unlink()
+        layer_items = normalized.get(layer, {})
+        if not isinstance(layer_items, dict):
+            continue
+        for display_name, seed in sorted(layer_items.items()):
+            if not isinstance(seed, dict):
+                continue
+            filename = _persona_filename(str(display_name or seed.get('display_name') or seed.get('npc_id') or 'unknown'))
+            (directory / filename).write_text(json.dumps(seed, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+
 def load_persona_index(session_id: str | None = None) -> dict[str, dict]:
     index: dict[str, dict] = {}
     directories: list[Path] = []
@@ -299,9 +378,9 @@ def load_persona_index(session_id: str | None = None) -> dict[str, dict]:
             paths['persona_archive_dir'],
         ])
     directories.extend([
-        ROOT_PERSONA_DIR / 'scene',
-        ROOT_PERSONA_DIR / 'longterm',
-        ROOT_PERSONA_DIR / 'archive',
+        root_persona_dir() / 'scene',
+        root_persona_dir() / 'longterm',
+        root_persona_dir() / 'archive',
     ])
     for directory in directories:
         for display, data in _load_persona_dir(directory).items():
@@ -401,6 +480,9 @@ def seed_default_state(session_id: str) -> dict:
         'immediate_goal': '待确认',
         'immediate_risks': [],
         'carryover_clues': [],
+        'tracked_objects': [],
+        'possession_state': [],
+        'object_visibility': [],
     }
 
 

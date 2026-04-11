@@ -4,7 +4,7 @@ from pathlib import Path
 
 from runtime_store import ensure_session_dirs, load_canon, load_context, load_state, load_summary, save_canon, save_context, save_state, save_summary, seed_default_state, session_paths
 from state_bridge import parse_root_state_markdown
-from paths import APP_ROOT, SHARED_ROOT
+from paths import APP_ROOT, SHARED_ROOT, resolve_layered_source, resolve_source_key
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
@@ -24,7 +24,14 @@ def load_runtime_config() -> dict:
 
 
 def resolve_source(path_str: str) -> Path:
-    return ROOT / path_str
+    return resolve_layered_source(path_str)
+
+
+def resolve_source_from_config(sources: dict, key: str, fallback_source_key: str) -> Path:
+    configured = sources.get(key)
+    if configured:
+        return resolve_source(configured)
+    return resolve_source_key(fallback_source_key)
 
 
 def bootstrap_session(session_id: str) -> dict:
@@ -48,9 +55,9 @@ def bootstrap_session(session_id: str) -> dict:
     existing = bool(existing_context) and paths['canon'].exists() and paths['summary'].exists() and paths['state'].exists()
 
     if not existing:
-        root_canon = read_text(resolve_source(sources['canon']))
-        root_summary = read_text(resolve_source(sources['summary']))
-        base_state_text = read_text(resolve_source(sources['state']))
+        root_canon = read_text(resolve_source_from_config(sources, 'canon', 'character.canon'))
+        root_summary = read_text(resolve_source_from_config(sources, 'summary', 'character.summary'))
+        base_state_text = read_text(resolve_source_from_config(sources, 'state', 'character.state'))
 
         save_canon(session_id, root_canon)
         save_summary(session_id, root_summary)

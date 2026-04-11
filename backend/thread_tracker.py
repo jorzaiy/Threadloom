@@ -134,6 +134,48 @@ def _actors_from_state(state: dict) -> list[str]:
     return actors[:4]
 
 
+def _dedupe_similar_threads(items: list[dict], limit: int = 5) -> list[dict]:
+    deduped: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get('kind', '') or '').strip()
+        if kind not in {'risk', 'clue'}:
+            deduped.append(item)
+            continue
+        matched = False
+        for existing in deduped:
+            if not isinstance(existing, dict):
+                continue
+            if str(existing.get('kind', '') or '').strip() != kind:
+                continue
+            label_score = _similarity(str(item.get('label', '') or ''), str(existing.get('label', '') or ''))
+            obstacle_score = _similarity(str(item.get('obstacle', '') or ''), str(existing.get('obstacle', '') or ''))
+            goal_score = _similarity(str(item.get('goal', '') or ''), str(existing.get('goal', '') or ''))
+            combo_score = _similarity(
+                f"{item.get('label', '')} {item.get('obstacle', '')}",
+                f"{existing.get('label', '')} {existing.get('obstacle', '')}",
+            )
+            score = max(label_score, obstacle_score, goal_score, combo_score)
+            if score < 0.72:
+                continue
+            if len(str(item.get('label', '') or '')) > len(str(existing.get('label', '') or '')):
+                existing['label'] = item.get('label')
+            if len(str(item.get('obstacle', '') or '')) > len(str(existing.get('obstacle', '') or '')):
+                existing['obstacle'] = item.get('obstacle')
+            if len(str(item.get('goal', '') or '')) > len(str(existing.get('goal', '') or '')):
+                existing['goal'] = item.get('goal')
+            existing['latest_change'] = item.get('latest_change', existing.get('latest_change'))
+            existing['stability_turns'] = max(int(existing.get('stability_turns', 1) or 1), int(item.get('stability_turns', 1) or 1))
+            matched = True
+            break
+        if not matched:
+            deduped.append(item)
+        if len(deduped) >= limit:
+            break
+    return deduped[:limit]
+
+
 def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: str = '', arbiter: dict | None = None, limit: int = 5) -> list[dict]:
     current = dict(state or {})
     prev_threads = _coerce_threads(current.get('active_threads', []))
@@ -259,7 +301,7 @@ def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: st
         deduped.append(carried)
         used_ids.add(prev_id)
 
-    return deduped
+    return _dedupe_similar_threads(deduped, limit=limit)
 
 
 def apply_thread_tracker(state: dict, *, user_text: str = '', narrator_reply: str = '', arbiter: dict | None = None) -> dict:

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 import json
 import random
+import re
 from pathlib import Path
 
 from runtime_store import save_state
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 CHAR = ROOT / 'character' / 'character-data.json'
 
 
@@ -74,13 +75,19 @@ def resolve_opening_choice(text: str) -> str | None:
         return None
     if value in {'随机开局', '随机开始'}:
         return random.choice(hooks)
-    if value.isdigit():
-        idx = int(value)
+    normalized = re.sub(r'\s+', '', value)
+    digit_match = re.fullmatch(r'(?:开局|选择|选|第)?(\d+)(?:个|号)?', normalized)
+    if digit_match:
+        idx = int(digit_match.group(1))
         if 1 <= idx <= len(hooks):
             return hooks[idx - 1]
     for item in hooks:
         title, detail = parse_hook(item)
         if value == item or value == title or value == detail:
+            return item
+        compact_title = re.sub(r'\s+', '', title)
+        compact_item = re.sub(r'\s+', '', item)
+        if normalized == compact_title or normalized == compact_item:
             return item
     return None
 

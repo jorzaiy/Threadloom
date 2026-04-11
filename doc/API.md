@@ -125,7 +125,10 @@ partial 相关行为：
     "relevant_npcs": ["少年"],
     "immediate_goal": "先安顿与恢复，再决定下一步行动。",
     "immediate_risks": ["外部追索仍可能回到前台。"],
-    "carryover_clues": ["前一场景留下的环境后果仍可能存在。"]
+    "carryover_clues": ["前一场景留下的环境后果仍可能存在。"],
+    "tracked_objects": [],
+    "possession_state": [],
+    "object_visibility": []
   },
   "debug": {
     "scene_mode": "runtime-loaded",
@@ -197,7 +200,10 @@ partial 相关行为：
     "relevant_npcs": ["..."],
     "immediate_goal": "...",
     "immediate_risks": ["..."],
-    "carryover_clues": ["..."]
+    "carryover_clues": ["..."],
+    "tracked_objects": [],
+    "possession_state": [],
+    "object_visibility": []
   }
 }
 ```
@@ -206,6 +212,8 @@ partial 相关行为：
 
 - `onstage_entities` / `relevant_entities` 是前端推荐使用的实体展示结构
 - 前端不应再自行用名字反查 `entity_id`
+- `tracked_objects / possession_state / object_visibility` 是轻量物件状态层
+- 这三层当前用于记录剧情相关物件、当前持有关系，以及该持有关系的可见性
 
 ## GET /api/history
 

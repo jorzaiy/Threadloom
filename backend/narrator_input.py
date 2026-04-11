@@ -79,6 +79,33 @@ def _format_active_threads(items: list[dict], limit: int = 4) -> str:
     return '\n'.join(lines) if lines else '暂无'
 
 
+def _format_tracked_objects(objects: list[dict], possession: list[dict], visibility: list[dict], limit: int = 6) -> str:
+    if not objects:
+        return '暂无'
+    possession_by_id = {
+        str(item.get('object_id', '') or '').strip(): item
+        for item in possession or []
+        if isinstance(item, dict) and str(item.get('object_id', '') or '').strip()
+    }
+    visibility_by_id = {
+        str(item.get('object_id', '') or '').strip(): item
+        for item in visibility or []
+        if isinstance(item, dict) and str(item.get('object_id', '') or '').strip()
+    }
+    lines = []
+    for item in objects[:limit]:
+        if not isinstance(item, dict):
+            continue
+        object_id = str(item.get('object_id', '') or '').strip()
+        label = str(item.get('label', '') or '').strip()
+        kind = str(item.get('kind', '') or 'item').strip() or 'item'
+        holder = possession_by_id.get(object_id, {}).get('holder', '待确认')
+        status = possession_by_id.get(object_id, {}).get('status', '待确认')
+        visibility_label = visibility_by_id.get(object_id, {}).get('visibility', '待确认')
+        lines.append(f"- {label} ({kind}) / 持有者={holder} / 状态={status} / 可见性={visibility_label}")
+    return '\n'.join(lines) if lines else '暂无'
+
+
 def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional[dict] = None) -> tuple[str, str]:
     scene = context.get('scene_facts', {})
     persona = context.get('persona', [])
@@ -156,6 +183,20 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     thread_text = _format_active_threads(active_threads)
     if thread_text != '暂无':
         blocks.append('【活跃线程】\n' + thread_text)
+
+    object_text = _format_tracked_objects(
+        scene.get('tracked_objects', []),
+        scene.get('possession_state', []),
+        scene.get('object_visibility', []),
+    )
+    if object_text != '暂无':
+        blocks.append(
+            '【重要物件与持有关系】\n'
+            '- 这里列的是当前剧情相关的重要物件、当前持有者以及这层持有关系的可见性。\n'
+            '- 若某物件的持有关系是 private，不要让无独立信息来源的 NPC 直接知道它在谁手里。\n'
+            '- 若某物件被转交、藏起、搜出、夺走或公开亮出，应让正文与后续 state 一致。\n'
+            + object_text
+        )
 
     # 10. NPC 档案内容
     npc_profiles = context.get('npc_profiles', [])

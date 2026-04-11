@@ -11,6 +11,7 @@ from bootstrap_session import bootstrap_session
 from handler_message import handle_message
 from regenerate_turn import regenerate_last_partial
 from session_lifecycle import delete_session, list_sessions, start_new_game
+from paths import resolve_session_dir
 from runtime_store import build_entity_map, build_state_snapshot, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 
 
@@ -36,6 +37,10 @@ class RuntimeHTTPServer(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'Threadloom/0.1'
+
+    def _session_exists(self, session_id: str) -> bool:
+        session_dir = resolve_session_dir(session_id, create=False)
+        return session_dir.exists() and (session_dir / 'context.json').exists()
 
     def _send(self, status: int, payload: dict):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -77,7 +82,13 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/state':
                 if not session_id:
                     return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id is required'}})
-                bootstrap_session(session_id)
+                if not self._session_exists(session_id):
+                    return self._send(200, {
+                        'session_id': session_id,
+                        'state': build_state_snapshot({}),
+                        'character_card': load_character_card_meta(),
+                        'web': web_runtime_settings(),
+                    })
                 state = load_state(session_id)
                 return self._send(200, {
                     'session_id': session_id,
@@ -88,7 +99,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == '/api/sessions':
                 sessions = list_sessions()
-                default_session_id = next((item['session_id'] for item in sessions if not item.get('archived') and not item.get('replay')), 'story-live')
+                default_session_id = next((item['session_id'] for item in sessions if not item.get('archived') and not item.get('replay')), '')
                 return self._send(200, {
                     'sessions': sessions,
                     'default_session_id': default_session_id,
@@ -99,7 +110,13 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/history':
                 if not session_id:
                     return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'session_id is required'}})
-                bootstrap_session(session_id)
+                if not self._session_exists(session_id):
+                    return self._send(200, {
+                        'session_id': session_id,
+                        'messages': [],
+                        'character_card': load_character_card_meta(),
+                        'web': web_runtime_settings(),
+                    })
                 page_size = web_runtime_settings().get('history_page_size', 80)
                 messages = load_history(session_id)[-page_size:]
                 return self._send(200, {
@@ -176,6 +193,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_response(200)
                     self.send_header('Content-Type', mime)
                     self.send_header('Content-Length', str(len(body)))
+                    self.send_header('Cache-Control', 'public, max-age=3600')
                     self.end_headers()
                     self.wfile.write(body)
                     return

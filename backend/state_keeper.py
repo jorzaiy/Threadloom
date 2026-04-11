@@ -18,7 +18,7 @@ try:
     from .state_bridge import infer_role_label, normalize_state_dict
     from .model_config import load_runtime_config
     from .state_fragment import build_state_from_fragment
-    from .name_sanitizer import is_protagonist_name
+    from .name_sanitizer import is_protagonist_name, protagonist_names
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
@@ -26,7 +26,7 @@ except ImportError:
     from state_bridge import infer_role_label, normalize_state_dict
     from model_config import load_runtime_config
     from state_fragment import build_state_from_fragment
-    from name_sanitizer import is_protagonist_name
+    from name_sanitizer import is_protagonist_name, protagonist_names
 
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,8 @@ STATE_KEEPER_FILL_SYSTEM = """你是 RP 结构化状态补全器，只在既有�
 只输出一个 JSON 对象，不要代码块，不要解释，不要额外文字。
 
 默认只补这些字段：
-scene_core, immediate_risks, carryover_clues。
+scene_core, immediate_risks, carryover_clues,
+tracked_objects, possession_state, object_visibility。
 
 time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架。
 除非叙事正文明确推翻它们，否则不要重复输出，也不要改写。
@@ -90,6 +91,11 @@ time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架�
 2. 不要编造新人物、新地点、新事件。
 3. 不要把环境物件、背景人群当成人物。
 4. 输出尽量短，只补最稳定的变化，不要扩写人物名单。
+5. 若本轮出现明确的物件动作（如摸出、递给、收起、握住、亮出、塞回、放下），优先补 `tracked_objects / possession_state / object_visibility`。
+6. `tracked_objects[].label` 必须是短标签，如：纸条、短刀、腰牌、记录板、水壶。不要把内容摘要、整句描述或解释写进 label。
+7. `possession_state[].holder` 必须是当前场景里明确存在的人物名，或主角名；不要输出 `player_inventory`、`paper_note`、`self` 这类系统化名字。
+8. `object_visibility[].visibility` 只允许使用：`private`、`public`。
+9. 若正文只说明“看了一眼纸条内容”，应保留对象标签为 `纸条`，不要把纸条内容改写成一个新对象。
 """
 
 
@@ -130,6 +136,12 @@ def _slim_state_for_model(state: dict) -> dict:
         entities.append(entity)
     if entities:
         out['scene_entities'] = entities
+    if isinstance(state.get('tracked_objects', []), list) and state.get('tracked_objects'):
+        out['tracked_objects'] = state.get('tracked_objects', [])[:6]
+    if isinstance(state.get('possession_state', []), list) and state.get('possession_state'):
+        out['possession_state'] = state.get('possession_state', [])[:6]
+    if isinstance(state.get('object_visibility', []), list) and state.get('object_visibility'):
+        out['object_visibility'] = state.get('object_visibility', [])[:6]
     return out
 
 
@@ -188,18 +200,23 @@ def _skeleton_user_prompt(prev_state: dict, state_fragment: dict, narrator_reply
 请只输出最小骨架 JSON。"""
 
 
-def _fill_user_prompt(baseline_state: dict, narrator_reply: str, summary_excerpt: str) -> str:
+def _fill_user_prompt(baseline_state: dict, narrator_reply: str, summary_excerpt: str, user_text: str = '') -> str:
     baseline = _slim_state_for_model(baseline_state)
-    return f"""当前固定骨架状态：
+    sections = [f"""当前固定骨架状态：
 {json.dumps(baseline, ensure_ascii=False, indent=2)}
 
 本轮叙事正文：
 {narrator_reply}
-
-当前摘要：
+"""]
+    if user_text.strip():
+        sections.append(f"""本轮玩家输入：
+{user_text.strip()}
+""")
+    sections.append(f"""当前摘要：
 {summary_excerpt}
 
-请只输出需要补充或纠正的 JSON 字段；若骨架字段没有被正文明确推翻，就不要重复输出。"""
+请只输出需要补充或纠正的 JSON 字段；若骨架字段没有被正文明确推翻，就不要重复输出。""")
+    return '\n'.join(sections)
 
 
 def _extract_string_field(text: str, field: str) -> str | None:
@@ -246,6 +263,252 @@ def _parse_fill_payload(text: str) -> dict:
         if fallback:
             return fallback
         raise
+
+
+def _coerce_tracked_object_item(item, idx: int) -> dict | None:
+    if isinstance(item, str):
+        label = str(item or '').strip()
+        if not label:
+            return None
+        return {
+            'object_id': f'obj_{idx + 1:02d}',
+            'label': label,
+            'kind': 'item',
+            'story_relevant': True,
+        }
+    if not isinstance(item, dict):
+        return None
+    object_id = str(item.get('object_id', f'obj_{idx + 1:02d}') or f'obj_{idx + 1:02d}').strip()
+    label = str(item.get('label', item.get('name', '')) or '').strip()
+    if not object_id or not label:
+        return None
+    return {
+        'object_id': object_id,
+        'label': label,
+        'kind': str(item.get('kind', '') or 'item').strip() or 'item',
+        'story_relevant': bool(item.get('story_relevant', True)),
+    }
+
+
+def _build_object_index_from_baseline(state: dict) -> tuple[dict[str, dict], int]:
+    objects_by_label: dict[str, dict] = {}
+    alias_to_label: dict[str, str] = {}
+    max_idx = 0
+    for item in (state.get('tracked_objects', []) or []):
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get('label', '') or '').strip()
+        object_id = str(item.get('object_id', '') or '').strip()
+        if not label:
+            continue
+        objects_by_label[label] = dict(item)
+        alias_to_label[label] = label
+        if object_id.startswith('obj_'):
+            try:
+                max_idx = max(max_idx, int(object_id.split('_', 1)[1]))
+            except Exception:
+                pass
+    return objects_by_label, max_idx
+
+
+def _known_holders_from_baseline(state: dict) -> set[str]:
+    names: set[str] = set()
+    for field in ('onstage_npcs', 'relevant_npcs'):
+        for item in (state.get(field, []) or []):
+            text = str(item or '').strip()
+            if text:
+                names.add(text)
+    for item in (state.get('scene_entities', []) or []):
+        if not isinstance(item, dict):
+            continue
+        primary = str(item.get('primary_label', '') or '').strip()
+        if primary:
+            names.add(primary)
+        for alias in (item.get('aliases', []) or []):
+            alias_text = str(alias or '').strip()
+            if alias_text:
+                names.add(alias_text)
+    names.update(protagonist_names())
+    return names
+
+
+def _normalize_holder_name(holder: str, known_holders: set[str]) -> str:
+    text = str(holder or '').strip()
+    if not text:
+        return ''
+    protagonist_aliases = {'player_inventory', 'protagonist', 'player', 'user', 'self', '主角', '玩家', '自己'}
+    if text in protagonist_aliases:
+        protagonists = protagonist_names()
+        if protagonists:
+            return next(iter(protagonists))
+    if text in known_holders:
+        return text
+    return ''
+
+
+def _ensure_object_for_label(label: str, objects_by_label: dict[str, dict], next_idx: int) -> tuple[dict | None, int]:
+    text = str(label or '').strip()
+    if not text:
+        return None, next_idx
+    current = objects_by_label.get(text)
+    if current:
+        return current, next_idx
+    next_idx += 1
+    item = {
+        'object_id': f'obj_{next_idx:02d}',
+        'label': text,
+        'kind': 'item',
+        'story_relevant': True,
+    }
+    objects_by_label[text] = item
+    return item, next_idx
+
+
+def _normalize_object_label(text: str) -> str:
+    value = str(text or '').strip()
+    if not value:
+        return ''
+    value = value.split('（', 1)[0].split('(', 1)[0].strip()
+    translations = {
+        'paper_note': '纸条',
+        'note': '纸条',
+        'slip': '纸条',
+        'knife': '短刀',
+        'short_blade': '短刀',
+    }
+    return translations.get(value, value)
+
+
+def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> dict:
+    normalized = dict(payload or {})
+    baseline = baseline_state if isinstance(baseline_state, dict) else {}
+    objects_by_label, max_idx = _build_object_index_from_baseline(baseline)
+    known_holders = _known_holders_from_baseline(baseline)
+    object_fields_used = False
+
+    tracked_objects = normalized.get('tracked_objects')
+    if isinstance(tracked_objects, list):
+        object_fields_used = True
+        for idx, item in enumerate(tracked_objects):
+            coerced = _coerce_tracked_object_item(item, idx)
+            if not coerced:
+                continue
+            coerced['label'] = _normalize_object_label(coerced.get('label', ''))
+            objects_by_label[coerced['label']] = coerced
+            object_id = str(coerced.get('object_id', '') or '').strip()
+            if object_id.startswith('obj_'):
+                try:
+                    max_idx = max(max_idx, int(object_id.split('_', 1)[1]))
+                except Exception:
+                    pass
+
+    possession_state = normalized.get('possession_state')
+    coerced_possession = []
+    if isinstance(possession_state, list):
+        object_fields_used = True
+        for item in possession_state:
+            coerced = _coerce_possession_item(item, known_holders=known_holders, objects_by_label=objects_by_label, next_idx=max_idx)
+            if coerced:
+                value, max_idx = coerced
+                if value:
+                    coerced_possession.append(value)
+    elif isinstance(possession_state, dict):
+        object_fields_used = True
+        for holder, labels in possession_state.items():
+            holder_text = _normalize_holder_name(holder, known_holders)
+            if not holder_text:
+                continue
+            label_items = labels if isinstance(labels, list) else [labels]
+            for raw_label in label_items:
+                normalized_label = _normalize_object_label(raw_label)
+                obj, max_idx = _ensure_object_for_label(normalized_label, objects_by_label, max_idx)
+                if not obj:
+                    continue
+                coerced_possession.append({
+                    'object_id': obj['object_id'],
+                    'holder': holder_text,
+                    'status': 'carried',
+                    'location': '',
+                    'updated_by_turn': '',
+                })
+    if coerced_possession:
+        normalized['possession_state'] = coerced_possession
+
+    object_visibility = normalized.get('object_visibility')
+    coerced_visibility = []
+    if isinstance(object_visibility, list):
+        object_fields_used = True
+        for item in object_visibility:
+            coerced = _coerce_object_visibility_item(item)
+            if coerced:
+                coerced_visibility.append(coerced)
+    elif isinstance(object_visibility, dict):
+        object_fields_used = True
+        for label, vis in object_visibility.items():
+            normalized_label = _normalize_object_label(label)
+            obj, max_idx = _ensure_object_for_label(normalized_label, objects_by_label, max_idx)
+            if not obj:
+                continue
+            if isinstance(vis, dict):
+                coerced = _coerce_object_visibility_item({'object_id': obj['object_id'], **vis})
+            else:
+                coerced = _coerce_object_visibility_item({
+                    'object_id': obj['object_id'],
+                    'visibility': str(vis or '').strip() or 'private',
+                })
+            if coerced:
+                coerced_visibility.append(coerced)
+    if coerced_visibility:
+        normalized['object_visibility'] = coerced_visibility
+
+    if object_fields_used:
+        normalized['tracked_objects'] = list(objects_by_label.values())[:8]
+    return normalized
+
+
+def _coerce_possession_item(item, known_holders: set[str] | None = None, objects_by_label: dict[str, dict] | None = None, next_idx: int = 0) -> tuple[dict | None, int]:
+    if not isinstance(item, dict):
+        return None, next_idx
+    known = known_holders or set()
+    objects = objects_by_label or {}
+    holder = _normalize_holder_name(str(item.get('holder', '') or '').strip(), known)
+    if not holder:
+        return None, next_idx
+    object_id = str(item.get('object_id', '') or '').strip()
+    if not object_id:
+        object_label = _normalize_object_label(item.get('object_label', item.get('label', '')))
+        obj, next_idx = _ensure_object_for_label(object_label, objects, next_idx)
+        if not obj:
+            return None, next_idx
+        object_id = obj['object_id']
+    if not object_id:
+        return None, next_idx
+    return {
+        'object_id': object_id,
+        'holder': holder,
+        'status': str(item.get('status', '') or 'carried').strip() or 'carried',
+        'location': str(item.get('location', '') or '').strip(),
+        'updated_by_turn': str(item.get('updated_by_turn', '') or '').strip(),
+    }, next_idx
+
+
+def _coerce_object_visibility_item(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    object_id = str(item.get('object_id', '') or '').strip()
+    if not object_id:
+        return None
+    known_to = item.get('known_to', [])
+    if isinstance(known_to, str):
+        known_to = [known_to] if known_to.strip() else []
+    if not isinstance(known_to, list):
+        known_to = []
+    return {
+        'object_id': object_id,
+        'visibility': str(item.get('visibility', '') or 'private').strip() or 'private',
+        'known_to': [str(name).strip() for name in known_to if str(name).strip()][:6],
+        'note': str(item.get('note', '') or '').strip(),
+    }
 
 
 def _normalize_skeleton_payload(payload: dict) -> dict:
@@ -303,13 +566,22 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
         else:
             merged[field] = cleaned[:6]
 
+    for field in ('tracked_objects', 'possession_state', 'object_visibility'):
+        if field in payload and isinstance(payload.get(field), list):
+            merged[field] = payload.get(field, [])[:8]
+
     return merged
 
 
-def call_skeleton_keeper(prev_state: dict, state_fragment: dict, narrator_reply: str) -> tuple[dict, dict]:
+def call_skeleton_keeper(prev_state: dict, state_fragment: dict, narrator_reply: str, *, return_trace: bool = False):
     reply_text, usage = call_role_llm('state_keeper_candidate', SKELETON_KEEPER_SYSTEM, _skeleton_user_prompt(prev_state, state_fragment, narrator_reply))
     usage['prompt_chars'] = len(SKELETON_KEEPER_SYSTEM) + len(_skeleton_user_prompt(prev_state, state_fragment, narrator_reply))
     payload = _normalize_skeleton_payload(parse_json_response(reply_text))
+    if return_trace:
+        return payload, usage, {
+            'raw_reply': reply_text,
+            'payload': payload,
+        }
     return payload, usage
 
 
@@ -391,7 +663,7 @@ def _coerce_scene_entity_item(item, idx: int) -> dict | None:
     }
 
 
-def _coerce_state_payload(payload: dict) -> dict:
+def _coerce_state_payload(payload: dict, baseline_state: dict | None = None) -> dict:
     if not isinstance(payload, dict):
         return payload
     normalized = dict(payload)
@@ -406,7 +678,7 @@ def _coerce_state_payload(payload: dict) -> dict:
         value = normalized.get(field)
         if isinstance(value, str):
             normalized[field] = [value] if value.strip() else []
-    return normalized
+    return _coerce_object_layers(normalized, baseline_state)
 
 
 def _coerce_candidate_entity_item(item) -> dict | None:
@@ -784,7 +1056,7 @@ def _with_diagnostics(state: dict, *, provider_requested: str, provider_used: st
     return output
 
 
-def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Optional[dict] = None) -> dict:
+def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Optional[dict] = None, *, user_text: str = '', return_trace: bool = False):
     """调用模型提取状态。
 
     Args:
@@ -799,12 +1071,12 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
     state_fragment = state_fragment if isinstance(state_fragment, dict) else {}
     baseline_state = build_state_from_fragment(prev_state, state_fragment, session_id)
     summary_excerpt = _summary_excerpt(summary, 700)
-    user_prompt = _fill_user_prompt(baseline_state, narrator_reply, summary_excerpt)
+    user_prompt = _fill_user_prompt(baseline_state, narrator_reply, summary_excerpt, user_text=user_text)
 
     try:
         reply_text, usage = call_role_llm('state_keeper', STATE_KEEPER_FILL_SYSTEM, user_prompt)
         usage['prompt_chars'] = len(STATE_KEEPER_FILL_SYSTEM) + len(user_prompt)
-        payload = _coerce_state_payload(_parse_fill_payload(reply_text))
+        payload = _coerce_state_payload(_parse_fill_payload(reply_text), baseline_state=baseline_state)
         new_state = _merge_keeper_fill(baseline_state, payload)
         new_state = _semantic_cleanup(new_state, prev_state, state_fragment)
         validate_state_payload(new_state, prev_state)
@@ -830,4 +1102,13 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
         'fallback_reason': None,
     }
     save_state(session_id, new_state)
+    if return_trace:
+        return new_state, {
+            'baseline_state': baseline_state,
+            'summary_excerpt': summary_excerpt,
+            'user_text': user_text,
+            'user_prompt': user_prompt,
+            'raw_reply': reply_text,
+            'payload': payload,
+        }
     return new_state

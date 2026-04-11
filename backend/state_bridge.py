@@ -7,10 +7,10 @@ from typing import Iterable
 
 try:
     from .continuity_hints import match_continuity_hint
-    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name
+    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names
 except ImportError:
     from continuity_hints import match_continuity_hint
-    from name_sanitizer import sanitize_runtime_name, is_protagonist_name
+    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names
 
 
 def extract_section_lines(text: str, section: str) -> list[str]:
@@ -176,7 +176,9 @@ def _entity_match_score(prev: dict, item: dict) -> float:
     name_overlap = 1.0 if prev_names & item_names else 0.0
     role_prev = str((prev or {}).get('role_label', '') or '').strip()
     role_item = str((item or {}).get('role_label', '') or '').strip()
-    role_score = 0.7 if role_prev and role_item and role_prev == role_item else 0.0
+    role_score = 0.0
+    if role_prev and role_item and role_prev == role_item and role_prev != '待确认' and role_item != '待确认':
+        role_score = 0.7
     link_prev = str((prev or {}).get('possible_link', '') or '').strip()
     link_item = str((item or {}).get('possible_link', '') or '').strip()
     link_score = 0.2 if link_prev and link_item and link_prev == link_item else 0.0
@@ -300,6 +302,89 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     )
     current['immediate_risks'] = normalize_text_list(current.get('immediate_risks', prev.get('immediate_risks', [])), limit=4)
     current['carryover_clues'] = normalize_text_list(current.get('carryover_clues', prev.get('carryover_clues', [])), limit=4)
+    tracked_objects = current.get('tracked_objects', prev.get('tracked_objects', []))
+    if not isinstance(tracked_objects, list):
+        tracked_objects = prev.get('tracked_objects', []) if isinstance(prev.get('tracked_objects', []), list) else []
+    normalized_objects = []
+    seen_object_ids: set[str] = set()
+    for idx, item in enumerate(tracked_objects):
+        if not isinstance(item, dict):
+            continue
+        object_id = str(item.get('object_id', '') or f'obj_{idx + 1:02d}').strip()
+        label = str(item.get('label', '') or '').strip()
+        if label == object_id:
+            continue
+        if not object_id or not label or object_id in seen_object_ids:
+            continue
+        seen_object_ids.add(object_id)
+        normalized_objects.append({
+            'object_id': object_id,
+            'label': label,
+            'kind': str(item.get('kind', '') or 'item').strip() or 'item',
+            'story_relevant': bool(item.get('story_relevant', True)),
+        })
+    object_index = {item['object_id']: item for item in normalized_objects}
+
+    possession_state = current.get('possession_state', prev.get('possession_state', []))
+    if not isinstance(possession_state, list):
+        possession_state = prev.get('possession_state', []) if isinstance(prev.get('possession_state', []), list) else []
+    normalized_possession = []
+    seen_possession: set[str] = set()
+    valid_holders = set(current['onstage_npcs']) | set(current['relevant_npcs']) | protagonist_names()
+    for item in possession_state:
+        if not isinstance(item, dict):
+            continue
+        object_id = str(item.get('object_id', '') or '').strip()
+        holder = sanitize_runtime_name(item.get('holder', ''))
+        if not object_id or not holder or object_id in seen_possession:
+            continue
+        if valid_holders and holder not in valid_holders:
+            continue
+        if object_id not in object_index:
+            continue
+        seen_possession.add(object_id)
+        normalized_possession.append({
+            'object_id': object_id,
+            'holder': holder,
+            'status': str(item.get('status', '') or 'carried').strip() or 'carried',
+            'location': str(item.get('location', '') or '').strip(),
+            'updated_by_turn': str(item.get('updated_by_turn', '') or '').strip(),
+        })
+    current['possession_state'] = normalized_possession
+
+    object_visibility = current.get('object_visibility', prev.get('object_visibility', []))
+    if not isinstance(object_visibility, list):
+        object_visibility = prev.get('object_visibility', []) if isinstance(prev.get('object_visibility', []), list) else []
+    normalized_visibility = []
+    seen_visibility: set[str] = set()
+    for item in object_visibility:
+        if not isinstance(item, dict):
+            continue
+        object_id = str(item.get('object_id', '') or '').strip()
+        if not object_id or object_id in seen_visibility:
+            continue
+        if object_id not in object_index:
+            continue
+        seen_visibility.add(object_id)
+        normalized_visibility.append({
+            'object_id': object_id,
+            'visibility': str(item.get('visibility', '') or 'private').strip() or 'private',
+            'known_to': [sanitize_runtime_name(name) for name in (item.get('known_to', []) or []) if sanitize_runtime_name(name)][:6],
+            'note': str(item.get('note', '') or '').strip(),
+        })
+    current['object_visibility'] = normalized_visibility
+    object_ids_with_state = {item['object_id'] for item in normalized_possession} | {item['object_id'] for item in normalized_visibility}
+    filtered_objects = []
+    for item in object_index.values():
+        kind = str(item.get('kind', '') or 'item').strip() or 'item'
+        if item['object_id'] in object_ids_with_state:
+            filtered_objects.append(item)
+            continue
+        if kind in {'document', 'key_item', 'weapon', 'container', 'tool'}:
+            filtered_objects.append(item)
+            continue
+    current['tracked_objects'] = filtered_objects
+
     current['scene_entities'] = merge_scene_entities(
         prev.get('scene_entities', []),
         current.get('scene_entities', []),

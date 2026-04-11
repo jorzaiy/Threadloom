@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 
 try:
-    from .paths import APP_ROOT, SHARED_ROOT
+    from .paths import APP_ROOT, SHARED_ROOT, resolve_layered_source
 except ImportError:
-    from paths import APP_ROOT, SHARED_ROOT
+    from paths import APP_ROOT, SHARED_ROOT, resolve_layered_source
 
 CONFIG = APP_ROOT / 'config' / 'runtime.json'
 PROVIDERS_CONFIG = APP_ROOT / 'config' / 'providers.json'
@@ -22,7 +22,7 @@ def load_runtime_config() -> dict:
 
 def resolve_source(path_str: str) -> Path:
     p = Path(path_str)
-    return p if p.is_absolute() else (SHARED_ROOT / path_str)
+    return p if p.is_absolute() else resolve_layered_source(path_str)
 
 
 def load_openclaw_models() -> dict:

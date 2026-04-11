@@ -34,6 +34,8 @@ let webConfig = {
   show_state_panel: true,
   show_debug_panel: false,
 };
+let coverLoadToken = 0;
+let lastCharacterCoverUrl = null;
 
 function applyWebConfig(nextConfig = {}) {
   webConfig = {
@@ -71,14 +73,21 @@ function closeSettings() {
 
 function updateSessionIndicator() {
   if (sessionIndicator) {
-    sessionIndicator.textContent = sessionId();
+    sessionIndicator.textContent = sessionId() || '未选择';
   }
 }
 
 function renderCharacterCard(card) {
-  lastCharacterCard = card || null;
-  const name = card?.name || card?.title || '未命名角色卡';
-  const subtitle = card?.subtitle || card?.summary || '待加载';
+  const incomingCard = (card && typeof card === 'object') ? card : null;
+  if (incomingCard && (incomingCard.name || incomingCard.title || incomingCard.cover_url || incomingCard.subtitle || incomingCard.summary)) {
+    lastCharacterCard = {
+      ...lastCharacterCard,
+      ...incomingCard,
+    };
+  }
+  const effectiveCard = lastCharacterCard || incomingCard;
+  const name = effectiveCard?.name || effectiveCard?.title || '未命名角色卡';
+  const subtitle = effectiveCard?.subtitle || effectiveCard?.summary || '待加载';
 
   if (characterNameEl) characterNameEl.textContent = name;
   if (characterSubtitleEl) characterSubtitleEl.textContent = subtitle;
@@ -89,13 +98,39 @@ function renderCharacterCard(card) {
   }
 
   if (characterCoverEl) {
-    if (card?.cover_url) {
-      characterCoverEl.src = `${card.cover_url}?v=${Date.now()}`;
-      characterCoverEl.hidden = false;
-      if (characterCoverFallbackEl) characterCoverFallbackEl.hidden = true;
+    if (effectiveCard?.cover_url) {
+      const nextCoverUrl = effectiveCard.cover_url;
+      if (nextCoverUrl === lastCharacterCoverUrl && characterCoverEl.dataset.loaded === 'true') {
+        characterCoverEl.hidden = false;
+        if (characterCoverFallbackEl) characterCoverFallbackEl.hidden = true;
+        return;
+      }
+      const token = ++coverLoadToken;
+      lastCharacterCoverUrl = nextCoverUrl;
+      if (!characterCoverEl.dataset.loaded) {
+        characterCoverEl.hidden = true;
+        if (characterCoverFallbackEl) characterCoverFallbackEl.hidden = false;
+      }
+      characterCoverEl.onload = () => {
+        if (token !== coverLoadToken) return;
+        characterCoverEl.dataset.loaded = 'true';
+        characterCoverEl.hidden = false;
+        if (characterCoverFallbackEl) characterCoverFallbackEl.hidden = true;
+      };
+      characterCoverEl.onerror = () => {
+        if (token !== coverLoadToken) return;
+        characterCoverEl.dataset.loaded = '';
+        characterCoverEl.hidden = true;
+        lastCharacterCoverUrl = null;
+        if (characterCoverFallbackEl) characterCoverFallbackEl.hidden = false;
+      };
+      if (characterCoverEl.getAttribute('src') !== nextCoverUrl) {
+        characterCoverEl.src = nextCoverUrl;
+      }
     } else {
+      characterCoverEl.dataset.loaded = '';
       characterCoverEl.hidden = true;
-      characterCoverEl.removeAttribute('src');
+      lastCharacterCoverUrl = null;
       if (characterCoverFallbackEl) characterCoverFallbackEl.hidden = false;
     }
   }
@@ -114,7 +149,7 @@ function setStatus(text, kind = 'info') {
 }
 
 function sessionId() {
-  return sessionInput.value.trim() || 'story-live';
+  return sessionInput.value.trim();
 }
 
 function formatSessionOption(item) {
@@ -132,8 +167,12 @@ async function loadSessions() {
   renderCharacterCard(data.character_card || lastCharacterCard);
   if (!sessionList) return;
   const current = sessionId();
-  const recommended = data.default_session_id || (data.sessions || []).find(item => !item.archived && !item.replay)?.session_id || current;
-  if (!sessionInput.value.trim() || sessionInput.value.trim() === 'story-live') {
+  const recommended = data.default_session_id || (data.sessions || []).find(item => !item.archived && !item.replay)?.session_id || '';
+  const availableIds = new Set((data.sessions || []).map(item => item.session_id));
+  if (current && !availableIds.has(current)) {
+    sessionInput.value = '';
+  }
+  if (!sessionInput.value.trim() && recommended) {
     sessionInput.value = recommended;
   }
   sessionList.innerHTML = '';
@@ -290,6 +329,51 @@ function renderState(state) {
   stateEl.appendChild(buildNpcTable('Onstage NPCs', state.onstage_entities || []));
   stateEl.appendChild(buildNpcTable('Relevant NPCs', state.relevant_entities || []));
 
+  const objects = state.tracked_objects || [];
+  const possession = state.possession_state || [];
+  const visibility = state.object_visibility || [];
+  const possessionById = Object.fromEntries((possession || []).map(item => [item.object_id, item]));
+  const visibilityById = Object.fromEntries((visibility || []).map(item => [item.object_id, item]));
+
+  const objectWrap = document.createElement('div');
+  objectWrap.className = 'npc-block';
+  const objectHeading = document.createElement('strong');
+  objectHeading.textContent = 'Tracked Objects';
+  objectWrap.appendChild(objectHeading);
+
+  const objectTable = document.createElement('table');
+  objectTable.className = 'state-table npc-table';
+  const objectBody = document.createElement('tbody');
+  if (!objects.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<th>状态</th><td>暂无</td>';
+    objectBody.appendChild(tr);
+  } else {
+    objects.slice(0, 6).forEach((item, idx) => {
+      const tr = document.createElement('tr');
+      const th = document.createElement('th');
+      th.textContent = `${idx + 1}`;
+      const td = document.createElement('td');
+      const holder = possessionById[item.object_id]?.holder || '未指明';
+      const status = possessionById[item.object_id]?.status || '未指明';
+      const vis = visibilityById[item.object_id]?.visibility || '未指明';
+      const kind = item?.kind || 'item';
+      const lines = [
+        `${item.label || item.object_id} / ${kind}`,
+        `持有者：${holder}`,
+        `状态：${status}`,
+        `可见性：${vis}`,
+      ];
+      td.innerHTML = lines.map(line => `<div class="object-line">${line}</div>`).join('');
+      tr.appendChild(th);
+      tr.appendChild(td);
+      objectBody.appendChild(tr);
+    });
+  }
+  objectTable.appendChild(objectBody);
+  objectWrap.appendChild(objectTable);
+  stateEl.appendChild(objectWrap);
+
   const threads = state.active_threads || [];
   const threadWrap = document.createElement('div');
   threadWrap.className = 'npc-block';
@@ -362,6 +446,12 @@ async function regenerateLast() {
 }
 
 async function loadHistory() {
+  if (!sessionId()) {
+    pendingUserMessage = null;
+    renderMessages([]);
+    updateSessionIndicator();
+    return;
+  }
   const res = await fetch(`/api/history?session_id=${encodeURIComponent(sessionId())}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error?.message || 'history load failed');
@@ -377,6 +467,11 @@ async function loadHistory() {
 }
 
 async function loadState() {
+  if (!sessionId()) {
+    renderState({});
+    updateSessionIndicator();
+    return;
+  }
   const res = await fetch(`/api/state?session_id=${encodeURIComponent(sessionId())}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error?.message || 'state load failed');
@@ -390,7 +485,7 @@ async function startNewGame() {
   const res = await fetch('/api/new-game', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({session_id: sessionId()})
+    body: JSON.stringify({session_id: sessionId() || 'story-live'})
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error?.message || 'new game failed');
@@ -416,11 +511,16 @@ async function deleteSession() {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error?.message || 'delete session failed');
-  const next = (data.sessions || []).find(item => !item.archived && !item.replay)?.session_id || 'story-live';
+  const next = (data.sessions || []).find(item => !item.archived && !item.replay)?.session_id || '';
   sessionInput.value = next;
   await loadSessions();
-  await loadHistory();
-  await loadState();
+  if (next) {
+    await loadHistory();
+    await loadState();
+  } else {
+    renderMessages([]);
+    renderState({});
+  }
   resetSidePanels();
   renderDebug({session_deleted: {session_id: current, next_session: next, deleted_paths: data.deleted_paths || []}});
   updateSessionIndicator();
@@ -441,10 +541,12 @@ composer.addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text) return;
+  const originalText = input.value;
   const submitButton = composer.querySelector('button[type="submit"]');
   submitButton.disabled = true;
   setStatus('发送中...', 'working');
   pendingUserMessage = text;
+  input.value = '';
   renderMessages(lastHistoryItems);
   try {
     const res = await fetch('/api/message', {
@@ -459,6 +561,7 @@ composer.addEventListener('submit', async (e) => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error?.message || 'message send failed');
+    pendingUserMessage = null;
     shouldStickToBottom = true;
     await loadHistory();
     renderState(data.state_snapshot || {});
@@ -468,10 +571,10 @@ composer.addEventListener('submit', async (e) => {
     if (shouldStickToBottom) {
       focusLatestAssistant({ smooth: false });
     }
-    input.value = '';
     setStatus('已更新', 'ok');
   } catch (err) {
     pendingUserMessage = null;
+    input.value = originalText;
     renderMessages(lastHistoryItems);
     setStatus(`错误：${err.message}`, 'error');
   } finally {

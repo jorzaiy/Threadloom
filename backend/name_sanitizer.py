@@ -6,21 +6,26 @@ import json
 from functools import lru_cache
 
 try:
-    from .paths import shared_path
+    from .paths import user_profile_root, shared_path
 except ImportError:
-    from paths import shared_path
+    from paths import user_profile_root, shared_path
 
 
-PLAYER_PROFILE = shared_path('player-profile.json')
+def player_profile_path():
+    layered = user_profile_root() / 'player-profile.json'
+    if layered.exists():
+        return layered
+    return shared_path('player-profile.json')
 
 
 @lru_cache(maxsize=1)
 def protagonist_names() -> set[str]:
     names: set[str] = set()
-    if not PLAYER_PROFILE.exists():
+    profile_path = player_profile_path()
+    if not profile_path.exists():
         return names
     try:
-        data = json.loads(PLAYER_PROFILE.read_text(encoding='utf-8'))
+        data = json.loads(profile_path.read_text(encoding='utf-8'))
     except Exception:
         return names
     for key in ('name', 'courtesyName'):

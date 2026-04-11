@@ -11,21 +11,22 @@ from pathlib import Path
 try:
     from .bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from .opening import build_opening_reply, initialize_opening_state
+    from .paths import iter_session_dirs, resolve_session_dir, session_archive_target
     from .runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, save_summary, session_paths
 except ImportError:
     from bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from opening import build_opening_reply, initialize_opening_state
+    from paths import iter_session_dirs, resolve_session_dir, session_archive_target
     from runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, save_summary, session_paths
 
 
 ROOT = Path(__file__).resolve().parents[2]
 APP_ROOT = Path(__file__).resolve().parents[1]
-SESSIONS_DIR = APP_ROOT / 'sessions'
 
 
 def _archive_target(session_id: str) -> Path:
-    stamp = time.strftime('%Y%m%d-%H%M%S')
-    return SESSIONS_DIR / f'archive-{stamp}-{session_id}'
+    session_dir = resolve_session_dir(session_id)
+    return session_archive_target(session_dir, session_id)
 
 
 def _canonical_base_session_id(session_id: str) -> str:
@@ -67,12 +68,20 @@ def _session_updated_at(session_dir: Path) -> int:
     return max(mtimes) if mtimes else 0
 
 
+def _session_has_persisted_content(session_dir: Path) -> bool:
+    if not session_dir.exists():
+        return False
+    for path in session_dir.rglob('*'):
+        if path.is_file():
+            return True
+    return False
+
+
 def archive_session(session_id: str) -> str | None:
-    paths = session_paths(session_id)
-    session_dir = paths['session_dir']
+    session_dir = resolve_session_dir(session_id, create=False)
     if not session_dir.exists():
         return None
-    if not any(session_dir.iterdir()):
+    if not _session_has_persisted_content(session_dir):
         return None
     target = _archive_target(session_id)
     shutil.move(str(session_dir), str(target))
@@ -111,7 +120,7 @@ def _collect_session_lineage(session_dir: Path) -> list[Path]:
 
 
 def _all_session_dirs() -> list[Path]:
-    return [path for path in SESSIONS_DIR.iterdir() if path.is_dir()]
+    return iter_session_dirs()
 
 
 def _lineage_neighbors() -> dict[Path, set[Path]]:
@@ -211,8 +220,10 @@ def list_sessions() -> list[dict]:
     active_character_path = sources.get('character_core')
 
     items: list[dict] = []
-    for path in sorted(SESSIONS_DIR.glob('*/context.json')):
-        session_dir = path.parent
+    for session_dir in sorted(iter_session_dirs(), key=lambda p: p.name):
+        path = session_dir / 'context.json'
+        if not path.exists():
+            continue
         session_id = session_dir.name
         try:
             context = json.loads(path.read_text(encoding='utf-8'))

@@ -201,9 +201,14 @@ body {
 .session-bar input:focus,
 .session-bar select:focus,
 .composer textarea:focus {
-  border-color: rgba(69, 88, 73, 0.6);
-  box-shadow: 0 0 0 2px rgba(69, 88, 73, 0.06);
+  border-color: rgba(69, 88, 73, 0.42);
+  box-shadow: none;
   background: #fff;
+}
+
+.composer textarea:focus,
+.composer textarea:focus-visible {
+  outline: none;
 }
 
 button {
@@ -401,11 +406,16 @@ button:active {
 .character-card {
   padding: 0;
   overflow: hidden;
+  max-width: 300px;
+  align-self: flex-start;
+  min-height: 286px;
 }
 
 .character-cover-wrap {
   position: relative;
-  aspect-ratio: 1 / 1;
+  width: 100%;
+  max-width: 300px;
+  aspect-ratio: 300 / 188;
   background: linear-gradient(160deg, rgba(69, 88, 73, 0.18), rgba(121, 105, 82, 0.18));
   border-bottom: 1px solid rgba(195, 200, 193, 0.45);
 }
@@ -415,9 +425,18 @@ button:active {
   height: 100%;
   object-fit: cover;
   display: block;
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+.character-cover[hidden] {
+  display: block;
+  opacity: 0;
 }
 
 .character-cover-fallback {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: flex;
@@ -429,8 +448,14 @@ button:active {
   color: rgba(26, 28, 27, 0.5);
 }
 
+.character-cover-fallback[hidden] {
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .character-copy {
-  padding: 18px;
+  padding: 14px 16px 16px;
 }
 
 .character-label {
@@ -497,6 +522,11 @@ button:active {
 
 .npc-table {
   margin-top: 8px;
+}
+
+.object-line + .object-line {
+  margin-top: 2px;
+  color: var(--text-muted);
 }
 
 .npc-link {
