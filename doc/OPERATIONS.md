@@ -20,6 +20,46 @@
 
 `Threadloom` 不替代这些资产，而是在当前阶段把它们重新组织成 session-local runtime。
 
+## 角色卡导入
+
+当前推荐把角色卡导入到当前用户/当前角色卡的 source 目录，而不是继续手工编辑旧共享 `character/` 目录。
+
+导入命令：
+
+```bash
+cd /root/Threadloom
+python3 backend/import_character_card.py /path/to/card.png
+```
+
+或：
+
+```bash
+cd /root/Threadloom
+python3 backend/import_character_card.py /path/to/card.raw-card.json
+```
+
+导入后当前角色卡 source 目录会生成：
+
+- `character-data.json`
+- `lorebook.json`
+- `openings.json`
+- `system-npcs.json`
+- `import-manifest.json`
+- `assets/`
+- `imported/`
+
+当前设计原则：
+
+- `character-data.json` 只保留角色核心
+- `lorebook.json` 只保留世界知识
+- `openings.json` 单独保存开局菜单与 bootstrap
+- `system-npcs.json` 单独保存系统级 NPC：
+  - `core`
+  - `faction_named`
+  - `roster`
+- 当前运行时默认只优先消费 `core`
+- `assets/` 单独保存封面和缩略图
+
 ## 最小启动
 
 推荐：
@@ -43,6 +83,12 @@ cd /Threadloom/backend
   - 先点“获取模型”
   - 再给 Narrator / State Keeper 选模型
   - `temperature / max_output_tokens` 不再暴露给普通用户，统一走 `config/runtime.json -> model_defaults`
+- 高级角色配置：
+  - `turn_analyzer`
+  - `arbiter`
+  - `state_keeper_candidate`
+  - 当前可通过 `runtime-data/default-user/config/model-runtime.json -> advanced_models` 手动覆盖
+  - 暂不进入普通设置页
 
 也可以直接：
 
@@ -101,6 +147,7 @@ http://127.0.0.1:8765
 - 每个 turn 现在会额外落一份 `turn-trace/turn-XXXX.json`，用于单回合精确回放
 - `runtime.json -> trace.enabled / trace.keep_last_turns` 可控制 trace 是否启用以及最多保留多少轮
 - partial assistant 回复会显示，但不会继续污染事实层
+- narrator 若明显停在半句中间，即使 provider 没返回 `finish_reason`，当前也会按 partial 处理，避免把坏输出继续写坏 state
 - `regenerate-last` 会回滚最后一对 `user -> assistant(partial)` 再重试
 - `state_keeper` 优先，`state_updater` 兜底
 - `state_keeper` 现在会拒收明显低信号或相对上一轮明显退化的 state
@@ -116,6 +163,11 @@ http://127.0.0.1:8765
   - 玩家持有可映射到主角名
   - 物件可见性可写回 `object_visibility`
   - `纸条 / 短刀` 这类动作物件已可在 live 验证中进入 `tracked_objects`
+- 当前物件层额外约束：
+  - 只记录具有可持续物理状态的物件
+  - 不把短语残片或动作词片段误识别成物件
+  - 一次性付款、零散货币、临时消耗品默认不进入物件列表，除非后续会被持续追踪
+  - 已进入列表的低价值临时物件，若后续几轮都没有再次出现，且没有持有/可见性/关键类型锚点，也会自动降级移除
 - 若 `state_keeper` 失败，当前会先走 `fragment-baseline`，再让 heuristic fallback 在其上补细节
 - `state_keeper` 不可达时，物件状态 fallback 已不会再因为正则模板格式化错误而崩掉；此时仍可正常产出 turn trace
 - fallback `state_updater` 现在更偏保守继承，不轻易覆盖已有高信号字段
@@ -123,6 +175,13 @@ http://127.0.0.1:8765
 - summary 基于 state 和最近 turn 重写，不再直接摘 narrator prose
 - state snapshot 现在直接给前端 `onstage_entities / relevant_entities`
 - `default_debug / show_debug_panel / history_page_size` 已从配置贯通到 API 和前端
+- 前端消息区支持通过“加载更早记录”按钮向上分页，不再只看最后一页
+- 当前侧边栏更适合作为 `v0.3` 结构状态视图：
+  - 时间 / 地点硬锚点
+  - 主要事件
+  - 在场 / 相关 / 重要 NPC
+  - 关键物件
+  - 活跃线程
 - 前端默认会话选择已切到“最近更新的活动会话优先”，不再固化到 `story-live`
 - 角色卡侧栏已改为动态读取角色卡元数据和缩略封面图
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间自动共享私下信息
@@ -385,21 +444,18 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
 
 当前更推荐的分工是：
 - narrator：继续使用更强的远端模型
-- state_keeper：优先切到稳定的本地结构化模型，例如本地 Gemma，但当前建议把它作为“保守结构化提取器”使用
+- state_keeper：`gemma-4-31b-it` 同时承担 skeleton keeper 和 fill keeper
 - turn_analyzer：若需要进一步降本，可在 narrator 不变的前提下跟着切到本地模型
 
-当前还额外保留一条候选试验线：
-- `state_keeper_candidate`
-- 这条线当前已开始以 `skeleton keeper` sidecar 形式辅助线上回合，但只负责最小骨架字段，不直接替换完整 keeper
-- 当前 keeper 组合已经变成：
-  - `Llama-3.3-70B`：skeleton keeper
-  - 本地 Gemma 4B：fill-mode keeper
-  - heuristic：最终兜底
+当前 keeper 组合已经变成：
+- `gemma-4-31b-it`：skeleton keeper（骨架字段）
+- `gemma-4-31b-it`：fill-mode keeper（补次级字段）
+- heuristic：最终兜底
 
 原因：
 - narrator 是中文长上下文 RP 质量的上限，不适合轻易降到小模型
-- state_keeper 和 analyzer 都更接近结构化/判定任务，但 4B 级模型更适合在强约束下工作；当前 Gemma state_keeper 已收成保守模式，不让它直接主导复杂候选决策
-- 更强的远端 keeper 候选当前更适合先承担 `skeleton keeper`，在主链里验证其时间/地点/主事件/在场人物/当前目标这几个骨架字段是否足够聪明且足够稳
+- `gemma-4-31b-it` 在结构化提取任务上已验证足够稳定，跨多个题材长记录测试均能保持高质量
+- skeleton keeper `max_output_tokens` 已调高到 280，配合截断 JSON 补全 fallback，成功率 93%+
 
 ## 运行原则
 

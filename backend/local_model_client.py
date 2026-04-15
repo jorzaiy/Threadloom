@@ -103,4 +103,15 @@ def parse_json_response(text: str) -> dict:
         except json.JSONDecodeError:
             pass
 
+    # 截断容错：若 JSON 被 max_tokens 截断（有 { 但无闭合 }），
+    # 尝试补全闭合括号后解析
+    if first_brace != -1:
+        fragment = text[first_brace:]
+        # 逐步尝试补全：先补 "]}" 再补 "}" 再补 '"}' 等
+        for suffix in ('"}', '"]', '"]}', '"}]', ']', '}', '"]}', '"}]}'):
+            try:
+                return json.loads(fragment + suffix)
+            except json.JSONDecodeError:
+                continue
+
     raise ValueError(f'Failed to parse JSON from model output: {text[:200]}')

@@ -3,13 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; script-src 'self' https://cdn.jsdelivr.net" />
     <title>Threadloom</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;700&family=Inter:wght@400;500;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
   </head>
   <body>
     <div class="app">
@@ -32,12 +33,18 @@
         <button id="settingsBtn" class="icon-btn settings-icon-btn" type="button" aria-haspopup="dialog" aria-controls="settingsPanel" aria-expanded="false" aria-label="打开设置">
           <span class="material-symbols-outlined">settings</span>
         </button>
+        <button id="mobileStateToggle" class="icon-btn mobile-state-toggle" type="button" aria-label="打开状态面板">
+          <span class="material-symbols-outlined">view_sidebar</span>
+        </button>
       </div>
         </header>
+        <div id="historyToolbar" class="history-toolbar" hidden>
+          <button id="loadEarlierBtn" class="subtle-btn history-load-btn" type="button">加载更早记录</button>
+        </div>
         <section id="messages" class="messages"></section>
         <form id="composer" class="composer">
           <div class="composer-shell">
-            <textarea id="input" placeholder="输入消息..." rows="3"></textarea>
+            <textarea id="input" placeholder="输入消息..." rows="2"></textarea>
             <div class="composer-footer">
               <div id="statusBar" class="status-bar">就绪</div>
               <div class="composer-actions">
@@ -56,22 +63,41 @@
           </div>
           <div class="character-copy">
             <p class="character-label">Character Card</p>
-            <h2 id="characterName" class="character-name">未命名角色卡</h2>
+            <p id="characterScope" class="character-scope">default_user / 未选择角色卡</p>
+            <div class="character-name-row">
+              <select id="characterSelect" class="character-select" aria-label="选择当前用户角色卡"></select>
+            </div>
             <p id="characterSubtitle" class="character-subtitle">待加载</p>
           </div>
         </section>
-        <section class="card">
-          <h2>当前状态</h2>
-          <div id="state"></div>
+        <section class="card sidebar-group">
+          <details class="sidebar-details" open>
+            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">explore</span>当前状态</summary>
+            <div id="state" class="sidebar-details-body"></div>
+          </details>
         </section>
-        <section class="card">
-          <h2>NPC 详情</h2>
-          <div id="entityDetail">点击右侧状态里的 NPC 名称查看</div>
+        <section class="card sidebar-group">
+          <details class="sidebar-details" open>
+            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">group</span>NPC</summary>
+            <div id="npcSection" class="sidebar-details-body"></div>
+          </details>
         </section>
-        <section class="card debug-card">
-          <details id="debugPanel" hidden>
-            <summary>调试诊断</summary>
-            <div id="debugDetail">发送一轮消息后显示</div>
+        <section class="card sidebar-group">
+          <details class="sidebar-details">
+            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">inventory_2</span>物件与线程</summary>
+            <div id="objectThreadSection" class="sidebar-details-body"></div>
+          </details>
+        </section>
+        <section class="card sidebar-group">
+          <details class="sidebar-details">
+            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">person_search</span>NPC 详情</summary>
+            <div id="entityDetail" class="sidebar-details-body entity-detail-body">点击状态面板中的 NPC 名称查看详情</div>
+          </details>
+        </section>
+        <section class="card sidebar-group debug-card">
+          <details id="debugPanel" class="sidebar-details" hidden>
+            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">bug_report</span>调试诊断</summary>
+            <div id="debugDetail" class="sidebar-details-body">发送一轮消息后显示</div>
           </details>
         </section>
       </aside>
@@ -81,8 +107,8 @@
     <aside id="settingsPanel" class="settings-panel" aria-hidden="true">
       <div class="settings-header">
         <div>
-          <p class="settings-kicker">Config</p>
-          <h2>模型与站点</h2>
+          <p class="settings-kicker">设置</p>
+          <h2>系统配置</h2>
         </div>
         <button id="settingsCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭设置">
           <span class="material-symbols-outlined">close</span>
@@ -93,46 +119,63 @@
         <section class="settings-section">
           <div class="settings-stack">
             <section class="settings-subsection">
-              <h3>站点配置</h3>
+              <h3>站点连接</h3>
               <div class="config-grid">
                 <label class="field field-wide">
-                  <span>URL</span>
+                  <span>站点地址</span>
                   <input id="siteBaseUrlInput" type="url" placeholder="https://your-provider.example/v1" />
                 </label>
                 <label class="field">
-                  <span>API 类型</span>
+                  <span>接口类型</span>
                   <select id="siteApiTypeSelect"></select>
                 </label>
                 <label class="field">
-                  <span>API Key</span>
+                  <span>密钥</span>
                   <input id="siteApiKeyInput" type="password" placeholder="留空表示保持不变" />
                 </label>
               </div>
               <div class="settings-actions">
-                <button id="discoverSiteModelsBtn" type="button" class="subtle-btn">获取模型</button>
-                <button id="saveSiteConfigBtn" type="button">保存站点</button>
+                <button id="discoverSiteModelsBtn" type="button" class="subtle-btn">刷新模型列表</button>
+                <button id="saveSiteConfigBtn" type="button">保存站点配置</button>
               </div>
               <div id="siteStatusNote" class="inline-feedback"></div>
             </section>
 
             <section class="settings-subsection">
-              <h3>模型选择</h3>
+              <h3>模型分配</h3>
               <div class="config-grid">
                 <label class="field">
-                  <span>Narrator</span>
+                  <span>叙事模型</span>
                   <select id="narratorModelSelect"></select>
                 </label>
                 <label class="field">
-                  <span>State Keeper</span>
+                  <span>状态提取</span>
                   <select id="stateKeeperModelSelect"></select>
                 </label>
               </div>
-              <div id="modelConfigNote" class="inline-feedback">温度和最大输出长度已固定到默认配置，由管理员维护。</div>
+              <div class="settings-actions">
+                <button id="saveModelConfigBtn" type="button">保存模型配置</button>
+              </div>
+              <div id="modelConfigNote" class="inline-feedback">温度和最大输出长度由系统默认管理。</div>
             </section>
 
-            <div class="settings-actions">
-              <button id="saveModelConfigBtn" type="button">保存模型配置</button>
-            </div>
+            <section class="settings-subsection">
+              <h3>角色卡导入</h3>
+              <div class="config-grid">
+                <label class="field field-wide">
+                  <span>选择文件</span>
+                  <input id="characterImportFileInput" type="file" accept=".png,.json" />
+                </label>
+                <label class="field field-wide">
+                  <span>自定义名称（可选）</span>
+                  <input id="characterImportNameInput" type="text" placeholder="留空则使用卡片原始名称" />
+                </label>
+              </div>
+              <div class="settings-actions">
+                <button id="importCharacterBtn" type="button">导入角色卡</button>
+              </div>
+              <div id="characterImportNote" class="inline-feedback"></div>
+            </section>
           </div>
         </section>
       </div>

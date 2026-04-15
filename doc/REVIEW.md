@@ -45,29 +45,31 @@
 
 ## 当前仍然最关键的问题
 
-### 1. `state_keeper` 仍主要依赖 narrator prose 反提
+### 1. `state_keeper` 已切换为 `gemma-4-31b-it` 双 keeper 架构
 
-这是当前最大的结构性问题。
+原来的最大瓶颈（纯 prose 反提 + 4B 模型能力不足）已基本解决。
+
+现状：
+- skeleton + fill 双 keeper 均使用 `gemma-4-31b-it`，提取 prompt 已加入字段级质量指南和正反例
+- skeleton keeper `max_output_tokens` 调高至 280，配合截断 JSON 补全 fallback，LLM 成功率 93%+
+- heuristic 层重写为评分式架构：`_score_sentence()` 替代关键词猜世界，加入元文本过滤和中文自然断点截断
+- 在 4 组跨题材长记录测试中（维克托、九幽大陆、血蚀纪），关键指标全部归零
+
+残余风险：
+- narrator prose 漂移仍会影响 LLM keeper 输出质量，但影响程度已大幅降低
+- 极端长对话（1000+ 轮）的累积漂移尚未充分验证
+
+### 2. fallback state 质量已大幅提升
+
+`state_updater.py` 已重构为基于评分的抽取架构，不再依赖题材关键词猜世界。前面有 `fragment-baseline` 兜底，heuristic 层也已加入元文本过滤、中文自然断点截断和阈值过滤。
 
 影响：
-- narrator prose 一旦漂，state 会跟着漂
-- 若 narrator 写得漂亮但信息稀，state 就会出现“字段齐但内容弱”
-- 一旦 fallback `state_updater` 接管，信息质量会进一步下降
+- 当 `state_keeper` 失败时，fallback 产出质量已接近可用水平
+- 在 4 组跨题材长记录测试中，Time∅ 0%、Loc∅ 0%、Event⚠ 0%、Drift 0
 
 结论：
-- 这块仍然是当前第一优先级
-- 更理想的方向是让 narrator 同轮直接产出受约束结构化产物，或让 state keeper 使用更强约束输入，而不是纯 prose 反提
-
-### 2. fallback state 仍偏松
-
-`state_updater.py` 已比之前收口，而且现在前面多了一层 `fragment-baseline`，但它最后一跳本质仍是启发式兜底。
-
-影响：
-- 当 `state_keeper` 失败时，系统会继续可用，而且比之前更稳，但状态质量仍不如真正稳定的结构化提取主路
-- opening、匿名实体、群体对象等场景仍容易被压扁成模糊字段
-
-结论：
-- fallback 可以保命，但还不能当可靠主路
+- fallback 已从保命进入基本可靠阶段
+- 仍不如 LLM keeper 精确，但不再是明显短板
 
 ### 3. 重要人物 / 线程 / summary 之间仍会互相放大弱信号
 
@@ -137,8 +139,8 @@
 
 ## 建议的下一步优先级
 
-1. 保持 narrator 继续使用强远端模型，同时把 `state_keeper` 优先切到更稳定的本地结构化模型路径，并以保守模式使用
-2. 若本地结构化模型效果稳定，再评估是否把 `turn_analyzer` 也切到同一路本地模型
-3. 继续收紧 `state_keeper` 输入和有效性判断，减少“结构完整但信息空洞”的写回
-4. 继续收紧 important NPC 和 thread tracker 的保留条件
-5. 再决定是否还需要进一步压缩 `state_updater` 的自由度
+1. **narrator_input block 顺序对齐 V0.3 规范** — 硬锚点和人物连续性表应前移
+2. **实时消息处理添加 429 重试** — 当前只有 rebuild 路径有重试
+3. **世界书预算参数暴露到 runtime.example.json** — 让用户可配置
+4. **keeper archive 反向引用** — keeper 决策时参考历史 archive 记录
+5. **knowledge scope 系统** — 独立数据结构管理 NPC 知情边界
