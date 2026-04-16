@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
+import tempfile
 import time
 from pathlib import Path
 
@@ -17,6 +19,8 @@ from paths import (
     DEFAULT_USER_ID,
     ensure_user_root,
 )
+
+logger = logging.getLogger(__name__)
 
 USERS_FILE = RUNTIME_DATA_ROOT / '_system' / 'users.json'
 SESSIONS_FILE = RUNTIME_DATA_ROOT / '_system' / 'sessions.json'
@@ -30,6 +34,24 @@ def _ensure_system_dir() -> None:
     (RUNTIME_DATA_ROOT / '_system').mkdir(parents=True, exist_ok=True)
 
 
+def _atomic_write(path: Path, data: dict) -> None:
+    """原子写入 JSON：先写临时文件再 rename，防止竞态损坏。"""
+    _ensure_system_dir()
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _load_users() -> dict:
     if USERS_FILE.exists():
         return json.loads(USERS_FILE.read_text('utf-8'))
@@ -37,8 +59,7 @@ def _load_users() -> dict:
 
 
 def _save_users(data: dict) -> None:
-    _ensure_system_dir()
-    USERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), 'utf-8')
+    _atomic_write(USERS_FILE, data)
 
 
 def _load_sessions() -> dict:
@@ -48,8 +69,7 @@ def _load_sessions() -> dict:
 
 
 def _save_sessions(data: dict) -> None:
-    _ensure_system_dir()
-    SESSIONS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), 'utf-8')
+    _atomic_write(SESSIONS_FILE, data)
 
 
 def _hash_password(password: str) -> str:
@@ -59,7 +79,8 @@ def _hash_password(password: str) -> str:
 def _verify_password(password: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('ascii'))
-    except Exception:
+    except Exception as e:
+        logger.warning('密码验证异常: %s', e)
         return False
 
 
@@ -79,8 +100,8 @@ def is_multi_user_enabled() -> bool:
         try:
             cfg = json.loads(site_json.read_text('utf-8'))
             return bool(cfg.get('multi_user_enabled', False))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning('读取多用户配置失败: %s', e)
     return False
 
 
@@ -154,7 +175,6 @@ def list_users() -> list[dict]:
 
 def set_admin_password(password: str) -> None:
     """设置/更新管理员密码。"""
-    users = _load_users()
     ensure_admin_exists()
     users = _load_users()
     users[DEFAULT_USER_ID]['password_hash'] = _hash_password(password)
@@ -172,11 +192,12 @@ def login(user_id: str, password: str) -> str:
         raise ValueError('用户不存在或密码错误')
     pw_hash = user.get('password_hash', '')
     if not pw_hash:
-        # 管理员未设置密码时允许空密码登录（兼容单用户模式）
-        if uid == DEFAULT_USER_ID and not password:
+        # 管理员未设置密码时允许空密码登录（仅限单用户模式）
+        if uid == DEFAULT_USER_ID and not password and not is_multi_user_enabled():
             pass
+        elif uid == DEFAULT_USER_ID and not password and is_multi_user_enabled():
+            raise ValueError('多用户模式下管理员必须设置密码后才能登录')
         elif password:
-            # 用户提供了密码但管理员未设密码，拒绝
             raise ValueError('用户不存在或密码错误')
     else:
         if not _verify_password(password, pw_hash):

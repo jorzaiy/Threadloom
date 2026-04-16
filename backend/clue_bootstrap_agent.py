@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from copy import deepcopy
+
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -75,7 +79,8 @@ def load_clue_registry(session_id: str) -> dict:
         return {'version': 1, 'processed_pairs': 0, 'clues': []}
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
+    except Exception as e:
+        logger.error('情报 registry 加载失败 (%s): %s', session_id, e)
         data = {}
     data.setdefault('version', 1)
     data.setdefault('processed_pairs', 0)
@@ -84,9 +89,10 @@ def load_clue_registry(session_id: str) -> dict:
 
 
 def save_clue_registry(session_id: str, registry: dict) -> None:
+    from runtime_store import _atomic_write_json
     path = _registry_path(session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(registry, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    _atomic_write_json(path, registry)
 
 
 def _turn_pairs(items: list[dict]) -> list[tuple[dict, dict]]:

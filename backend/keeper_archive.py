@@ -18,11 +18,23 @@ except ImportError:
 
 
 def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overlap_recent_pairs: int = 3) -> dict:
+    import logging
+    _logger = logging.getLogger(__name__)
     history = load_history(session_id)
     state = load_state(session_id)
-    registry = ensure_npc_registry(session_id, history)
-    ensure_object_registry(session_id, history)
-    ensure_clue_registry(session_id, history)
+    try:
+        registry = ensure_npc_registry(session_id, history)
+    except Exception as e:
+        _logger.warning('NPC bootstrap 异常，使用空 registry: %s', e)
+        registry = {'entities': []}
+    try:
+        ensure_object_registry(session_id, history)
+    except Exception as e:
+        _logger.warning('物品 bootstrap 异常: %s', e)
+    try:
+        ensure_clue_registry(session_id, history)
+    except Exception as e:
+        _logger.warning('情报 bootstrap 异常: %s', e)
 
     pairs = []
     current_user = None

@@ -28,8 +28,9 @@
 - `session_lifecycle.py`：new game / delete / session list
 - `regenerate_turn.py`：partial 回复回滚与重试
 - `user_manager.py`：多用户管理、bcrypt 密码认证、session token 管理
-- `object_bootstrap_agent.py`：物品抽取 bootstrap（启发式→LLM→merge）
-- `clue_bootstrap_agent.py`：情报抽取 bootstrap（启发式→LLM→merge）
+- `object_bootstrap_agent.py`：物品抽取 bootstrap（四策略启发式→LLM判定→merge）
+- `clue_bootstrap_agent.py`：情报抽取 bootstrap（模式匹配→LLM分类→merge）
+- `npc_bootstrap_agent.py`：NPC抽取 bootstrap（对话启发式→LLM分类→merge）
 - `import_sillytavern_chat.py`：SillyTavern JSONL 聊天记录导入（CLI + API）
 
 ## 当前主策略
@@ -98,7 +99,9 @@
   - 可切换当前活跃角色卡
   - 可在设置面板内导入新的角色卡
   - 当前默认用户标签固定显示为 `default_user`
-  - 当前阶段不做用户管理，只在接口和展示层保留用户作用域
+  - 当前阶段不做用户管理，只在接口和展示层保留用户作用域 → 已补多用户管理模块（`user_manager.py`），含 bcrypt 认证与 session token
+  - `state_keeper_candidate` 现已提升至 800 max_output_tokens（原 280 导致 JSON 截断）
+  - 三条 bootstrap（NPC/物品/情报）均已通过 LLM 回合测试
 
 当前建议配模方向：
 - narrator 继续使用强远端模型

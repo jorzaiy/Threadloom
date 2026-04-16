@@ -322,6 +322,7 @@ async function apiJson(url, options = {}) {
   const res = await fetch(url, options);
   const data = await res.json();
   if (!res.ok) {
+    if (res.status === 401 && multiUserEnabled) { showLoginModal(); }
     throw new Error(data?.error?.message || `request failed: ${url}`);
   }
   return data;
@@ -683,19 +684,22 @@ function renderState(state) {
   if (mainThread?.label) {
     const summaryLine = document.createElement('div');
     summaryLine.className = 'state-summary-line';
-    summaryLine.innerHTML = `<strong>主要事件</strong><span>${mainThread.label}</span>`;
+    summaryLine.innerHTML = '<strong>主要事件</strong>';
+    const _span1 = document.createElement('span'); _span1.textContent = mainThread.label; summaryLine.appendChild(_span1);
     summaryWrap.appendChild(summaryLine);
   } else if (state.main_event) {
     const summaryLine = document.createElement('div');
     summaryLine.className = 'state-summary-line';
-    summaryLine.innerHTML = `<strong>主要事件</strong><span>${state.main_event}</span>`;
+    summaryLine.innerHTML = '<strong>主要事件</strong>';
+    const _span2 = document.createElement('span'); _span2.textContent = state.main_event; summaryLine.appendChild(_span2);
     summaryWrap.appendChild(summaryLine);
   }
 
   if (state.immediate_goal) {
     const goalLine = document.createElement('div');
     goalLine.className = 'state-summary-line';
-    goalLine.innerHTML = `<strong>当前目标</strong><span>${state.immediate_goal}</span>`;
+    goalLine.innerHTML = '<strong>当前目标</strong>';
+    const _span3 = document.createElement('span'); _span3.textContent = state.immediate_goal; goalLine.appendChild(_span3);
     summaryWrap.appendChild(goalLine);
   }
 
@@ -1334,10 +1338,11 @@ chatImportPreviewBtn?.addEventListener('click', async () => {
       p.hidden = false;
       const ok = resp.match;
       p.dataset.kind = ok ? 'ok' : 'warning';
-      p.innerHTML = `角色名：<b>${resp.inferred_character || '未知'}</b>` +
-        ` | 期望：<b>${resp.expected_character || '当前角色'}</b>` +
-        ` | 消息：${resp.message_count || 0} 条` +
-        (ok ? ' ✓ 匹配' : ' ⚠ 不匹配（名称不一致）');
+      p.textContent = '';
+      const _ic = document.createElement('b'); _ic.textContent = resp.inferred_character || '未知';
+      const _ec = document.createElement('b'); _ec.textContent = resp.expected_character || '当前角色';
+      p.append('角色名：', _ic, ' | 期望：', _ec,
+        ` | 消息：${resp.message_count || 0} 条` + (ok ? ' ✓ 匹配' : ' ⚠ 不匹配（名称不一致）'));
     }
     chatImportBtn.disabled = !resp.match;
     _chatNote(resp.match ? '校验通过，可以导入' : '角色名不匹配，请检查', resp.match ? 'ok' : 'warning');
@@ -1413,6 +1418,16 @@ function hideLoginModal() {
   if (loginOverlay) loginOverlay.hidden = true;
 }
 
+// 登出
+document.getElementById('logoutBtn')?.addEventListener('click', async () => {
+  try {
+    await apiJson('/api/auth/logout', { method: 'POST' });
+  } catch { /* ignore */ }
+  sessionToken = '';
+  localStorage.removeItem('threadloom_token');
+  location.reload();
+});
+
 loginSubmitBtn?.addEventListener('click', async () => {
   const uid = loginUserId?.value?.trim() || '';
   const pwd = loginPassword?.value || '';
@@ -1440,7 +1455,11 @@ async function checkAuth() {
     if (multiUserEnabled && !sessionToken && currentUserId === 'default-user') {
       // 多用户模式但无令牌 → 仍可用默认用户（兼容无密码管理员）
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    if (multiUserEnabled && String(err?.message || '').match(/401|unauthorized/i)) {
+      showLoginModal();
+    }
+  }
 }
 
 async function loadUserManagement() {
@@ -1500,7 +1519,8 @@ async function renderUserList() {
       const row = document.createElement('div');
       row.className = 'user-list-item';
       const info = document.createElement('span');
-      info.innerHTML = `${u.user_id} <span class="user-role">${u.role}</span>`;
+      info.textContent = u.user_id + ' ';
+      const _roleSpan = document.createElement('span'); _roleSpan.className = 'user-role'; _roleSpan.textContent = u.role; info.appendChild(_roleSpan);
       row.appendChild(info);
       if (u.user_id !== 'default-user') {
         const del = document.createElement('button');
