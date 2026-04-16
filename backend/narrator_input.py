@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 import json
+import re
 from typing import Optional
+
+
+def prompt_block_stats(system_prompt: str) -> list[dict]:
+    parts = re.split(r'\n\n(?=【)', str(system_prompt or ''))
+    stats: list[dict] = []
+    for part in parts:
+        head = part.split('\n', 1)[0].strip()
+        if head.startswith('【') and '】' in head:
+            body = part[len(head):].lstrip('\n')
+            stats.append({
+                'label': head,
+                'chars': len(body),
+            })
+    return stats
 
 
 def _format_persona_lines(persona: list[dict], limit: int = 4) -> str:
@@ -23,6 +38,22 @@ def _format_lorebook_npc_candidates(items: list[dict], limit: int = 6) -> str:
         if len(summary) > 220:
             summary = summary[:217] + '...'
         lines.append(f"- {item.get('name')}: {summary or '世界书已有该 NPC，可在合适时机调入。'}")
+    return '\n'.join(lines)
+
+
+def _format_system_npc_candidates(items: list[dict], limit: int = 6) -> str:
+    if not items:
+        return '暂无'
+    lines = []
+    for item in items[:limit]:
+        summary = (item.get('summary') or '').strip()
+        if len(summary) > 220:
+            summary = summary[:217] + '...'
+        role = str(item.get('role_label', '') or '').strip()
+        faction = str(item.get('faction', '') or '').strip()
+        meta_parts = [part for part in (role, faction) if part]
+        meta = f" / {' / '.join(meta_parts)}" if meta_parts else ''
+        lines.append(f"- {item.get('name')}{meta}: {summary or '系统级既有角色，可在合适时机通过消息、势力、本人或他人提及接入。'}")
     return '\n'.join(lines)
 
 
@@ -50,6 +81,48 @@ def _format_reply_rules(rules: list[str]) -> str:
     return '\n'.join(lines)
 
 
+def _format_knowledge_scope(scope: dict) -> str:
+    """将 knowledge_scope 格式化为叙述者可读的结构化文本。"""
+    if not isinstance(scope, dict) or not scope:
+        return ''
+    lines = []
+    protagonist = scope.get('protagonist', {})
+    if isinstance(protagonist, dict):
+        learned = protagonist.get('learned', [])
+        if isinstance(learned, list) and learned:
+            recent = learned[-8:]  # 只展示最近 8 条
+            lines.append('主角已知信息：')
+            for item in recent:
+                lines.append(f'  - {item}')
+    npc_local = scope.get('npc_local', {})
+    if isinstance(npc_local, dict):
+        for name, data in npc_local.items():
+            if not isinstance(data, dict):
+                continue
+            learned = data.get('learned', [])
+            if isinstance(learned, list) and learned:
+                recent = learned[-5:]
+                lines.append(f'{name}已知信息：')
+                for item in recent:
+                    lines.append(f'  - {item}')
+    return '\n'.join(lines)
+
+
+def _clean_preset_template(text: str) -> str:
+    value = str(text or '').strip()
+    if not value:
+        return ''
+    # Presets may still carry old placeholder sections that duplicate or
+    # contradict the runtime-first context blocks assembled below.
+    value = re.sub(
+        r'\n*【[^】]+】\n\{\{(?:character_core|canon|state|summary|lorebook)\}\}\n*',
+        '\n',
+        value,
+    )
+    value = re.sub(r'\n{3,}', '\n\n', value)
+    return value.strip()
+
+
 def _format_recent_history(history: list[dict], limit: int = 8) -> str:
     if not history:
         return '暂无'
@@ -63,6 +136,108 @@ def _format_recent_history(history: list[dict], limit: int = 8) -> str:
         tag = '用户' if role == 'user' else '叙事'
         lines.append(f'[{tag}] {content}')
     return '\n'.join(lines)
+
+
+def _format_recent_window(history: list[dict], limit_pairs: int = 6) -> str:
+    if not history:
+        return '暂无'
+    pairs = []
+    current_user = None
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        role = item.get('role')
+        if role == 'user':
+            current_user = item
+        elif role == 'assistant' and current_user is not None:
+            pairs.append((current_user, item))
+            current_user = None
+    pairs = pairs[-limit_pairs:]
+    if not pairs:
+        return '暂无'
+    lines = []
+    for user_item, assistant_item in pairs:
+        user_text = str(user_item.get('content', '') or '').strip()
+        assistant_text = str(assistant_item.get('content', '') or '').strip()
+        if len(user_text) > 180:
+            user_text = user_text[:177] + '...'
+        if len(assistant_text) > 260:
+            assistant_text = assistant_text[:257] + '...'
+        lines.append(f"[用户] {user_text}")
+        lines.append(f"[叙事] {assistant_text}")
+    return '\n'.join(lines)
+
+
+def _format_keeper_records(bundle: dict, limit: int = 4) -> str:
+    if not isinstance(bundle, dict):
+        return '暂无'
+    records = bundle.get('records', []) if isinstance(bundle.get('records', []), list) else []
+    if not records:
+        return '暂无'
+    lines = []
+    for item in records[:limit]:
+        if not isinstance(item, dict):
+            continue
+        window = item.get('window', {}) if isinstance(item.get('window', {}), dict) else {}
+        stable_entities = item.get('stable_entities', []) if isinstance(item.get('stable_entities', []), list) else []
+        ongoing_events = item.get('ongoing_events', []) if isinstance(item.get('ongoing_events', []), list) else []
+        tracked_objects = item.get('tracked_objects', []) if isinstance(item.get('tracked_objects', []), list) else []
+        entity_text = ' / '.join(
+            str(entity.get('name', '') or '').strip()
+            for entity in stable_entities[:6]
+            if isinstance(entity, dict) and str(entity.get('name', '') or '').strip()
+        ) or '暂无'
+        thread_text = ' / '.join(str(text or '').strip() for text in ongoing_events[:3] if str(text or '').strip()) or '暂无'
+        object_text = ' / '.join(
+            str(obj.get('label', '') or '').strip()
+            for obj in tracked_objects[:4]
+            if isinstance(obj, dict) and str(obj.get('label', '') or '').strip()
+        ) or '暂无'
+        lines.append(
+            f"- {window.get('from_turn', 'unknown')}..{window.get('to_turn', 'unknown')} | 地点={item.get('location_anchor', '待确认')} | 人物={entity_text} | 事件={thread_text} | 物件={object_text}"
+        )
+    return '\n'.join(lines) if lines else '暂无'
+
+
+def _format_npc_registry(bundle: dict) -> str:
+    if not isinstance(bundle, dict):
+        return '暂无'
+    lines = []
+    for item in (bundle.get('entities', []) or [])[:6]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get('canonical_name', '') or '').strip()
+        if not name:
+            continue
+        role = str(item.get('role_label', '') or '待确认').strip() or '待确认'
+        aliases = [str(alias).strip() for alias in (item.get('aliases', []) or []) if str(alias).strip() and str(alias).strip() != name][:4]
+        alias_text = f" / 别称={' / '.join(aliases)}" if aliases else ''
+        lines.append(f"- {name} / {role}{alias_text}")
+    return '\n'.join(lines) if lines else '暂无'
+
+
+def _format_mid_window_digest(bundle: dict) -> str:
+    if not isinstance(bundle, dict) or not bundle:
+        return '暂无'
+    lines = []
+    if bundle.get('time_anchor'):
+        lines.append(f"- 时间锚点：{bundle.get('time_anchor')}")
+    if bundle.get('location_anchor'):
+        lines.append(f"- 地点锚点：{bundle.get('location_anchor')}")
+    entities = bundle.get('stable_entities', []) if isinstance(bundle.get('stable_entities', []), list) else []
+    if entities:
+        lines.append('- 持续人物：' + ' / '.join(
+            f"{item.get('name')}({item.get('role', '待确认')})"
+            for item in entities[:5]
+            if isinstance(item, dict) and item.get('name')
+        ))
+    events = bundle.get('ongoing_events', []) if isinstance(bundle.get('ongoing_events', []), list) else []
+    for item in events[:3]:
+        lines.append(f"- 持续事件：{item}")
+    loops = bundle.get('open_loops', []) if isinstance(bundle.get('open_loops', []), list) else []
+    for item in loops[:3]:
+        lines.append(f"- 未决点：{item}")
+    return '\n'.join(lines) if lines else '暂无'
 
 
 def _format_active_threads(items: list[dict], limit: int = 4) -> str:
@@ -121,7 +296,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         blocks.append(runtime_rules)
 
     # 2. 预设系统模板（世界模拟框架 + 推进规则）
-    preset_template = preset.get('system_template', '').strip()
+    preset_template = _clean_preset_template(preset.get('system_template', ''))
     if preset_template:
         blocks.append('【预设框架】\n' + preset_template)
 
@@ -153,71 +328,77 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     if canon:
         blocks.append('【长期事实 canon】\n' + canon)
 
-    # 8. 当前状态摘要
-    blocks.append('【当前状态摘要】\n' + '\n'.join([
+    # 8. 当前硬锚点
+    blocks.append('【当前硬锚点】\n' + '\n'.join([
         f"- 时间：{scene.get('time', '待确认')}",
         f"- 地点：{scene.get('location', '待确认')}",
-        f"- 主事件：{scene.get('main_event', '待确认')}",
-        f"- 局势核心：{scene.get('scene_core', '待确认')}",
         f"- 在场人物：{' / '.join(scene.get('onstage_npcs', [])) or '暂无'}",
         f"- 相关人物：{' / '.join(scene.get('relevant_npcs', [])) or '暂无'}",
-        f"- 当前目标：{' / '.join(scene.get('immediate_goal', [])) or '待确认'}",
-        f"- 当前风险：{' / '.join(scene.get('immediate_risks', [])) or '暂无'}",
-        f"- 延续线索：{' / '.join(scene.get('carryover_clues', [])) or '暂无'}",
     ]))
 
-    # 9. 阶段摘要
-    summary = context.get('summary_text', '').strip()
-    if summary:
-        blocks.append('【阶段摘要】\n' + summary)
-
+    # 知情边界：结构化版本 + 通用规则
+    knowledge_scope = scene.get('knowledge_scope', {})
+    ks_lines = _format_knowledge_scope(knowledge_scope)
     blocks.append(
         '【知情边界】\n'
         '- 主角刚看到、刚听到、刚推测到的信息，不会自动变成 NPC 已知信息。\n'
         '- NPC 只能基于自己亲眼所见、亲耳所闻、被明确告知的信息行动。\n'
         '- “看见了”“听见了”“猜到了”必须分开，不要把推测写成已知事实。\n'
         '- 若只有主角在窗边、门缝、墙后观察到某事，其他 NPC 除非有独立信息来源，否则不能直接据此说话或行动。\n'
+        + (('\n' + ks_lines) if ks_lines else '')
     )
 
+    # 9. NPC 档案内容
+    npc_profiles = context.get('npc_profiles', [])
+    npc_text = _format_npc_profiles(npc_profiles)
+    if npc_text != '暂无':
+        blocks.append('【相关 NPC 档案】\n' + npc_text)
+
+    # 10. Onstage Persona
+    persona_text = _format_persona_lines(persona)
+    blocks.append('【Onstage Persona】\n' + persona_text)
+
+    lorebook_npc_candidates = context.get('lorebook_npc_candidates', [])
+    system_npc_candidates = context.get('system_npc_candidates', [])
+    system_candidate_text = _format_system_npc_candidates(system_npc_candidates)
+    if system_candidate_text != '暂无':
+        blocks.append('【系统级 NPC】\n以下角色来自角色卡导入时明确提取出的系统级人物层。需要调用卡内既有重要角色时，优先从这里选择，而不是从泛世界书关键词里临时猜。\n' + system_candidate_text)
+
+    candidate_text = _format_lorebook_npc_candidates(lorebook_npc_candidates)
+    if candidate_text != '暂无':
+        blocks.append('【可调入世界书 NPC】\n这些人物已在世界书中存在。需要引入新的关键人物、势力接口、消息源、压力来源或旧线回流时，优先从这里选择。\n默认不要让高位或重量级人物突兀肉身进场；更自然的做法是先通过传闻、口信、命令、手下、势力痕迹、悬赏、盘查、旁人口述或后果变化把他们接入当前因果链。\n只有当地点、时机、动机和当前局势都足够合理时，才让人物本人直接出场。\n' + candidate_text)
+
+    npc_registry = context.get('npc_registry', {})
+    registry_text = _format_npc_registry(npc_registry)
+    if registry_text != '暂无':
+        blocks.append('【人物连续性表】\n以下是当前 session 已经稳定下来的主要人物及别称映射。若正文里出现别称、泛称或旧称，应优先向这里收敛，而不是把它们当成新人物。\n' + registry_text)
+
+    # 11. 滚动窗口
+    recent_history = context.get('recent_history', [])
+    recent_window_text = _format_recent_window(recent_history, limit_pairs=10)
+    if recent_window_text != '暂无':
+        blocks.append('【最近窗口】\n这是当前最优先参考的上下文，优先级高于中程摘要与旧记忆。\n' + recent_window_text)
+
+    # 12. 活跃线程
     active_threads = scene.get('active_threads', [])
     thread_text = _format_active_threads(active_threads)
     if thread_text != '暂无':
         blocks.append('【活跃线程】\n' + thread_text)
 
+    # 13. 重要物件
     object_text = _format_tracked_objects(
         scene.get('tracked_objects', []),
         scene.get('possession_state', []),
         scene.get('object_visibility', []),
     )
     if object_text != '暂无':
-        blocks.append(
-            '【重要物件与持有关系】\n'
-            '- 这里列的是当前剧情相关的重要物件、当前持有者以及这层持有关系的可见性。\n'
-            '- 若某物件的持有关系是 private，不要让无独立信息来源的 NPC 直接知道它在谁手里。\n'
-            '- 若某物件被转交、藏起、搜出、夺走或公开亮出，应让正文与后续 state 一致。\n'
-            + object_text
-        )
+        blocks.append('【重要物件与持有关系】\n' + object_text)
 
-    # 10. NPC 档案内容
-    npc_profiles = context.get('npc_profiles', [])
-    npc_text = _format_npc_profiles(npc_profiles)
-    if npc_text != '暂无':
-        blocks.append('【相关 NPC 档案】\n' + npc_text)
-
-    # 11. Onstage Persona
-    persona_text = _format_persona_lines(persona)
-    blocks.append('【Onstage Persona】\n' + persona_text)
-
-    lorebook_npc_candidates = context.get('lorebook_npc_candidates', [])
-    candidate_text = _format_lorebook_npc_candidates(lorebook_npc_candidates)
-    if candidate_text != '暂无':
-        blocks.append('【可调入世界书 NPC】\n这些人物已在世界书中存在。需要引入新的关键人物、势力接口、消息源、压力来源或旧线回流时，优先从这里选择。\n默认不要让高位或重量级人物突兀肉身进场；更自然的做法是先通过传闻、口信、命令、手下、势力痕迹、悬赏、盘查、旁人口述或后果变化把他们接入当前因果链。\n只有当地点、时机、动机和当前局势都足够合理时，才让人物本人直接出场。\n' + candidate_text)
-
-    # 12. 近期历史
-    recent_history = context.get('recent_history', [])
-    history_text = _format_recent_history(recent_history)
-    if history_text != '暂无':
-        blocks.append('【近期历史】\n' + history_text)
+    # 14. 相关旧记忆
+    keeper_records = context.get('keeper_records', {})
+    record_text = _format_keeper_records(keeper_records)
+    if record_text != '暂无':
+        blocks.append('【较早结构记录】\n这些是更早之前 keeper 已经写下的结构记录，只用于补充当前人物、线程、物件与地点的延续性，不可压过最近窗口。\n' + record_text)
 
     blocks.append(
         '【知情边界补充】\n'
@@ -227,19 +408,19 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         '- 推测不等于实锤；旁观者知道，不等于所有在场者都知道；一个 NPC 知道，也不等于同阵营其他 NPC 自动知道。\n'
     )
 
-    # 13. 推进规则（preset reply rules）
+    # 15. 推进规则（preset reply rules）
     reply_rules = preset.get('reply_rules', [])
     if reply_rules:
         blocks.append('【推进规则】\n' + _format_reply_rules(reply_rules))
 
-    # 14. 裁定结果（如有）
+    # 16. 裁定结果（如有）
     if arbiter_result:
         blocks.append('【本轮裁定结果】\n' + json.dumps(arbiter_result, ensure_ascii=False, indent=2))
 
     if state_fragment:
         blocks.append('【结构化状态锚点】\n这不是要输出给用户的内容，而是本轮叙事必须尽量服从的结构化场景锚点。若正文没有明确推翻这些事实，不要主动改写、跳场或清空。\n' + json.dumps(state_fragment, ensure_ascii=False, indent=2))
 
-    # 15. 最终要求
+    # 17. 最终要求
     blocks.append('【要求】\n- 只输出最终 RP 正文。\n- 不复述系统提示，不输出解释。')
 
     system_prompt = '\n\n'.join(blocks)

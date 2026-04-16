@@ -1,9 +1,46 @@
 #!/usr/bin/env python3
 import json
+import logging
+import re
+import time
 import urllib.request
 from urllib.error import HTTPError
 
+log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# 429/503 重试
+# ---------------------------------------------------------------------------
+_RETRY_STATUS_CODES = (429, 503)
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 2.0
+
+
+def _retry_on_rate_limit(func):
+    """装饰器：遇到 429/503 时指数退避重试。"""
+    def wrapper(*args, **kwargs):
+        last_err = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return func(*args, **kwargs)
+            except HTTPError as err:
+                if err.code not in _RETRY_STATUS_CODES or attempt >= _MAX_RETRIES:
+                    raise
+                wait = _BACKOFF_BASE ** attempt
+                retry_after = err.headers.get('Retry-After') if hasattr(err, 'headers') else None
+                if retry_after:
+                    try:
+                        wait = max(wait, float(retry_after))
+                    except (ValueError, TypeError):
+                        pass
+                log.warning('HTTP %d，第 %d 次重试，等待 %.1fs', err.code, attempt + 1, wait)
+                last_err = err
+                time.sleep(wait)
+        raise last_err  # type: ignore[misc]
+    return wrapper
+
+
+@_retry_on_rate_limit
 def _post_json(url: str, payload: dict, headers: dict) -> dict:
     req = urllib.request.Request(
         url,
@@ -15,6 +52,7 @@ def _post_json(url: str, payload: dict, headers: dict) -> dict:
         return json.loads(resp.read().decode('utf-8'))
 
 
+@_retry_on_rate_limit
 def _post_stream_chat(url: str, payload: dict, headers: dict) -> tuple[str, dict, str | None]:
     req = urllib.request.Request(
         url,
@@ -77,6 +115,30 @@ def _extract_responses_text(data: dict) -> str:
     return '\n'.join(p for p in parts if p).strip()
 
 
+def _looks_incomplete_reply(text: str) -> bool:
+    body = str(text or '').rstrip()
+    if not body:
+        return True
+    last_line = body.splitlines()[-1].strip()
+    if not last_line:
+        return True
+    if len(last_line) <= 2:
+        return True
+    if body.endswith(('。', '！', '？', '.', '!', '?', '」', '』', '"', '”', '…')):
+        return False
+    if body.endswith(('，', '、', ',', ':', '：', '；', ';', '——', '—')):
+        return True
+    if len(body) >= 8 and re.search(r'[\u4e00-\u9fff]{2,}$', body):
+        return True
+    if re.search(r'[\u4e00-\u9fffA-Za-z0-9]$', body):
+        return True
+    return False
+
+
+def looks_incomplete_reply(text: str) -> bool:
+    return _looks_incomplete_reply(text)
+
+
 def call_model(config: dict, system_prompt: str, user_prompt: str) -> tuple[str, dict]:
     provider = config['provider']
     model = config['model']
@@ -126,6 +188,13 @@ def call_model(config: dict, system_prompt: str, user_prompt: str) -> tuple[str,
         payload['stream'] = True
         try:
             reply, usage, finish_reason = _post_stream_chat(f'{base_url}/chat/completions', payload, headers)
+            if finish_reason is None and _looks_incomplete_reply(reply):
+                payload.pop('stream', None)
+                data = _post_json(f'{base_url}/chat/completions', payload, headers)
+                reply = _extract_chat_content(data)
+                usage = data.get('usage', {})
+                choice = (data.get('choices') or [{}])[0]
+                finish_reason = choice.get('finish_reason')
         except HTTPError as err:
             if err.code != 403:
                 raise

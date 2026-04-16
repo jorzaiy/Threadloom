@@ -11,21 +11,22 @@
 - active preset
 - `state`
 - `scene persona seeds`
-- 少量 recent history
+- 最近 `10` 对 recent history
 
 这些是当前回合的最低事实层，必须每轮都以它们为准。
 
 ### 中等刷新（默认每 12 轮）
 
 建议周期性重读：
-- `summary`
 - `relevant NPC profiles`
 - `longterm persona seeds`
 - 当前 relevant lore
+- keeper archive
 
 目的：
 - 防止场景慢漂移
 - 防止 relevant NPC / lore 选择长期失焦
+- 用较早结构记录补足窗口外连续性
 
 ### 深刷新（默认每 20 轮或事件触发）
 
@@ -48,7 +49,7 @@
 这是 runtime 的长期底板。
 
 规则：
-- 必须先于 `canon/state/summary/persona` 进入上下文
+- 必须先于 `canon/state/persona` 与最近窗口进入上下文
 - 不能依赖当前聊天 session 惯性补全
 - 不应被在线会话中的临时 steering 或历史承接覆盖
 
@@ -58,18 +59,18 @@
 - `runtime-rules`
 - `canon`
 - `state`
-- `summary`
 - 相关 `npc profiles`
 - `persona seeds`
+- 最近 `10` 对 turn 的 rolling window
+- 命中的 keeper archive
 - 可调入世界书人物
-- 少量 recent history
 
 输出：
 - `RuntimeContext`
 
 建议实现时结合 `refresh_policy`：
 - 每轮轻刷新读取最低事实层
-- 中刷新补充 `summary` / relevant 层
+- 中刷新补充 keeper archive / relevant 层
 - 深刷新重建整个 runtime context cache
 
 ### Step 2. 构建 scene facts
@@ -249,7 +250,8 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
 ## 核心原则
 
 - `state` 比 transcript 更重要
-- `summary` 比长历史更重要
+- recent window 比一切软摘要更重要
+- keeper archive 比自由历史检索更重要
 - `persona` 是运行时骨架，不是展示文本
 - 世界书人物默认优先进入因果链，而不是突兀肉身进场
 - `chat history` 只是辅助，不应成为唯一真相源

@@ -23,21 +23,22 @@ online session
 web input
   -> runtime handler
   -> runtime rules
-  -> card / preset / lore / canon / state / summary / persona
+  -> card / preset / lore / canon / state / persona / recent window / keeper archive
   -> narrator
   -> state keeper
-  -> summary writer
+  -> optional summary writer
   -> session-local state / summary / history
 ```
 
 关键差异：
-- `state` 和 `summary` 是 narrator 的前置约束，不是 transcript 的事后附属品。
-- `history` 只保留少量上下文承接，不再承担主骨架职责。
-- 写回时先收口到结构化状态，再生成下一轮的摘要层。
+- `state` 是 narrator 的前置硬约束，`summary` 不再是 narrator 主输入。
+- `history` 只保留最近窗口承接，不再承担完整骨架职责。
+- 更早历史优先收敛成 keeper archive，而不是自由摘要层。
+- 写回时先收口到结构化状态；`summary` 可继续保留为调试/运维产物，但不再主导 narrator。
 
 ## 当前 Threadloom 的建议优先级
 
 1. 先稳 `state`。
-2. 再稳 `summary`。
+2. 再稳 `recent window -> keeper archive` 的两层上下文。
 3. 再接入 arbiter / persona 流转。
 4. 最后再继续打磨 UI。

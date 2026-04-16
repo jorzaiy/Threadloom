@@ -10,12 +10,76 @@ except ImportError:
     from name_sanitizer import sanitize_runtime_name
 
 
-THREAD_RETENTION_TURNS = 2
+THREAD_RETENTION_CONFIG = {
+    'main':    {'retention': 4, 'cooldown_escalation': 0},
+    'risk':    {'retention': 3, 'cooldown_escalation': 0},
+    'clue':    {'retention': 2, 'cooldown_escalation': 0},
+    'arbiter': {'retention': 1, 'cooldown_escalation': 0},
+}
+THREAD_RETENTION_DEFAULT = {'retention': 2, 'cooldown_escalation': 0}
 
 
 def _short(text: str, limit: int = 72) -> str:
     one = ' '.join((text or '').split()).strip()
     return one[: limit - 3] + '...' if len(one) > limit else one
+
+
+def _clean_label(text: str) -> str:
+    value = ' '.join(str(text or '').split()).strip()
+    value = re.sub(r'^场景已转到', '', value)
+    value = re.sub(r'^场面已切到', '', value)
+    value = re.sub(r'，?互动重点随之转入新地点。?$', '', value)
+    value = re.sub(r'里的局势正围绕“([^”]+)”推进。?$', r'\1', value)
+    value = re.sub(r'成为当前场面重心，局势正接着“([^”]+)”往下走。?$', r'\1', value)
+    value = value.strip('。；;，, ')
+    return value
+
+
+def _make_thread_key(kind: str, label: str) -> str:
+    cleaned = _clean_label(label)
+    if kind == 'main' and cleaned:
+        return f'main:{_norm_key(cleaned)}'
+    return f'{kind}:{_norm_key(cleaned or label)}'
+
+
+def _is_generic_label(value: str) -> bool:
+    text = _clean_label(value)
+    if not text:
+        return True
+    if text.startswith('当前局势正围绕'):
+        return True
+    if text.startswith('人界·') or text.startswith('修仙历') or text.startswith('当前局面'):
+        return True
+    if '说：' in text or '问：' in text or '…' in text:
+        return True
+    return False
+
+
+def _compress_secondary_label(text: str, kind: str) -> str:
+    value = _clean_label(text)
+    if kind == 'risk':
+        if any(token in value for token in ('表态', '走向', '态度')):
+            return '表态风险'
+        if any(token in value for token in ('转场', '环境', '规则')):
+            return '转场风险'
+        if any(token in value for token in ('审查', '盘问', '怀疑', '暴露')):
+            return '暴露风险'
+        if any(token in value for token in ('受伤', '超时', '连坐')):
+            return '失败风险'
+        if any(token in value for token in ('规则', '摸清', '不确定')):
+            return '规则风险'
+    if kind == 'clue':
+        if any(token in value for token in ('目标', '决定', '后续推进')):
+            return '延续线索'
+        if any(token in value for token in ('表态', '细节', '回流')):
+            return '细节线索'
+        if any(token in value for token in ('记录板', '画圈', '标记')):
+            return '记录板标记'
+        if any(token in value for token in ('怀疑', '假身份', '林诺')):
+            return '身份疑点'
+        if any(token in value for token in ('高崎', '掩护', '垫脚', '协作')):
+            return '协作线索'
+    return value
 
 
 def _norm_key(text: str) -> str:
@@ -159,7 +223,11 @@ def _dedupe_similar_threads(items: list[dict], limit: int = 5) -> list[dict]:
             score = max(label_score, obstacle_score, goal_score, combo_score)
             if score < 0.72:
                 continue
-            if len(str(item.get('label', '') or '')) > len(str(existing.get('label', '') or '')):
+            existing_label = str(existing.get('label', '') or '')
+            item_label = str(item.get('label', '') or '')
+            if _is_generic_label(existing_label) and not _is_generic_label(item_label):
+                existing['label'] = item.get('label')
+            elif len(item_label) > len(existing_label):
                 existing['label'] = item.get('label')
             if len(str(item.get('obstacle', '') or '')) > len(str(existing.get('obstacle', '') or '')):
                 existing['obstacle'] = item.get('obstacle')
@@ -176,11 +244,13 @@ def _dedupe_similar_threads(items: list[dict], limit: int = 5) -> list[dict]:
     return deduped[:limit]
 
 
-def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: str = '', arbiter: dict | None = None, limit: int = 5) -> list[dict]:
+def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: str = '', arbiter: dict | None = None, limit: int = 5) -> tuple[list[dict], list[dict]]:
+    """返回 (active_threads, newly_resolved_threads)"""
     current = dict(state or {})
     prev_threads = _coerce_threads(current.get('active_threads', []))
     prev_by_key = {str(item.get('key')): item for item in prev_threads if str(item.get('key', '')).strip()}
     used_ids: set[str] = set()
+    newly_resolved: list[dict] = []
     actors = _actors_from_state(current)
     latest_change = _short(narrator_reply or user_text or current.get('scene_core', ''))
     candidates: list[dict] = []
@@ -188,9 +258,13 @@ def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: st
     def add_candidate(key: str, *, label: str, kind: str, priority: str, goal: str, obstacle: str, latest: str):
         if not label.strip():
             return
+        normalized_label = _clean_label(label) or label
+        if kind in {'risk', 'clue'}:
+            normalized_label = _compress_secondary_label(normalized_label, kind)
+        normalized_key = _make_thread_key(kind, normalized_label)
         candidates.append({
-            'key': key,
-            'label': _short(label, 80),
+            'key': normalized_key,
+            'label': _short(normalized_label, 80),
             'kind': kind,
             'priority': priority,
             'status': 'active',
@@ -209,9 +283,28 @@ def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: st
     arbiter_signals = current.get('arbiter_signals', {}) if isinstance(current.get('arbiter_signals', {}), dict) else {}
     arbiter_events = arbiter_signals.get('events', []) if isinstance(arbiter_signals.get('events', []), list) else []
 
+    def _better_main_label() -> str:
+        if main_event and not _is_generic_label(main_event):
+            return main_event
+        if active_threads := current.get('active_threads', []):
+            for item in active_threads:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get('label', '') or '').strip()
+                if label and not _is_generic_label(label):
+                    return label
+        if immediate_goal and not immediate_goal.startswith('先处理“'):
+            return immediate_goal
+        text = str(current.get('location', '') or '').strip()
+        if text and immediate_risks:
+            return f'{text}中的局势仍在朝更高压方向推进'
+        if text:
+            return f'{text}中的局势仍在持续演化'
+        return '当前局势仍在持续演化'
+
     add_candidate(
-        f'main:{_norm_key(main_event or immediate_goal or "当前主线程")}',
-        label=main_event or '当前主线程',
+        f'main:{_norm_key(_better_main_label() or immediate_goal or "当前主线程")}',
+        label=_better_main_label(),
         kind='main',
         priority='primary',
         goal=immediate_goal or '维持当前主推进并准备下一步选择',
@@ -270,7 +363,8 @@ def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: st
             prev = _find_thread_match(item, prev_threads)
         if prev:
             thread_id = str(prev.get('thread_id', '') or '')
-            item['key'] = str(prev.get('key', key) or key)
+            if item.get('kind') != 'main':
+                item['key'] = str(prev.get('key', key) or key)
             item['stability_turns'] = int(prev.get('stability_turns', 1) or 1) + 1
             item['cooldown_turns'] = 0
         else:
@@ -292,19 +386,58 @@ def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: st
         if prev_id in used_ids:
             continue
         cooldown_turns = int(prev.get('cooldown_turns', 0) or 0)
-        if cooldown_turns >= THREAD_RETENTION_TURNS:
+        prev_kind = str(prev.get('kind', '') or '')
+        retention_config = THREAD_RETENTION_CONFIG.get(prev_kind, THREAD_RETENTION_DEFAULT)
+        max_cooldown = retention_config['retention']
+        if cooldown_turns >= max_cooldown:
+            # 线程冷却期结束 → 标记为 resolved 以便归档
+            resolved = deepcopy(prev)
+            resolved['status'] = 'resolved'
+            resolved['resolved_reason'] = 'cooldown_expired'
+            newly_resolved.append(resolved)
             continue
         carried = deepcopy(prev)
-        carried['status'] = 'watch'
+        if cooldown_turns >= max(1, max_cooldown - 1):
+            carried['status'] = 'cooling_down'
+        else:
+            carried['status'] = 'watch'
         carried['cooldown_turns'] = cooldown_turns + 1
         carried['latest_change'] = _short(prev.get('latest_change', latest_change), 80)
         deduped.append(carried)
         used_ids.add(prev_id)
 
-    return _dedupe_similar_threads(deduped, limit=limit)
+    return _dedupe_similar_threads(deduped, limit=limit), newly_resolved
 
 
 def apply_thread_tracker(state: dict, *, user_text: str = '', narrator_reply: str = '', arbiter: dict | None = None) -> dict:
     next_state = deepcopy(state or {})
-    next_state['active_threads'] = build_active_threads(next_state, user_text=user_text, narrator_reply=narrator_reply, arbiter=arbiter)
+    active, resolved = build_active_threads(next_state, user_text=user_text, narrator_reply=narrator_reply, arbiter=arbiter)
+    next_state['active_threads'] = active
+
+    # 将冷却期结束的线程归档到 resolved_events
+    existing_resolved = next_state.get('resolved_events', []) or []
+    if not isinstance(existing_resolved, list):
+        existing_resolved = []
+    for thread in resolved:
+        existing_resolved.append({
+            'label': thread.get('label', ''),
+            'kind': thread.get('kind', ''),
+            'status': 'resolved',
+            'resolved_reason': thread.get('resolved_reason', 'cooldown_expired'),
+            'goal': thread.get('goal', ''),
+            'actors': thread.get('actors', []),
+            'stability_turns': thread.get('stability_turns', 0),
+        })
+    # 只保留最近 20 条已解决事件
+    next_state['resolved_events'] = existing_resolved[-20:]
+    current_main_event = _clean_label(str(next_state.get('main_event', '') or ''))
+    if current_main_event and not _is_generic_label(current_main_event):
+        for item in next_state['active_threads']:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get('kind', '') or '') != 'main':
+                continue
+            item['label'] = current_main_event
+            item['key'] = _make_thread_key('main', current_main_event)
+            break
     return next_state

@@ -6,8 +6,16 @@
 """
 
 import json
+import logging
+import time
 import urllib.request
 from urllib.error import HTTPError, URLError
+
+log = logging.getLogger(__name__)
+
+_RETRY_STATUS_CODES = (429, 503)
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 2.0
 
 
 def call_local_model(config: dict, system_prompt: str, user_prompt: str) -> tuple[str, dict]:
@@ -49,13 +57,22 @@ def call_local_model(config: dict, system_prompt: str, user_prompt: str) -> tupl
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
+        last_err = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=180) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                break
+            except HTTPError as err:
+                if err.code not in _RETRY_STATUS_CODES or attempt >= _MAX_RETRIES:
+                    body = err.read().decode('utf-8', errors='ignore')[:500]
+                    raise RuntimeError(f'Local model error {err.code}: {body}') from err
+                wait = _BACKOFF_BASE ** attempt
+                log.warning('本地模型 HTTP %d，第 %d 次重试，等待 %.1fs', err.code, attempt + 1, wait)
+                last_err = err
+                time.sleep(wait)
     except URLError as err:
         raise RuntimeError(f'Local model unreachable at {url}: {err}') from err
-    except HTTPError as err:
-        body = err.read().decode('utf-8', errors='ignore')[:500]
-        raise RuntimeError(f'Local model error {err.code}: {body}') from err
 
     # 提取回复内容
     choice = (data.get('choices') or [{}])[0]

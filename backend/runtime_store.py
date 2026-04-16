@@ -1,21 +1,49 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 
 try:
+    from .character_assets import resolve_character_cover_path
     from .persona_runtime import infer_persona_traits
     from .name_sanitizer import sanitize_runtime_name
-    from .paths import APP_ROOT, SHARED_ROOT, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
+    from .paths import APP_ROOT, SHARED_ROOT, active_character_id, active_user_label, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
 except ImportError:
+    from character_assets import resolve_character_cover_path
     from persona_runtime import infer_persona_traits
     from name_sanitizer import sanitize_runtime_name
-    from paths import APP_ROOT, SHARED_ROOT, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
+    from paths import APP_ROOT, SHARED_ROOT, active_character_id, active_user_label, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
 SESSIONS_DIR = current_sessions_root()
 CONFIG = RUNTIME_WEB / 'config' / 'runtime.json'
+
+
+# ---------------------------------------------------------------------------
+# 原子写入：先写临时文件再 rename，防止中途中断导致文件损坏
+# ---------------------------------------------------------------------------
+def _atomic_write_text(path: Path, content: str, encoding: str = 'utf-8') -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding=encoding) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_json(path: Path, data, *, indent: int = 2) -> None:
+    _atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=indent) + '\n')
 
 _history_cache: dict[str, tuple[float, list]] = {}
 
@@ -67,31 +95,13 @@ def _read_json_file(path: Path) -> dict:
         return {}
 
 
-def resolve_character_cover_path() -> Path | None:
-    small_cover = RUNTIME_WEB / 'frontend' / 'character-cover-small.png'
-    if small_cover.exists():
-        return small_cover
-    data = _read_json_file(character_data_path())
-    notes = str(data.get('notes', '') or '')
-    match = re.search(r'character/imported/([^.]+)\.raw-card\.json', notes)
-    candidates: list[Path] = []
-    if match:
-        stem = match.group(1)
-        for ext in ('.png', '.jpg', '.jpeg', '.webp'):
-            candidates.append(shared_path('角色卡', f'{stem}{ext}'))
-    role_cards = shared_path('角色卡')
-    candidates.extend(sorted(role_cards.glob('*')) if role_cards.exists() else [])
-    for path in candidates:
-        if path.is_file() and path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
-            return path
-    return None
-
-
 def load_character_card_meta() -> dict:
     data = _read_json_file(character_data_path())
     core = data.get('coreDescription', {}) if isinstance(data.get('coreDescription', {}), dict) else {}
     cover_path = resolve_character_cover_path()
     return {
+        'user_id': active_user_label(),
+        'character_id': active_character_id(),
         'name': str(data.get('name', '') or core.get('title', '') or '未命名角色卡').strip(),
         'title': str(core.get('title', '') or data.get('name', '') or '未命名角色卡').strip(),
         'subtitle': str(core.get('tagline', '') or data.get('role', '') or '').strip(),
@@ -128,6 +138,7 @@ def session_paths(session_id: str) -> dict:
         'continuity_hints': memory_dir / 'continuity_hints.json',
         'canon': memory_dir / 'canon.md',
         'summary': memory_dir / 'summary.md',
+        'keeper_archive': memory_dir / 'keeper_record_archive.json',
         'context': session_dir / 'context.json',
         'meta': session_dir / 'meta.json',
     }
@@ -216,7 +227,7 @@ def load_continuity_hints(session_id: str) -> list:
 def save_continuity_hints(session_id: str, items: list[dict]) -> None:
     path = session_paths(session_id)['continuity_hints']
     payload = {'entries': items}
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    _atomic_write_json(path, payload)
 
 
 def load_summary(session_id: str) -> str:
@@ -226,7 +237,7 @@ def load_summary(session_id: str) -> str:
 
 def save_summary(session_id: str, text: str) -> None:
     path = session_paths(session_id)['summary']
-    path.write_text(text, encoding='utf-8')
+    _atomic_write_text(path, text)
 
 
 def load_canon(session_id: str) -> str:
@@ -236,7 +247,7 @@ def load_canon(session_id: str) -> str:
 
 def save_canon(session_id: str, text: str) -> None:
     path = session_paths(session_id)['canon']
-    path.write_text(text, encoding='utf-8')
+    _atomic_write_text(path, text)
 
 
 def load_context(session_id: str) -> dict:
@@ -251,12 +262,12 @@ def load_context(session_id: str) -> dict:
 
 def save_context(session_id: str, context: dict) -> None:
     path = session_paths(session_id)['context']
-    path.write_text(json.dumps(context, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    _atomic_write_json(path, context)
 
 
 def save_state(session_id: str, state: dict) -> None:
     path = session_paths(session_id)['state']
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    _atomic_write_json(path, state)
 
 
 def trace_path(session_id: str, turn_id: str) -> Path:
@@ -305,7 +316,7 @@ def save_turn_trace(session_id: str, turn_id: str, trace: dict) -> Path:
     if not settings['enabled']:
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(trace, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    _atomic_write_json(path, trace)
     _prune_trace_files(path.parent, settings['keep_last_turns'])
     return path
 
@@ -420,7 +431,7 @@ def save_session_persona_layers(session_id: str, layers: dict[str, dict[str, dic
             if not isinstance(seed, dict):
                 continue
             filename = _persona_filename(str(display_name or seed.get('display_name') or seed.get('npc_id') or 'unknown'))
-            (directory / filename).write_text(json.dumps(seed, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            _atomic_write_json(directory / filename, seed)
 
 
 def load_persona_index(session_id: str | None = None) -> dict[str, dict]:
@@ -451,7 +462,7 @@ def save_persona_seed(session_id: str, layer: str, seed: dict) -> Path:
     target_dir = paths[key]
     display_name = seed.get('display_name') or seed.get('npc_id') or 'unknown'
     path = target_dir / _persona_filename(display_name)
-    path.write_text(json.dumps(seed, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    _atomic_write_json(path, seed)
     return path
 
 
@@ -577,4 +588,4 @@ def save_meta(session_id: str, meta: dict) -> None:
         for key in sorted_keys[:len(cache) - MAX_IDEMPOTENCY_CACHE]:
             del cache[key]
     path = session_paths(session_id)['meta']
-    path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    _atomic_write_json(path, meta)

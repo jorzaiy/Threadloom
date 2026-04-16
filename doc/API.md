@@ -109,6 +109,7 @@ opening 相关行为：
 
 partial 相关行为：
 - 若 narrator 返回 `finish_reason=length`，该 assistant 回复会标记为 `partial`
+- 若 narrator 返回的正文明显停在半句中间，即使 provider 没给 `finish_reason`，当前也会按 `partial` 处理
 - partial 回复会保留在历史里显示
 - 但不会继续污染 `state / summary / threads / important_npcs`
 
@@ -245,20 +246,27 @@ partial 相关行为：
 - 前端不应再自行用名字反查 `entity_id`
 - `tracked_objects / possession_state / object_visibility` 是轻量物件状态层
 - 这三层当前用于记录剧情相关物件、当前持有关系，以及该持有关系的可见性
+- 当前默认只记录“可持续追踪”的物件：
+  - 有明确持有、展示、转移、搜出、收起、放下、遗失或证物化后果
+  - 不会把短语残片、动作词片段或一次性货币默认塞进物件列表
 
 ## GET /api/history
 
-返回当前会话最近消息。
+返回当前会话消息页。
 
 ### Query
 
 - `session_id` 必填
+- `before` 可选，整数光标；表示返回 `before` 之前的一页消息
 
 ### Response
 
 ```json
 {
   "session_id": "story-live",
+  "has_more": true,
+  "next_before": 120,
+  "total_count": 200,
   "messages": [
     {
       "ts": 1710000000000,
@@ -277,7 +285,9 @@ partial 相关行为：
 
 ### Notes
 
-- 当前实现最多返回最近 80 条消息
+- 默认每页最多返回最近 80 条消息
+- 不带 `before` 时返回最后一页
+- 带 `before` 时返回更早一页，适合前端“加载更早记录”
 - 实际分页大小由 `runtime.json -> web.history_page_size` 控制
 - partial assistant 也会在这里返回，但不会进入事实层写回
 
