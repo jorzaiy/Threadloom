@@ -55,7 +55,7 @@ DEFAULT_ADVANCED_MODELS = {
         'provider': SITE_PROVIDER_NAME,
         'model': '',
         'temperature': 0.0,
-        'max_output_tokens': 280,
+        'max_output_tokens': 800,
         'stream': False,
     },
 }

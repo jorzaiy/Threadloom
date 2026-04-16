@@ -5,6 +5,15 @@ import json
 import re
 from copy import deepcopy
 
+
+def _strip_code_fences(text: str) -> str:
+    """去除 LLM 回复中的 markdown 代码围栏。"""
+    text = text.strip()
+    if text.startswith('```'):
+        text = re.sub(r'^```\w*\s*\n?', '', text)
+        text = re.sub(r'\n?```\s*$', '', text)
+    return text.strip()
+
 try:
     from .llm_manager import call_role_llm
     from .runtime_store import session_paths
@@ -224,7 +233,7 @@ def ensure_npc_registry(session_id: str, history: list[dict], *, window_size: in
         user_prompt = _build_user_prompt({'entities': entities}, window_pairs, start + 1)
         try:
             reply, _usage = call_role_llm('state_keeper_candidate', NPC_BOOTSTRAP_SYSTEM, user_prompt)
-            payload = json.loads(reply)
+            payload = json.loads(_strip_code_fences(reply))
             incoming = _normalize_entities(payload.get('entities', []))
         except Exception:
             incoming = _heuristic_registry({'entities': entities}, window_pairs)
