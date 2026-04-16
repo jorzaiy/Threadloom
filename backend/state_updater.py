@@ -11,6 +11,7 @@ except Exception:
 from runtime_store import load_context, load_history, load_state, save_state, seed_default_state
 from runtime_store import load_meta
 from name_sanitizer import sanitize_runtime_name
+from entity_candidate_judge import judge_entity_candidates
 from state_bridge import infer_role_label, normalize_state_dict
 
 
@@ -54,6 +55,7 @@ GENERIC_NON_NAME_TOKENS = {
     '昨天', '昨晚', '技术性', '嘲讽地', '不要', '明明', '当九婴', '管理员', '师兄',
     '老板娘', '以下',
 }
+GENERIC_INFO_PHRASE_RE = re.compile(r'^[一二三四五六七八九十两几半多整\d]+(?:处|条|座|份|项|处私盐|路|线|页|封|张|本|箱|匣|人)?[\u4e00-\u9fff]{0,6}$')
 GENERIC_TIME_PERIODS = ('清晨', '早晨', '上午', '近午', '午后', '下午', '黄昏', '入夜', '夜晚', '深夜', '凌晨', '傍晚')
 GENERIC_LOCATION_CANDIDATE_RE = re.compile(r'([\u4e00-\u9fffA-Za-z0-9·\-]{2,24}(?:场|区|室|楼|廊|台|门前|门口|门|路|馆|堂|院|厅|阁|府|宫|殿|街|巷|亭|轩))')
 GENERIC_LOCATION_MIN_QUALITY_LEN = 3  # candidate must be ≥ 3 chars to be useful
@@ -222,11 +224,15 @@ def _looks_like_character_name(candidate: str, excluded: set[str]) -> bool:
         return False
     if text in GENERIC_NON_NAME_TOKENS:
         return False
+    if GENERIC_INFO_PHRASE_RE.match(text):
+        return False
     if any(text.endswith(token) for token in GENERIC_HONORIFIC_SUFFIXES):
         return False
     if any(token in text for token in ('那个', '这样', '这种', '什么', '哪里', '怎么', '为什么')):
         return False
     if text.startswith(GENERIC_NON_NAME_PREFIXES):
+        return False
+    if text.startswith(('先', '再', '又', '还', '仍', '继续', '低声', '终于', '忽然')):
         return False
     if any(token in text for token in GENERIC_GRAMMAR_PARTICLES):
         return False
@@ -402,6 +408,38 @@ def _extract_structured_name_candidates(body: str, seeded: list[str], excluded: 
     return filtered
 
 
+def _stable_name_pool(prev_state: dict, history: list[dict]) -> list[str]:
+    names = []
+    for item in (prev_state.get('scene_entities', []) or []):
+        if not isinstance(item, dict):
+            continue
+        primary = sanitize_runtime_name(item.get('primary_label', ''))
+        if primary and primary not in names:
+            names.append(primary)
+        for alias in (item.get('aliases', []) or []):
+            alias_text = sanitize_runtime_name(alias)
+            if alias_text and alias_text not in names:
+                names.append(alias_text)
+    for field in ('onstage_npcs', 'relevant_npcs'):
+        for item in (prev_state.get(field, []) or []):
+            text = sanitize_runtime_name(item)
+            if text and text not in names:
+                names.append(text)
+    for item in (prev_state.get('important_npcs', []) or []):
+        if not isinstance(item, dict):
+            continue
+        text = sanitize_runtime_name(item.get('primary_label', ''))
+        if text and text not in names:
+            names.append(text)
+    for item in history[-8:]:
+        if item.get('role') != 'assistant':
+            continue
+        source_name = sanitize_runtime_name(item.get('source_name', ''))
+        if source_name and source_name not in names:
+            names.append(source_name)
+    return names[:20]
+
+
 def extract_generic_character_names(text: str, prev_state: dict, context: dict, history: list[dict], limit: int = 6) -> list[str]:
     body = _strip_scene_header(text)
     seeded = _seed_character_names(prev_state, context, history)
@@ -423,6 +461,20 @@ def extract_generic_character_names(text: str, prev_state: dict, context: dict, 
         scored.append((_score_name_candidate(name, body, seeded), name))
 
     scored.sort(key=lambda item: (-item[0], body.find(item[1]) if item[1] in body else 10**9))
+    heuristic_candidates = [name for _score, name in scored[: max(limit * 2, 8)]]
+    judged = judge_entity_candidates(heuristic_candidates, body, _stable_name_pool(prev_state, history))
+    if judged is not None:
+        accepted = []
+        for name in judged:
+            if name in excluded:
+                continue
+            if not _looks_like_character_name(name, excluded):
+                continue
+            if name not in accepted:
+                accepted.append(name)
+            if len(accepted) >= limit:
+                break
+        return accepted
     return [name for _score, name in scored[:limit]]
 
 
@@ -1331,6 +1383,8 @@ def infer_focal_entity_generic(text: str, prev_state: dict, context: dict, histo
     if not names:
         return None
     primary = names[0]
+    if primary in {'暗影', '黑影', '影子', '人影'}:
+        return None
     return {
         'primary_label': primary,
         'aliases': [primary],
@@ -1349,6 +1403,24 @@ def prioritize_scene_targets(text: str, onstage: list[str]) -> list[str]:
 
 
 def build_scene_entities(onstage: list[str], text: str = '', focal_entity: dict | None = None) -> list[dict]:
+    def _descriptor_signature(name: str) -> str:
+        text_value = sanitize_runtime_name(name)
+        for suffix in ('身影', '背影', '影子', '影', '之人', '那人', '此人', '来人', '男人', '女人', '女子', '青年', '少年', '老者', '壮汉', '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人'):
+            if text_value.endswith(suffix) and len(text_value) > len(suffix):
+                return text_value[:-len(suffix)].strip()
+        return text_value
+
+    def _labels_compatible(left: str, right: str) -> bool:
+        left_text = sanitize_runtime_name(left)
+        right_text = sanitize_runtime_name(right)
+        if not left_text or not right_text:
+            return False
+        if left_text == right_text:
+            return True
+        if left_text in {'暗影', '黑影', '影子', '人影'} or right_text in {'暗影', '黑影', '影子', '人影'}:
+            return False
+        return bool(_descriptor_signature(left_text) and _descriptor_signature(left_text) == _descriptor_signature(right_text))
+
     entities = []
     for idx, name in enumerate(onstage, start=1):
         entity = {
@@ -1364,7 +1436,7 @@ def build_scene_entities(onstage: list[str], text: str = '', focal_entity: dict 
         entities.append(entity)
     if focal_entity and focal_entity.get('primary_label'):
         names = {item['primary_label'] for item in entities}
-        if focal_entity['primary_label'] not in names:
+        if not any(_labels_compatible(focal_entity['primary_label'], existing) for existing in names):
             focal = dict(focal_entity)
             focal.setdefault('entity_id', f'scene_npc_{len(entities)+1:02d}')
             focal.setdefault('collective', False)
@@ -1374,7 +1446,52 @@ def build_scene_entities(onstage: list[str], text: str = '', focal_entity: dict 
 
 
 def build_scene_entities_generic(onstage: list[str], prev_state: dict, context: dict, history: list[dict], text: str = '', focal_entity: dict | None = None) -> list[dict]:
+    def _descriptor_signature(name: str) -> str:
+        text_value = sanitize_runtime_name(name)
+        for suffix in ('身影', '背影', '影子', '影', '之人', '那人', '此人', '来人', '男人', '女人', '女子', '青年', '少年', '老者', '壮汉', '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人'):
+            if text_value.endswith(suffix) and len(text_value) > len(suffix):
+                return text_value[:-len(suffix)].strip()
+        return text_value
+
+    def _labels_compatible(left: str, right: str) -> bool:
+        left_text = sanitize_runtime_name(left)
+        right_text = sanitize_runtime_name(right)
+        if not left_text or not right_text:
+            return False
+        if left_text == right_text:
+            return True
+        if left_text in {'暗影', '黑影', '影子', '人影'} or right_text in {'暗影', '黑影', '影子', '人影'}:
+            return False
+        return bool(_descriptor_signature(left_text) and _descriptor_signature(left_text) == _descriptor_signature(right_text))
+
+    def _find_prev_entity_id(name: str, prev_entities: list[dict], used_ids: set[str]) -> str:
+        target = sanitize_runtime_name(name)
+        if not target:
+            return ''
+        for item in prev_entities or []:
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get('entity_id', '') or '').strip()
+            if not entity_id or entity_id in used_ids:
+                continue
+            primary = sanitize_runtime_name(item.get('primary_label', ''))
+            aliases = [sanitize_runtime_name(alias) for alias in (item.get('aliases', []) or []) if sanitize_runtime_name(alias)]
+            if any(_labels_compatible(target, candidate) for candidate in [primary] + aliases if candidate):
+                return entity_id
+        return ''
+
     entities = []
+    prev_entities = [item for item in (prev_state.get('scene_entities', []) or []) if isinstance(item, dict)]
+    used_ids: set[str] = set()
+    max_prev_idx = 0
+    for item in prev_entities:
+        entity_id = str(item.get('entity_id', '') or '').strip()
+        if entity_id.startswith('scene_npc_'):
+            try:
+                max_prev_idx = max(max_prev_idx, int(entity_id.split('_')[-1]))
+            except Exception:
+                pass
+    next_id = max_prev_idx + 1 if max_prev_idx else 1
     for idx, name in enumerate(onstage, start=1):
         prev_role_label = ''
         for item in (prev_state.get('scene_entities', []) or []):
@@ -1383,8 +1500,13 @@ def build_scene_entities_generic(onstage: list[str], prev_state: dict, context: 
             if sanitize_runtime_name(item.get('primary_label', '')) == name:
                 prev_role_label = str(item.get('role_label', '') or '').strip()
                 break
+        entity_id = _find_prev_entity_id(name, prev_entities, used_ids)
+        if not entity_id:
+            entity_id = f'scene_npc_{next_id:02d}'
+            next_id += 1
+        used_ids.add(entity_id)
         entity = {
-            'entity_id': f'scene_npc_{idx:02d}',
+            'entity_id': entity_id,
             'primary_label': name,
             'aliases': [name],
             'role_label': prev_role_label or '待确认',
@@ -1397,11 +1519,16 @@ def build_scene_entities_generic(onstage: list[str], prev_state: dict, context: 
 
     if focal_entity and focal_entity.get('primary_label'):
         existing = {item['primary_label'] for item in entities}
-        if focal_entity['primary_label'] not in existing:
+        if not any(_labels_compatible(focal_entity['primary_label'], existing_name) for existing_name in existing):
             focal = dict(focal_entity)
-            focal.setdefault('entity_id', f'scene_npc_{len(entities)+1:02d}')
+            focal_entity_id = _find_prev_entity_id(focal_entity['primary_label'], prev_entities, used_ids)
+            if not focal_entity_id:
+                focal_entity_id = f'scene_npc_{next_id:02d}'
+                next_id += 1
+            focal.setdefault('entity_id', focal_entity_id)
             focal.setdefault('collective', False)
             focal.setdefault('count_hint', None)
+            used_ids.add(focal['entity_id'])
             entities.insert(0, focal)
 
     return entities

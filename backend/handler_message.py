@@ -16,11 +16,11 @@ try:
     from .opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
     from .model_config import resolve_provider_model
     from .model_client import call_model
-    from .narrator_input import build_narrator_input
+    from .model_client import looks_incomplete_reply
+    from .narrator_input import build_narrator_input, prompt_block_stats
     from .paths import normalize_session_id
     from .state_fragment import build_state_fragment, build_state_from_fragment
     from .state_keeper import call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
-    from .summary_updater import update_summary
     from .state_updater import update_state
     from .persona_updater import update_persona
     from .state_fragment import merge_state_skeleton
@@ -37,11 +37,11 @@ except ImportError:
     from opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
     from model_config import resolve_provider_model
     from model_client import call_model
-    from narrator_input import build_narrator_input
+    from model_client import looks_incomplete_reply
+    from narrator_input import build_narrator_input, prompt_block_stats
     from paths import normalize_session_id
     from state_fragment import build_state_fragment, build_state_from_fragment
     from state_keeper import call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
-    from summary_updater import update_summary
     from state_updater import update_state
     from persona_updater import update_persona
     from state_fragment import merge_state_skeleton
@@ -70,10 +70,34 @@ def _trace_context_excerpt(context: dict) -> dict:
                 'title': item.get('title'),
                 'summary': item.get('summary'),
                 'priority': item.get('priority'),
+                'source': item.get('source'),
             }
             for item in (context.get('lorebook_npc_candidates', []) or [])
             if isinstance(item, dict) and item.get('name')
         ],
+        'system_npc_candidates': [
+            {
+                'name': item.get('name'),
+                'title': item.get('title'),
+                'summary': item.get('summary'),
+                'priority': item.get('priority'),
+                'source': item.get('source'),
+            }
+            for item in (context.get('system_npc_candidates', []) or [])
+            if isinstance(item, dict) and item.get('name')
+        ],
+        'continuity_candidates': [
+            {
+                'name': item.get('name'),
+                'title': item.get('title'),
+                'summary': item.get('summary'),
+                'priority': item.get('priority'),
+                'source': item.get('source'),
+            }
+            for item in (context.get('continuity_candidates', []) or [])
+            if isinstance(item, dict) and item.get('name')
+        ],
+        'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
         'recent_history_count': len(context.get('recent_history', []) or []),
     }
 
@@ -190,6 +214,11 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         _save_turn_trace_safe(session_id, turn_id, active_trace)
         return response
 
+    def append_turn_history(*, assistant_item: dict | None = None) -> None:
+        append_history(session_id, {'ts': ts, 'role': 'user', 'content': text})
+        if assistant_item is not None:
+            append_history(session_id, assistant_item)
+
     def finalize_opening_choice(choice: str) -> dict[str, Any]:
         state = initialize_opening_choice_state(session_id, choice)
         opening_prompt = build_opening_choice_reply(choice)
@@ -207,7 +236,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             }
         state['opening_started'] = True
         save_state(session_id, state)
-        append_history(session_id, {'ts': ts + 1, 'role': 'assistant', 'content': reply})
+        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
         response = {
             'session_id': session_id,
             'turn_id': turn_id,
@@ -251,8 +280,6 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         }
         return finalize_response(response, trace=trace)
 
-    append_history(session_id, {'ts': ts, 'role': 'user', 'content': text})
-
     state = load_state(session_id)
     if state.get('opening_mode') == 'menu' and not state.get('opening_resolved'):
         choice = resolve_opening_choice(text)
@@ -260,7 +287,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             return finalize_opening_choice(choice)
 
         reply = build_opening_reply(text) if is_opening_command(text) else '当前还在选择开局。请直接报数字、开局标题，或输入“随机开局”。'
-        append_history(session_id, {'ts': ts + 1, 'role': 'assistant', 'content': reply})
+        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
         response = {
             'session_id': session_id,
             'turn_id': turn_id,
@@ -298,7 +325,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
 
     if state.get('opening_resolved') and state.get('opening_started') and is_opening_command(text):
         reply = '当前开局已经开始。若要重新选择开局，请点击“开始新游戏”。'
-        append_history(session_id, {'ts': ts + 1, 'role': 'assistant', 'content': reply})
+        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
         response = {
             'session_id': session_id,
             'turn_id': turn_id,
@@ -332,7 +359,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     if meta['last_turn_id'] == 0 and is_opening_command(text):
         state = initialize_opening_state(session_id)
         reply = build_opening_reply(text)
-        append_history(session_id, {'ts': ts + 1, 'role': 'assistant', 'content': reply})
+        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
         response = {
             'session_id': session_id,
             'turn_id': turn_id,
@@ -382,9 +409,12 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     context = dict(context)
     context['state_fragment'] = state_fragment
     system_prompt, user_prompt = build_narrator_input(context, text, arbiter_result=arbiter_result)
+    prompt_stats = prompt_block_stats(system_prompt)
     turn_trace['runtime']['narrator'] = {
         'system_prompt': _trim_trace_text(system_prompt),
         'user_prompt': _trim_trace_text(user_prompt),
+        'prompt_block_stats': copy.deepcopy(prompt_stats),
+        'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
     }
     model_cfg = resolve_provider_model('narrator')
     model_error = None
@@ -406,7 +436,10 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     turn_trace['runtime']['narrator']['model_error'] = model_error
     finish_reason = usage.get('finish_reason')
     completion_status = 'partial' if finish_reason == 'length' else 'complete'
-    append_history(session_id, {'ts': ts + 1, 'role': 'assistant', 'content': reply, 'completion_status': completion_status})
+    if completion_status == 'complete' and looks_incomplete_reply(reply):
+        completion_status = 'partial'
+        finish_reason = finish_reason or 'incomplete'
+        usage['finish_reason'] = finish_reason
     turn_trace['runtime']['completion'] = {
         'completion_status': completion_status,
         'finish_reason': finish_reason,
@@ -442,6 +475,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     turn_trace['runtime']['state_fragment_final'] = copy.deepcopy(state_fragment)
 
     if completion_status == 'partial':
+        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply, 'completion_status': completion_status})
         response = {
             'session_id': session_id,
             'turn_id': turn_id,
@@ -461,6 +495,10 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'model_error': model_error,
                 'completion_status': completion_status,
                 'finish_reason': finish_reason,
+                'prompt_block_stats': copy.deepcopy(prompt_stats),
+                'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
+                'system_npc_candidate_count': len(context.get('system_npc_candidates', []) or []),
+                'lorebook_npc_candidate_count': len(context.get('lorebook_npc_candidates', []) or []),
             }
         meta['last_turn_id'] += 1
         if client_turn_id:
@@ -534,14 +572,14 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'state_error': state_error,
     }
     turn_trace['runtime']['state_after_keeper'] = copy.deepcopy(state)
+    append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply, 'completion_status': completion_status})
     state = merge_arbiter_state(state, arbiter)
     state = apply_thread_tracker(state, user_text=text, narrator_reply=reply, arbiter=arbiter)
     state['continuity_hints'] = normalized_hint_entries(session_id)
-    state = update_important_npcs(state, load_history(session_id), context.get('lorebook_npc_candidates', []))
+    state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
     state = resolve_important_npc_continuity(state)
     save_state(session_id, state)
-    persona_counts = update_persona(session_id, context.get('lorebook_npc_candidates', []))
-    update_summary(session_id)
+    persona_counts = update_persona(session_id, context.get('continuity_candidates', []))
 
     response = {
         'session_id': session_id,
@@ -581,12 +619,16 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'skeleton_keeper_diagnostics': skeleton_keeper_diagnostics,
             'model_error': model_error,
             'state_error': state_error,
-            'state_keeper_diagnostics': state_keeper_diagnostics,
-            'persona_counts': persona_counts,
-            'arbiter_results': arbiter.get('results', []),
-            'retained_threads': retained_threads,
-            'retained_entities': retained_entities,
-        }
+                'state_keeper_diagnostics': state_keeper_diagnostics,
+                'persona_counts': persona_counts,
+                'arbiter_results': arbiter.get('results', []),
+                'retained_threads': retained_threads,
+                'retained_entities': retained_entities,
+                'prompt_block_stats': copy.deepcopy(prompt_stats),
+                'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
+                'system_npc_candidate_count': len(context.get('system_npc_candidates', []) or []),
+                'lorebook_npc_candidate_count': len(context.get('lorebook_npc_candidates', []) or []),
+            }
 
     meta['last_turn_id'] += 1
     if client_turn_id:
@@ -595,7 +637,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     turn_trace['post_turn'] = {
         'state': copy.deepcopy(state),
         'state_snapshot': build_state_snapshot(state),
-        'summary_updated': True,
+        'summary_updated': False,
         'persona_counts': copy.deepcopy(persona_counts),
     }
     return finalize_response(response)

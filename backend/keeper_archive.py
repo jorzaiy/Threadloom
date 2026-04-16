@@ -6,10 +6,14 @@ import json
 try:
     from .mid_context_agent import build_mid_window_digest
     from .npc_bootstrap_agent import ensure_npc_registry
+    from .object_bootstrap_agent import ensure_object_registry
+    from .clue_bootstrap_agent import ensure_clue_registry
     from .runtime_store import load_history, load_state, session_paths
 except ImportError:
     from mid_context_agent import build_mid_window_digest
     from npc_bootstrap_agent import ensure_npc_registry
+    from object_bootstrap_agent import ensure_object_registry
+    from clue_bootstrap_agent import ensure_clue_registry
     from runtime_store import load_history, load_state, session_paths
 
 
@@ -17,6 +21,8 @@ def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overl
     history = load_history(session_id)
     state = load_state(session_id)
     registry = ensure_npc_registry(session_id, history)
+    ensure_object_registry(session_id, history)
+    ensure_clue_registry(session_id, history)
 
     pairs = []
     current_user = None
@@ -65,6 +71,8 @@ def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overl
         'version': 1,
         'window_size': window_size,
         'recent_window_pairs': overlap_recent_pairs,
+        'source_pair_count': len(pairs),
+        'history_message_count': len(history),
         'records': records,
         'npc_registry': registry,
     }
@@ -73,7 +81,10 @@ def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overl
 def save_keeper_record_archive(session_id: str, archive: dict) -> None:
     path = session_paths(session_id)['keeper_archive']
     path.parent.mkdir(parents=True, exist_ok=True)
-    from .runtime_store import _atomic_write_json
+    try:
+        from .runtime_store import _atomic_write_json
+    except ImportError:
+        from runtime_store import _atomic_write_json
     _atomic_write_json(path, archive)
 
 

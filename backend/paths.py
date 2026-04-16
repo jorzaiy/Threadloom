@@ -10,10 +10,13 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = APP_ROOT.parent
 RUNTIME_DATA_ROOT = APP_ROOT / 'runtime-data'
 DEFAULT_USER_ID = 'default-user'
+DEFAULT_USER_LABEL = 'default_user'
+ACTIVE_CHARACTER_CONFIG_NAME = 'active-character.json'
 SESSION_ID_RE = re.compile(r'^[0-9A-Za-z_\-\u4e00-\u9fff]+$')
 TURN_ID_RE = re.compile(r'^[0-9A-Za-z_-]+$')
 MAX_SESSION_ID_LENGTH = 120
 MAX_TURN_ID_LENGTH = 120
+_ACTIVE_CHARACTER_ID_OVERRIDE: str | None = None
 
 
 def detect_shared_root() -> Path:
@@ -65,6 +68,52 @@ def active_user_id() -> str:
     return DEFAULT_USER_ID
 
 
+DEFAULT_CHARACTER_ID = '碎影江湖'
+TEMPLATE_ROOT = RUNTIME_DATA_ROOT / '_template'
+
+
+def ensure_user_root(user_id: str | None = None) -> Path:
+    """确保用户目录结构存在。新用户自动获得默认角色卡。"""
+    import shutil
+    uid = user_id or active_user_id()
+    root = RUNTIME_DATA_ROOT / uid
+    if root.exists():
+        return root
+    # 创建基本目录结构
+    (root / 'config').mkdir(parents=True, exist_ok=True)
+    (root / 'profile').mkdir(parents=True, exist_ok=True)
+    (root / 'presets').mkdir(parents=True, exist_ok=True)
+    (root / 'characters').mkdir(parents=True, exist_ok=True)
+    # 复制默认角色卡
+    template_card = TEMPLATE_ROOT / 'characters' / DEFAULT_CHARACTER_ID
+    if not template_card.exists():
+        # 回退到 default-user 的碎影江湖
+        template_card = RUNTIME_DATA_ROOT / DEFAULT_USER_ID / 'characters' / DEFAULT_CHARACTER_ID
+    if template_card.exists():
+        target = root / 'characters' / DEFAULT_CHARACTER_ID
+        shutil.copytree(str(template_card), str(target), dirs_exist_ok=True)
+    # 设置默认角色
+    config_file = root / 'config' / ACTIVE_CHARACTER_CONFIG_NAME
+    config_file.write_text(json.dumps({'character_id': DEFAULT_CHARACTER_ID}, ensure_ascii=False), encoding='utf-8')
+    return root
+
+
+def active_user_label() -> str:
+    if active_user_id() == DEFAULT_USER_ID:
+        return DEFAULT_USER_LABEL
+    return active_user_id()
+
+
+def set_active_character_override(character_id: str | None) -> None:
+    global _ACTIVE_CHARACTER_ID_OVERRIDE
+    value = str(character_id or '').strip()
+    _ACTIVE_CHARACTER_ID_OVERRIDE = value or None
+
+
+def clear_active_character_override() -> None:
+    set_active_character_override(None)
+
+
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -75,6 +124,13 @@ def _read_json(path: Path) -> dict:
 
 
 def active_character_id() -> str:
+    if _ACTIVE_CHARACTER_ID_OVERRIDE:
+        return _ACTIVE_CHARACTER_ID_OVERRIDE
+    active_path = user_config_root() / ACTIVE_CHARACTER_CONFIG_NAME
+    active_data = _read_json(active_path)
+    configured = str(active_data.get('character_id', '') or '').strip()
+    if configured:
+        return _slug(configured, 'character')
     character_path = SHARED_ROOT / 'character' / 'character-data.json'
     data = _read_json(character_path)
     name = str(data.get('name', '') or '').strip()
@@ -251,9 +307,6 @@ def resolve_layered_source(path_str: str) -> Path:
     text = str(path_str or '').strip()
     if not text:
         return SHARED_ROOT
-    direct = resolve_legacy_source(text)
-    if direct.exists():
-        return direct
 
     mappings = {
         'USER.md': resolve_source_key('user.user_md'),
@@ -271,4 +324,8 @@ def resolve_layered_source(path_str: str) -> Path:
     mapped = mappings.get(text)
     if mapped and mapped.exists():
         return mapped
+
+    direct = resolve_legacy_source(text)
+    if direct.exists():
+        return direct
     return direct

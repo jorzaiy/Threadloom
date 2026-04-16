@@ -175,19 +175,16 @@ def is_complete_assistant_item(item: dict) -> bool:
 
 
 def append_history(session_id: str, item: dict) -> None:
-    path = session_paths(session_id)['history']
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('a', encoding='utf-8') as f:
-        f.write(json.dumps(item, ensure_ascii=False) + '\n')
-    invalidate_history_cache(session_id)
+    items = load_history(session_id)
+    items.append(item)
+    save_history(session_id, items)
 
 
 def save_history(session_id: str, items: list[dict]) -> None:
     path = session_paths(session_id)['history']
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('w', encoding='utf-8') as f:
-        for item in items:
-            f.write(json.dumps(item, ensure_ascii=False) + '\n')
+    content = ''.join(json.dumps(item, ensure_ascii=False) + '\n' for item in (items or []))
+    _atomic_write_text(path, content)
+    invalidate_history_cache(session_id)
 
 
 def load_state(session_id: str) -> dict:

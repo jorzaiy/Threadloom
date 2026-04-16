@@ -12,12 +12,12 @@ try:
     from .bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from .opening import build_opening_reply, initialize_opening_state
     from .paths import iter_session_dirs, managed_session_id_from_path, normalize_session_id, resolve_session_dir, session_archive_target
-    from .runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, save_summary, session_paths
+    from .runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, session_paths
 except ImportError:
     from bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from opening import build_opening_reply, initialize_opening_state
     from paths import iter_session_dirs, managed_session_id_from_path, normalize_session_id, resolve_session_dir, session_archive_target
-    from runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, save_summary, session_paths
+    from runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, session_paths
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -215,7 +215,6 @@ def start_new_game(session_id: str) -> dict:
     root_canon = read_text(resolve_source(sources['canon']))
 
     save_canon(new_session_id, root_canon if root_canon.strip() else '# Canon\n\n## 世界长期事实\n- 待确认\n')
-    save_summary(new_session_id, '# Summary\n\n## 当前状态锚点\n- 暂无\n\n## 活跃线程\n- 暂无\n\n## 当前裁定信号\n- 暂无\n\n## 最近变化\n- 暂无\n\n## 未决问题\n- 暂无\n')
     state = initialize_opening_state(new_session_id)
     state['continuity_hints'] = []
     state['important_npcs'] = []

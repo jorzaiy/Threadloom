@@ -19,6 +19,7 @@ try:
     from .model_config import load_runtime_config
     from .state_fragment import build_state_from_fragment
     from .name_sanitizer import is_protagonist_name, protagonist_names
+    from .name_sanitizer import sanitize_runtime_name
     from .card_hints import (
         get_environment_tokens, get_transient_group_tokens,
         get_non_character_object_tokens, get_generic_target_tokens,
@@ -32,6 +33,7 @@ except ImportError:
     from model_config import load_runtime_config
     from state_fragment import build_state_from_fragment
     from name_sanitizer import is_protagonist_name, protagonist_names
+    from name_sanitizer import sanitize_runtime_name
     from card_hints import (
         get_environment_tokens, get_transient_group_tokens,
         get_non_character_object_tokens, get_generic_target_tokens,
@@ -760,6 +762,52 @@ def _coerce_candidate_entity_item(item) -> dict | None:
     }
 
 
+def _descriptor_signature(name: str) -> str:
+    text = sanitize_runtime_name(name)
+    if not text:
+        return ''
+    for suffix in (
+        '身影', '背影', '影子', '影', '之人', '那人', '此人', '来人',
+        '男人', '女人', '女子', '青年', '少年', '老者', '壮汉',
+        '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
+    ):
+        if text.endswith(suffix) and len(text) > len(suffix):
+            return text[:-len(suffix)].strip()
+    return text
+
+
+def _labels_compatible(left: str, right: str) -> bool:
+    left_text = sanitize_runtime_name(left)
+    right_text = sanitize_runtime_name(right)
+    if not left_text or not right_text:
+        return False
+    if left_text == right_text:
+        return True
+    if _is_shadow_like_label(left_text) or _is_shadow_like_label(right_text):
+        return False
+    left_sig = _descriptor_signature(left_text)
+    right_sig = _descriptor_signature(right_text)
+    return bool(left_sig and right_sig and left_sig == right_sig)
+
+
+def _is_shadow_like_label(name: str) -> bool:
+    text = sanitize_runtime_name(name)
+    if not text:
+        return True
+    if text in {'暗影', '黑影', '影子', '人影'}:
+        return True
+    if text.endswith(('身影', '背影')):
+        return True
+    return False
+
+
+def _is_generic_role_label(role_label: str) -> bool:
+    text = str(role_label or '').strip()
+    if not text:
+        return True
+    return text in {'待确认', '当前互动核心人物', '相关场景人物', '当前场景人物'}
+
+
 def _looks_like_environment_entity(name: str, role_label: str) -> bool:
     text = f'{name} {role_label}'.strip()
     if not text:
@@ -862,6 +910,23 @@ def _semantic_cleanup(payload: dict, prev_state: dict, state_fragment: dict) -> 
     def clean_legacy_entities() -> tuple[list[dict], list[str], list[str]]:
         cleaned_entities = []
         seen_names: set[str] = set()
+        seen_entity_ids: dict[str, str] = {}
+        raw_entities = [item for item in (normalized.get('scene_entities', []) or []) if isinstance(item, dict)]
+        raw_labels = [
+            _canonical_character_name(item.get('primary_label', ''), known_names)
+            for item in raw_entities
+            if _canonical_character_name(item.get('primary_label', ''), known_names)
+        ]
+        max_entity_idx = 0
+        for item in raw_entities:
+            entity_id = str(item.get('entity_id', '') or '').strip()
+            if entity_id.startswith('scene_npc_'):
+                try:
+                    max_entity_idx = max(max_entity_idx, int(entity_id.split('_')[-1]))
+                except Exception:
+                    pass
+        next_entity_idx = max_entity_idx + 1 if max_entity_idx else 1
+
         for idx, item in enumerate(normalized.get('scene_entities', []) or []):
             if not isinstance(item, dict):
                 continue
@@ -869,16 +934,36 @@ def _semantic_cleanup(payload: dict, prev_state: dict, state_fragment: dict) -> 
             role_label = _role_label_for_name(primary, item.get('role_label', ''), scene_hint)
             if _looks_like_environment_entity(primary, role_label) or _looks_like_transient_group(primary, role_label) or _looks_like_non_character_object(primary, role_label):
                 continue
+            aliases_raw = item.get('aliases', []) or []
+            normalized_aliases = [
+                _canonical_character_name(alias, known_names)
+                for alias in aliases_raw
+                if _canonical_character_name(alias, known_names)
+            ]
+            if _is_shadow_like_label(primary):
+                has_concrete_peer = any(
+                    other != primary and not _is_shadow_like_label(other) and _labels_compatible(primary, other)
+                    for other in raw_labels
+                )
+                if has_concrete_peer and not bool(item.get('onstage')) and _is_generic_role_label(role_label):
+                    continue
+                if not bool(item.get('onstage')) and _is_generic_role_label(role_label) and len(normalized_aliases) == 0:
+                    continue
             if not primary or primary in seen_names:
                 continue
             seen_names.add(primary)
             aliases = [primary]
-            for alias in item.get('aliases', []) or []:
-                alias_text = _canonical_character_name(alias, known_names)
+            for alias_text in normalized_aliases:
                 if alias_text and alias_text not in aliases and not _looks_like_environment_entity(alias_text, role_label) and not _looks_like_transient_group(alias_text, role_label) and not _looks_like_non_character_object(alias_text, role_label):
                     aliases.append(alias_text)
+            entity_id = str(item.get('entity_id', f'scene_npc_{idx + 1:02d}') or f'scene_npc_{idx + 1:02d}').strip()
+            prior_primary = seen_entity_ids.get(entity_id, '')
+            if prior_primary and prior_primary != primary and not _labels_compatible(prior_primary, primary):
+                entity_id = f'scene_npc_{next_entity_idx:02d}'
+                next_entity_idx += 1
+            seen_entity_ids[entity_id] = primary
             cleaned_entities.append({
-                'entity_id': str(item.get('entity_id', f'scene_npc_{idx + 1:02d}') or f'scene_npc_{idx + 1:02d}').strip(),
+                'entity_id': entity_id,
                 'primary_label': primary,
                 'aliases': aliases[:4],
                 'role_label': role_label,
@@ -922,6 +1007,15 @@ def _semantic_cleanup(payload: dict, prev_state: dict, state_fragment: dict) -> 
     if candidate_entities:
         for item in candidate_entities:
             slot = _slot_hint_for_candidate(item, scene_hint)
+            if item['entity_type'] == 'character' and _is_shadow_like_label(item.get('surface', '')):
+                strong_shadow_signal = (
+                    item['confidence'] >= 0.85
+                    and bool(item.get('onstage'))
+                    and not _is_generic_role_label(item.get('role_hint', ''))
+                    and bool(item.get('evidence'))
+                )
+                if not strong_shadow_signal:
+                    continue
             if item['entity_type'] == 'object' or slot == 'key_object':
                 if item['confidence'] >= 0.45:
                     key_objects.append({

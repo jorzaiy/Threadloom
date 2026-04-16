@@ -21,3 +21,10 @@ memory/
 runtime/
 
 .DS_Store
+
+.venv*/
+.codex
+
+runtime-data/default-user/
+runtime-data/_system/
+tmp/

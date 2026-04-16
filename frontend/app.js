@@ -40,6 +40,11 @@ const characterImportFileInput = document.getElementById('characterImportFileInp
 const characterImportNameInput = document.getElementById('characterImportNameInput');
 const importCharacterBtn = document.getElementById('importCharacterBtn');
 const characterImportNote = document.getElementById('characterImportNote');
+const chatImportFileInput = document.getElementById('chatImportFileInput');
+const chatImportPreviewBtn = document.getElementById('chatImportPreviewBtn');
+const chatImportBtn = document.getElementById('chatImportBtn');
+const chatImportPreview = document.getElementById('chatImportPreview');
+const chatImportNote = document.getElementById('chatImportNote');
 
 let lastDebug = null;
 let lastCharacterCard = null;
@@ -81,6 +86,9 @@ let modelConfig = {
   },
 };
 let characterItems = [];
+let currentUserId = 'default-user';
+let multiUserEnabled = false;
+let sessionToken = localStorage.getItem('threadloom_token') || '';
 
 function applyWebConfig(nextConfig = {}) {
   webConfig = {
@@ -305,6 +313,12 @@ function validateRuntimeDraft(draft) {
 }
 
 async function apiJson(url, options = {}) {
+  if (sessionToken) {
+    options.headers = { ...options.headers, 'Authorization': `Bearer ${sessionToken}` };
+  }
+  if (options.body && !options.headers?.['Content-Type']) {
+    options.headers = { ...options.headers, 'Content-Type': 'application/json' };
+  }
   const res = await fetch(url, options);
   const data = await res.json();
   if (!res.ok) {
@@ -449,6 +463,9 @@ async function saveSiteConfig() {
     ...data,
   };
   renderSiteConfig();
+  // 关闭首次设置引导
+  const guide = document.getElementById('llmSetupGuide');
+  if (guide) guide.hidden = true;
   setStatus('站点已保存', 'ok');
 }
 
@@ -1299,9 +1316,219 @@ importCharacterBtn?.addEventListener('click', async () => {
   }
 });
 
+/* --- 聊天记录导入 --- */
+let _chatImportContentB64 = null;
+
+chatImportPreviewBtn?.addEventListener('click', async () => {
+  const file = chatImportFileInput?.files?.[0];
+  if (!file) { _chatNote('请先选择 .jsonl 文件', 'error'); return; }
+  try {
+    _chatNote('校验中...', '');
+    chatImportBtn.disabled = true;
+    _chatImportContentB64 = null;
+    const raw = await _readFileBase64(file);
+    const resp = await apiJson('/api/chat/preview', { method: 'POST', body: JSON.stringify({ content_base64: raw }) });
+    _chatImportContentB64 = raw;
+    const p = chatImportPreview;
+    if (p) {
+      p.hidden = false;
+      const ok = resp.match;
+      p.dataset.kind = ok ? 'ok' : 'warning';
+      p.innerHTML = `角色名：<b>${resp.inferred_character || '未知'}</b>` +
+        ` | 期望：<b>${resp.expected_character || '当前角色'}</b>` +
+        ` | 消息：${resp.message_count || 0} 条` +
+        (ok ? ' ✓ 匹配' : ' ⚠ 不匹配（名称不一致）');
+    }
+    chatImportBtn.disabled = !resp.match;
+    _chatNote(resp.match ? '校验通过，可以导入' : '角色名不匹配，请检查', resp.match ? 'ok' : 'warning');
+  } catch (err) {
+    _chatNote(err.message, 'error');
+  }
+});
+
+chatImportBtn?.addEventListener('click', async () => {
+  if (!_chatImportContentB64) { _chatNote('请先预览检查', 'error'); return; }
+  try {
+    _chatNote('导入中...', '');
+    chatImportBtn.disabled = true;
+    const file = chatImportFileInput?.files?.[0];
+    const resp = await apiJson('/api/chat/import', {
+      method: 'POST',
+      body: JSON.stringify({
+        content_base64: _chatImportContentB64,
+        filename: file?.name || 'imported.jsonl',
+      }),
+    });
+    _chatImportContentB64 = null;
+    if (chatImportPreview) chatImportPreview.hidden = true;
+    chatImportBtn.disabled = true;
+    const r = resp.report || {};
+    _chatNote(`导入成功：${r.stats?.imported_message_count || 0} 条消息 → 会话 ${r.target_session || ''}`, 'ok');
+    setStatus('聊天记录已导入', 'ok');
+    await loadSessions();
+    if (r.target_session) {
+      currentSessionId = r.target_session;
+      updateSessionIndicator();
+      resetSidePanels();
+      await loadHistory();
+      await loadState();
+      renderSessionDock();
+    }
+  } catch (err) {
+    chatImportBtn.disabled = false;
+    _chatNote(err.message, 'error');
+  }
+});
+
+function _chatNote(msg, kind) {
+  if (chatImportNote) { chatImportNote.textContent = msg; chatImportNote.dataset.kind = kind || ''; }
+}
+
+function _readFileBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = () => reject(new Error('文件读取失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/* --- 多用户管理 --- */
+const loginOverlay = document.getElementById('loginOverlay');
+const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+const loginUserId = document.getElementById('loginUserId');
+const loginPassword = document.getElementById('loginPassword');
+const loginNote = document.getElementById('loginNote');
+const userManagementSection = document.getElementById('userManagementSection');
+const multiUserToggle = document.getElementById('multiUserToggle');
+const adminPasswordSection = document.getElementById('adminPasswordSection');
+const userListSection = document.getElementById('userListSection');
+const userManagementNote = document.getElementById('userManagementNote');
+
+function showLoginModal() {
+  if (loginOverlay) loginOverlay.hidden = false;
+}
+
+function hideLoginModal() {
+  if (loginOverlay) loginOverlay.hidden = true;
+}
+
+loginSubmitBtn?.addEventListener('click', async () => {
+  const uid = loginUserId?.value?.trim() || '';
+  const pwd = loginPassword?.value || '';
+  if (!uid) { if (loginNote) { loginNote.textContent = '请输入用户名'; loginNote.dataset.kind = 'error'; } return; }
+  try {
+    const data = await apiJson('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: uid, password: pwd }),
+    });
+    sessionToken = data.token;
+    currentUserId = data.user_id;
+    localStorage.setItem('threadloom_token', sessionToken);
+    hideLoginModal();
+    location.reload();
+  } catch (err) {
+    if (loginNote) { loginNote.textContent = err.message; loginNote.dataset.kind = 'error'; }
+  }
+});
+
+async function checkAuth() {
+  try {
+    const data = await apiJson('/api/auth/me');
+    currentUserId = data.user_id;
+    multiUserEnabled = data.multi_user_enabled;
+    if (multiUserEnabled && !sessionToken && currentUserId === 'default-user') {
+      // 多用户模式但无令牌 → 仍可用默认用户（兼容无密码管理员）
+    }
+  } catch { /* ignore */ }
+}
+
+async function loadUserManagement() {
+  if (currentUserId !== 'default-user') {
+    if (userManagementSection) userManagementSection.hidden = true;
+    return;
+  }
+  if (userManagementSection) userManagementSection.hidden = false;
+  if (multiUserToggle) multiUserToggle.value = multiUserEnabled ? 'on' : 'off';
+  if (adminPasswordSection) adminPasswordSection.hidden = !multiUserEnabled;
+  if (userListSection) userListSection.hidden = !multiUserEnabled;
+  if (multiUserEnabled) await renderUserList();
+}
+
+multiUserToggle?.addEventListener('change', async () => {
+  const enabled = multiUserToggle.value === 'on';
+  try {
+    await apiJson('/api/multi-user', { method: 'POST', body: JSON.stringify({ enabled }) });
+    multiUserEnabled = enabled;
+    if (adminPasswordSection) adminPasswordSection.hidden = !enabled;
+    if (userListSection) userListSection.hidden = !enabled;
+    if (enabled) await renderUserList();
+    _userNote(enabled ? '多用户模式已开启' : '多用户模式已关闭', 'ok');
+  } catch (err) { _userNote(err.message, 'error'); }
+});
+
+document.getElementById('setAdminPasswordBtn')?.addEventListener('click', async () => {
+  const pwd = document.getElementById('adminPasswordInput')?.value || '';
+  if (!pwd) { _userNote('密码不能为空', 'error'); return; }
+  try {
+    await apiJson('/api/users', { method: 'POST', body: JSON.stringify({ action: 'set_admin_password', password: pwd }) });
+    _userNote('管理员密码已设置', 'ok');
+    document.getElementById('adminPasswordInput').value = '';
+  } catch (err) { _userNote(err.message, 'error'); }
+});
+
+document.getElementById('createUserBtn')?.addEventListener('click', async () => {
+  const uid = document.getElementById('newUserIdInput')?.value?.trim() || '';
+  const pwd = document.getElementById('newUserPasswordInput')?.value || '';
+  if (!uid || !pwd) { _userNote('用户名和密码不能为空', 'error'); return; }
+  try {
+    await apiJson('/api/users', { method: 'POST', body: JSON.stringify({ action: 'create', user_id: uid, password: pwd }) });
+    _userNote(`用户 "${uid}" 已创建`, 'ok');
+    document.getElementById('newUserIdInput').value = '';
+    document.getElementById('newUserPasswordInput').value = '';
+    await renderUserList();
+  } catch (err) { _userNote(err.message, 'error'); }
+});
+
+async function renderUserList() {
+  const container = document.getElementById('userListContainer');
+  if (!container) return;
+  try {
+    const data = await apiJson('/api/users');
+    container.innerHTML = '';
+    for (const u of (data.users || [])) {
+      const row = document.createElement('div');
+      row.className = 'user-list-item';
+      const info = document.createElement('span');
+      info.innerHTML = `${u.user_id} <span class="user-role">${u.role}</span>`;
+      row.appendChild(info);
+      if (u.user_id !== 'default-user') {
+        const del = document.createElement('button');
+        del.className = 'user-delete-btn';
+        del.textContent = '删除';
+        del.addEventListener('click', async () => {
+          if (!confirm(`确定删除用户 "${u.user_id}"？`)) return;
+          try {
+            await apiJson('/api/users', { method: 'POST', body: JSON.stringify({ action: 'delete', user_id: u.user_id }) });
+            await renderUserList();
+            _userNote(`用户 "${u.user_id}" 已删除`, 'ok');
+          } catch (err) { _userNote(err.message, 'error'); }
+        });
+        row.appendChild(del);
+      }
+      container.appendChild(row);
+    }
+  } catch (err) { _userNote(err.message, 'error'); }
+}
+
+function _userNote(msg, kind) {
+  if (userManagementNote) { userManagementNote.textContent = msg; userManagementNote.dataset.kind = kind || ''; }
+}
+
 (async function init() {
   setStatus('初始化中...', 'working');
   try {
+    await checkAuth();
     resetSidePanels();
     await Promise.all([
       loadSessions(),
@@ -1311,11 +1538,22 @@ importCharacterBtn?.addEventListener('click', async () => {
     ]);
     await loadHistory();
     await loadState();
+    await loadUserManagement();
     closeSettings();
     toggleSessionDock(false);
     shouldStickToBottom = true;
     focusLatestAssistant({ smooth: false });
-    setStatus('就绪', 'ok');
+
+    // LLM 首次设置引导：检测未配置时自动弹出设置面板
+    const needsSetup = !siteConfig.base_url || siteConfig.status !== 'ready';
+    if (needsSetup) {
+      openSettings();
+      const guide = document.getElementById('llmSetupGuide');
+      if (guide) guide.hidden = false;
+      setStatus('请先配置 LLM 连接', 'warning');
+    } else {
+      setStatus('就绪', 'ok');
+    }
   } catch (err) {
     setStatus(`错误：${err.message}`, 'error');
   }

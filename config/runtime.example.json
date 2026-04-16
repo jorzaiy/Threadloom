@@ -31,7 +31,7 @@
     "preset_every_turn": true,
     "state_every_turn": true,
     "scene_persona_every_turn": true,
-    "recent_history_turns": 10,
+    "recent_history_turns": 12,
     "summary_refresh_every_turns": 12,
     "deep_refresh_every_turns": 20,
     "deep_refresh_on_scene_change": true,
@@ -60,6 +60,11 @@
     "scene_seed_limit": 6,
     "longterm_min_score": 5,
     "scene_seed_allow_low_confidence": true
+  },
+  "entity_recovery": {
+    "use_candidate_judge": true,
+    "judge_role": "state_keeper_candidate",
+    "max_candidates": 12
   },
   "web": {
     "default_debug": false,

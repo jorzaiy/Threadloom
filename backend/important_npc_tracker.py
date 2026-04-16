@@ -55,8 +55,8 @@ def _important_key(label: str) -> str:
     return f'important:{(label or "unknown").strip()}'
 
 
-def _service_lock_allowed(*, label: str, role_label: str, worldbook_candidate: bool, user_mentions: int, total_mentions: int, thread_weight: int, retained_entity: bool, latest_change: str) -> bool:
-    if worldbook_candidate:
+def _service_lock_allowed(*, label: str, role_label: str, reference_candidate: bool, user_mentions: int, total_mentions: int, thread_weight: int, retained_entity: bool, latest_change: str) -> bool:
+    if reference_candidate:
         return True
     if not _is_service_role(role_label):
         return True
@@ -68,13 +68,22 @@ def _service_lock_allowed(*, label: str, role_label: str, worldbook_candidate: b
     return False
 
 
-def update_important_npcs(state: dict, history: list[dict], lorebook_candidates: list[dict] | None = None) -> dict:
+def update_important_npcs(state: dict, history: list[dict], reference_candidates: list[dict] | None = None) -> dict:
     current = deepcopy(state or {})
     current_location = str(current.get('location', '') or '').strip()
     current_main_event = str(current.get('main_event', '') or '').strip()
     previous = current.get('important_npcs', []) if isinstance(current.get('important_npcs', []), list) else []
     prev_by_key = {item.get('key'): item for item in previous if isinstance(item, dict) and item.get('key')}
-    lore_names = {str(item.get('name', '')).strip() for item in (lorebook_candidates or []) if str(item.get('name', '')).strip()}
+    candidate_sources = {
+        str(item.get('name', '')).strip(): str(item.get('source', '')).strip()
+        for item in (reference_candidates or [])
+        if str(item.get('name', '')).strip()
+    }
+    protected_names = {
+        sanitize_runtime_name(item.get('primary_label', ''))
+        for item in (current.get('scene_entities', []) or [])
+        if isinstance(item, dict) and sanitize_runtime_name(item.get('primary_label', ''))
+    }
     hint_names = {
         sanitize_runtime_name(item.get('primary_label', ''))
         for item in (current.get('continuity_hints', []) or [])
@@ -105,7 +114,9 @@ def update_important_npcs(state: dict, history: list[dict], lorebook_candidates:
         role_label = str(entity.get('role_label', '') or '').strip()
         latest_change = ' '.join(str(item.get('latest_change', '') or '') for item in (current.get('active_threads', []) or []) if isinstance(item, dict))
         user_mentions, total_mentions = _count_mentions(history, names)
-        worldbook_candidate = label in lore_names
+        candidate_source = candidate_sources.get(label, '')
+        worldbook_candidate = candidate_source in {'lorebook_npc', 'featured_cast'}
+        reference_candidate = bool(candidate_source)
         retained_entity = not bool(entity.get('onstage'))
         previously_locked = _important_key(label) in prev_by_key
         importance_score = 0
@@ -118,7 +129,7 @@ def update_important_npcs(state: dict, history: list[dict], lorebook_candidates:
             importance_score += 2
         if total_mentions >= 4:
             importance_score += 1
-        if worldbook_candidate:
+        if reference_candidate:
             importance_score += 2
         if label in hint_names:
             importance_score += 3
@@ -128,7 +139,7 @@ def update_important_npcs(state: dict, history: list[dict], lorebook_candidates:
             importance_score += 1
         if previously_locked:
             importance_score += 2
-        if _is_service_role(role_label) and not worldbook_candidate:
+        if _is_service_role(role_label) and not reference_candidate:
             if user_mentions == 0:
                 importance_score -= 2
             if total_mentions < 3:
@@ -139,7 +150,7 @@ def update_important_npcs(state: dict, history: list[dict], lorebook_candidates:
         service_lock_ok = _service_lock_allowed(
             label=label,
             role_label=role_label,
-            worldbook_candidate=worldbook_candidate,
+            reference_candidate=reference_candidate,
             user_mentions=user_mentions,
             total_mentions=total_mentions,
             thread_weight=thread_weight_by_actor.get(label, 0),
@@ -159,21 +170,25 @@ def update_important_npcs(state: dict, history: list[dict], lorebook_candidates:
         previously_locked = bool(prev.get('locked'))
         present_now = bool(entity.get('onstage')) or label in (current.get('relevant_npcs', []) or [])
         inactive_turns = 0 if present_now else int(prev.get('inactive_turns', 0) or 0) + 1
-        should_lock = service_lock_ok or not _is_service_role(role_label) or worldbook_candidate
+        should_lock = service_lock_ok or not _is_service_role(role_label) or reference_candidate
         next_items.append({
             'key': key,
             'primary_label': label,
-            'aliases': sorted({alias for alias in aliases + [sanitize_runtime_name(alias) for alias in prev.get('aliases', [])] if alias and not is_protagonist_name(alias)}),
+            'aliases': sorted({
+                alias for alias in aliases + [sanitize_runtime_name(alias) for alias in prev.get('aliases', [])]
+                if alias and not is_protagonist_name(alias) and (alias == label or alias not in protected_names)
+            }),
             'role_label': role_label or prev.get('role_label', '待确认'),
             'anchor_type': 'continuous',
             'worldbook_candidate': worldbook_candidate,
+            'reference_source': candidate_source or prev.get('reference_source', ''),
             'importance_score': max(int(prev.get('importance_score', 0) or 0), importance_score),
             'locked': should_lock,
             'retained': retained_entity,
             'present_now': present_now,
             'inactive_turns': inactive_turns,
             'last_location': current_location if present_now or not prev.get('last_location') else prev.get('last_location'),
-            'last_main_event': current_main_event if present_now or not prev.get('last_main_event') else prev.get('last_main_event'),
+            'last_main_event': current_main_event or prev.get('last_main_event'),
             'newly_locked': not previously_locked,
         })
 
@@ -188,6 +203,8 @@ def update_important_npcs(state: dict, history: list[dict], lorebook_candidates:
         carried['retained'] = True
         carried['present_now'] = False
         carried['inactive_turns'] = int(prev.get('inactive_turns', 0) or 0) + 1
+        if current_main_event:
+            carried['last_main_event'] = current_main_event
         carried['newly_locked'] = False
         next_items.append(carried)
         seen.add(key)

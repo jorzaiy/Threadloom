@@ -11,6 +11,32 @@
 
 但它仍然是原型，离“稳定主链”还有明显距离。问题不在于能不能跑，而在于：事实层是否足够稳、fallback 是否足够保守、连续多轮后会不会轻微漂移累积成明显失真。
 
+## 2026-04-16 Live HTTP Soak
+
+这轮新增了一次真实 HTTP 长跑验证，重点不再是“链路能不能跑”，而是：
+
+- 开局选择是否正常落到 runtime 主链
+- 世界书与系统级 NPC 候选是否真的进入 narrator prompt
+- `12` 对 recent window 是否真的作为 narrator 主上下文
+- keeper archive 是否会在窗口外真实回流
+- 长跑后 state / threads / important_npcs 是否出现明显漂移
+
+已确认通过：
+
+- `new-game -> opening -> 选局 -> narrator -> state_keeper` 全链真实可跑
+- 系统级 NPC 候选真实进入 prompt
+- 世界书预算化注入真实进入 prompt
+- `12` 对 recent window 已真实生效
+- keeper archive 在记录真正掉出 recent window 后，会以 `【较早结构记录】` 真实回流到 narrator prompt
+- HTTP 层已修：客户端提前断开时不再把已完成请求伪装成 `500`，只记录轻量断连日志
+
+本轮暴露的主要残余问题：
+
+- 实体归一化仍有噪声，主要体现在动态场景中同一群体/剪影类称呼可能并存：
+  - `毡笠人 / 毡笠身影`
+  - `暗影 / 皂衣人`
+- 这类问题当前更像 scene entity merge 与 important NPC alias 过滤不够保守，而不是 narrator 主链本身失效
+
 ## 当前主优点
 
 当前这套原型比旧 transcript-first 链路更好的地方：

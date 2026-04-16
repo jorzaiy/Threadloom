@@ -156,8 +156,10 @@ def replay_turn_trace(source_session: str, turn_id: str, target_session: str) ->
         state_fragment = {}
 
     state_after_keeper = runtime.get('state_after_keeper')
+    needs_post_processing = True
     if isinstance(state_after_keeper, dict) and state_after_keeper:
         state = dict(state_after_keeper)
+        state = merge_arbiter_state(state, arbiter)
     else:
         state_error = ((runtime.get('state_keeper') or {}).get('state_error')) if isinstance(runtime.get('state_keeper', {}), dict) else None
         if state_error:
@@ -179,18 +181,35 @@ def replay_turn_trace(source_session: str, turn_id: str, target_session: str) ->
             if not isinstance(final_post_state, dict):
                 raise RuntimeError('trace runtime.state_after_keeper and post_turn.state are both missing')
             state = dict(final_post_state)
+            needs_post_processing = False
 
-    state = apply_thread_tracker(state, user_text=text, narrator_reply=reply, arbiter=arbiter)
-    state['continuity_hints'] = normalized_hint_entries(target_session)
     runtime_context = runtime.get('context', {}) if isinstance(runtime.get('context', {}), dict) else {}
-    lorebook_candidates = runtime_context.get('lorebook_npc_candidates', [])
-    if not isinstance(lorebook_candidates, list):
-        lorebook_candidates = []
-    state = update_important_npcs(state, load_history(target_session), lorebook_candidates)
-    state = resolve_important_npc_continuity(state)
-    save_state(target_session, state)
-    persona_counts = update_persona(target_session, lorebook_candidates)
-    summary_text = update_summary(target_session)
+    continuity_candidates = runtime_context.get('continuity_candidates', [])
+    if not isinstance(continuity_candidates, list) or not continuity_candidates:
+        continuity_candidates = []
+        seen_names: set[str] = set()
+        for key in ('system_npc_candidates', 'lorebook_npc_candidates'):
+            for item in (runtime_context.get(key, []) or []):
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get('name', '') or '').strip()
+                if not name or name in seen_names:
+                    continue
+                seen_names.add(name)
+                continuity_candidates.append(item)
+
+    if needs_post_processing:
+        state = apply_thread_tracker(state, user_text=text, narrator_reply=reply, arbiter=arbiter)
+        state['continuity_hints'] = normalized_hint_entries(target_session)
+        state = update_important_npcs(state, load_history(target_session), continuity_candidates)
+        state = resolve_important_npc_continuity(state)
+        save_state(target_session, state)
+        persona_counts = update_persona(target_session, continuity_candidates)
+        summary_text = update_summary(target_session)
+    else:
+        save_state(target_session, state)
+        persona_counts = {'scene': 0, 'archive': 0, 'longterm': 0}
+        summary_text = ''
 
     final_snapshot = build_state_snapshot(state)
     report = {

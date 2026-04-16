@@ -193,6 +193,30 @@ http://127.0.0.1:8765
 
 ## 当前适合怎么调试
 
+### 2026-04-16 实测补充
+
+本轮新增了一次真实 HTTP 长跑验证，重点不再是“链路能不能跑”，而是：
+
+- 开局选择是否正常落到 runtime 主链
+- 世界书与系统级 NPC 候选是否真的进入 narrator prompt
+- `12` 对 recent window 是否真的作为 narrator 主上下文
+- keeper archive 是否会在窗口外真实回流
+- 长跑后 state / threads / important_npcs 是否出现明显漂移
+
+当前已确认：
+
+- 系统级 NPC 候选与世界书预算注入已真实进入 narrator prompt
+- `12` 对 recent window 已真实生效
+- keeper archive 在记录真正掉出 recent window 后，会以 `【较早结构记录】` 真实进入 narrator prompt
+- HTTP 层已修：客户端提前断开时，backend 不再把已完成请求伪装成 `500`，只记录轻量断连日志
+
+本轮仍暴露的主要精度问题：
+
+- 场景实体与重要人物的别称归一仍需持续收紧，特别是：
+  - `毡笠人 / 毡笠身影`
+  - `暗影 / 皂衣人`
+- 这类问题当前更像 scene entity merge / important NPC alias 过滤不够保守，不是 narrator 主链中断
+
 建议优先用这几种方式：
 - 直接在前端页面手动跑一个真实 session
 - 用 `GET /api/state` 和 `GET /api/history` 看写回是否稳定

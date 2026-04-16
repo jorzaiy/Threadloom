@@ -27,6 +27,10 @@
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
 - `session_lifecycle.py`：new game / delete / session list
 - `regenerate_turn.py`：partial 回复回滚与重试
+- `user_manager.py`：多用户管理、bcrypt 密码认证、session token 管理
+- `object_bootstrap_agent.py`：物品抽取 bootstrap（启发式→LLM→merge）
+- `clue_bootstrap_agent.py`：情报抽取 bootstrap（启发式→LLM→merge）
+- `import_sillytavern_chat.py`：SillyTavern JSONL 聊天记录导入（CLI + API）
 
 ## 当前主策略
 
@@ -35,7 +39,7 @@
 - 新 session 会继承 root `canon / summary / state`
 - state / summary / persona / threads / important NPC 都已接入 session-local 写回
 - narrator 当前已经收敛为两层上下文主链：
-  - 最近 `10` 对 turn 直给 narrator
+  - 最近 `12` 对 turn 直给 narrator
   - 更早历史只走 keeper archive 命中
 - `state_keeper` 优先，`state_updater` 兜底
 - arbiter 已接入主链，不再只是文档占位

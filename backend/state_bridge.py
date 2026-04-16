@@ -9,21 +9,30 @@ from typing import Iterable
 try:
     from .continuity_hints import match_continuity_hint
     from .character_assets import load_system_npcs
+    from .entity_candidate_judge import judge_entity_candidates
     from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names
     from .card_hints import get_known_npc_role
 except ImportError:
     from continuity_hints import match_continuity_hint
     from character_assets import load_system_npcs
+    from entity_candidate_judge import judge_entity_candidates
     from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names
     from card_hints import get_known_npc_role
 
 
 STRUCTURED_NAME_RE = re.compile(r'[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?')
+CONTINUITY_INFO_PHRASE_RE = re.compile(r'^[一二三四五六七八九十百千两几半多整\d]+(?:处|条|座|份|项|路|线|页|封|张|本|箱|匣|车|门|库|仓|道)?[\u4e00-\u9fff]{0,8}$')
 NON_PERSON_SUFFIXES = ('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '院', '厅', '阁', '府', '宫', '殿', '街', '巷', '亭', '轩', '井', '墙', '山')
 NON_PERSON_TOKENS = {
     '轻功', '自保', '一声', '规则', '结论', '现象', '世界', '逻辑', '认知', '交互', '概念', '目标', '问题', '决定',
     '对话', '关系', '后续', '物理', '错误', '能力', '剧情', '局势', '线索', '风险', '客厅',
 }
+ENTITY_DESCRIPTOR_SUFFIXES = (
+    '身影', '背影', '影子', '影', '之人', '那人', '此人', '来人',
+    '男人', '女人', '女子', '青年', '少年', '老者', '壮汉',
+    '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
+)
+GENERIC_SHADOW_LABELS = {'暗影', '黑影', '影子', '人影'}
 
 
 def _thread_key_from_label(kind: str, label: str) -> str:
@@ -222,9 +231,223 @@ def _entity_name_set(entity: dict) -> set[str]:
     return names
 
 
+def _descriptor_signature(name: str) -> str:
+    text = sanitize_runtime_name(name)
+    if not text:
+        return ''
+    for suffix in ENTITY_DESCRIPTOR_SUFFIXES:
+        if text.endswith(suffix) and len(text) > len(suffix):
+            return text[:-len(suffix)].strip()
+    return text
+
+
+def _labels_compatible(left: str, right: str) -> bool:
+    left_text = sanitize_runtime_name(left)
+    right_text = sanitize_runtime_name(right)
+    if not left_text or not right_text:
+        return False
+    if left_text == right_text:
+        return True
+    if left_text in GENERIC_SHADOW_LABELS or right_text in GENERIC_SHADOW_LABELS:
+        return False
+    left_sig = _descriptor_signature(left_text)
+    right_sig = _descriptor_signature(right_text)
+    return bool(left_sig and right_sig and left_sig == right_sig)
+
+
+def _preferred_primary_label(labels: list[str], onstage_names: set[str], relevant_names: set[str]) -> str:
+    normalized = [sanitize_runtime_name(label) for label in labels if sanitize_runtime_name(label)]
+    if not normalized:
+        return ''
+    for label in normalized:
+        if label in onstage_names:
+            return label
+    for label in normalized:
+        if label in relevant_names:
+            return label
+    concrete = [label for label in normalized if not _is_degraded_entity_label(label)]
+    if concrete:
+        concrete.sort(key=lambda item: (item in GENERIC_SHADOW_LABELS, -len(_descriptor_signature(item)), -len(item), item))
+        return concrete[0]
+    normalized.sort(key=lambda item: (-len(item), item))
+    return normalized[0]
+
+
+def _filter_entity_aliases(primary: str, aliases: list[str], protected_names: set[str]) -> list[str]:
+    out: list[str] = []
+    for alias in aliases or []:
+        text = sanitize_runtime_name(alias)
+        if not text or text == primary:
+            continue
+        if text in protected_names and not _labels_compatible(primary, text):
+            continue
+        if text not in out:
+            out.append(text)
+    return out
+
+
+def _normalize_merged_scene_entities(entities: list[dict], onstage_names: list[str], relevant_names: list[str]) -> list[dict]:
+    if not entities:
+        return []
+    onstage_set = {sanitize_runtime_name(name) for name in onstage_names if sanitize_runtime_name(name)}
+    relevant_set = {sanitize_runtime_name(name) for name in relevant_names if sanitize_runtime_name(name)}
+    protected_names = onstage_set | relevant_set
+    grouped: dict[str, list[dict]] = {}
+    for item in entities:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get('entity_id', '') or '').strip()
+        grouped.setdefault(entity_id, []).append(item)
+
+    max_id = max((_entity_numeric_id(entity_id) for entity_id in grouped.keys()), default=0)
+    normalized: list[dict] = []
+    for entity_id, group in grouped.items():
+        if len(group) == 1:
+            item = dict(group[0])
+            primary = sanitize_runtime_name(item.get('primary_label', ''))
+            aliases = dedupe_names((item.get('aliases') or []) + [primary])
+            item['aliases'] = _filter_entity_aliases(primary, aliases, protected_names)
+            item['primary_label'] = primary
+            item['onstage'] = primary in onstage_set
+            normalized.append(item)
+            continue
+
+        clusters: list[list[dict]] = []
+        for item in group:
+            primary = sanitize_runtime_name(item.get('primary_label', ''))
+            if not primary:
+                continue
+            matched_cluster = None
+            for cluster in clusters:
+                cluster_labels = [
+                    sanitize_runtime_name(existing.get('primary_label', ''))
+                    for existing in cluster
+                    if sanitize_runtime_name(existing.get('primary_label', ''))
+                ]
+                if any(_labels_compatible(primary, other) for other in cluster_labels):
+                    matched_cluster = cluster
+                    break
+            if matched_cluster is None:
+                clusters.append([item])
+            else:
+                matched_cluster.append(item)
+
+        for idx, cluster in enumerate(clusters):
+            labels = [
+                sanitize_runtime_name(item.get('primary_label', ''))
+                for item in cluster
+                if sanitize_runtime_name(item.get('primary_label', ''))
+            ]
+            primary = _preferred_primary_label(labels, onstage_set, relevant_set)
+            aliases = dedupe_names(
+                [
+                    alias
+                    for item in cluster
+                    for alias in ((item.get('aliases') or []) + [item.get('primary_label', '')])
+                ]
+            )
+            merged_item = dict(cluster[0])
+            merged_item['primary_label'] = primary
+            merged_item['aliases'] = _filter_entity_aliases(primary, aliases, protected_names)
+            merged_item['onstage'] = primary in onstage_set
+            if idx == 0 and entity_id:
+                merged_item['entity_id'] = entity_id
+            else:
+                max_id += 1
+                merged_item['entity_id'] = f'scene_npc_{max_id:02d}'
+            normalized.append(merged_item)
+
+    merged_again: list[dict] = []
+    consumed: set[int] = set()
+    for idx, item in enumerate(normalized):
+        if idx in consumed:
+            continue
+        primary = sanitize_runtime_name(item.get('primary_label', ''))
+        if not primary:
+            continue
+        cluster = [item]
+        for other_idx in range(idx + 1, len(normalized)):
+            if other_idx in consumed:
+                continue
+            other = normalized[other_idx]
+            other_primary = sanitize_runtime_name(other.get('primary_label', ''))
+            if not other_primary:
+                continue
+            if not _labels_compatible(primary, other_primary):
+                continue
+            consumed.add(other_idx)
+            cluster.append(other)
+
+        labels = [
+            sanitize_runtime_name(entry.get('primary_label', ''))
+            for entry in cluster
+            if sanitize_runtime_name(entry.get('primary_label', ''))
+        ]
+        merged_item = dict(cluster[0])
+        merged_item['primary_label'] = _preferred_primary_label(labels, onstage_set, relevant_set)
+        aliases = dedupe_names(
+            [
+                alias
+                for entry in cluster
+                for alias in ((entry.get('aliases') or []) + [entry.get('primary_label', '')])
+            ]
+        )
+        merged_item['aliases'] = _filter_entity_aliases(merged_item['primary_label'], aliases, protected_names)
+        merged_item['onstage'] = merged_item['primary_label'] in onstage_set
+        merged_again.append(merged_item)
+
+    return merged_again
+
+
+def _normalize_important_npcs(items: list[dict], protected_names: set[str], onstage_names: set[str], relevant_names: set[str]) -> list[dict]:
+    normalized: list[dict] = []
+    consumed: set[int] = set()
+    for idx, item in enumerate(items or []):
+        if idx in consumed or not isinstance(item, dict):
+            continue
+        primary = sanitize_runtime_name(item.get('primary_label', ''))
+        if not primary:
+            continue
+        cluster = [item]
+        for other_idx in range(idx + 1, len(items or [])):
+            if other_idx in consumed:
+                continue
+            other = items[other_idx]
+            if not isinstance(other, dict):
+                continue
+            other_primary = sanitize_runtime_name(other.get('primary_label', ''))
+            if not other_primary or not _labels_compatible(primary, other_primary):
+                continue
+            consumed.add(other_idx)
+            cluster.append(other)
+
+        labels = [
+            sanitize_runtime_name(entry.get('primary_label', ''))
+            for entry in cluster
+            if sanitize_runtime_name(entry.get('primary_label', ''))
+        ]
+        merged = dict(cluster[0])
+        merged['primary_label'] = _preferred_primary_label(labels, onstage_names, relevant_names)
+        aliases = dedupe_names(
+            [
+                alias
+                for entry in cluster
+                for alias in ((entry.get('aliases') or []) + [entry.get('primary_label', '')])
+            ]
+        )
+        merged['aliases'] = _filter_entity_aliases(merged['primary_label'], aliases, protected_names)
+        merged['importance_score'] = max(int(entry.get('importance_score', 0) or 0) for entry in cluster)
+        merged['present_now'] = merged['primary_label'] in onstage_names or merged['primary_label'] in relevant_names
+        normalized.append(merged)
+
+    return normalized
+
+
 def _is_degraded_entity_label(name: str) -> bool:
     text = str(name or '').strip()
     if not text:
+        return True
+    if text in GENERIC_SHADOW_LABELS:
         return True
     generic_patterns = (
         r'^皂衣人\d+$',
@@ -372,9 +595,13 @@ def _looks_like_continuity_name(name: str, text: str) -> bool:
         return False
     if len(candidate) < 2 or len(candidate) > 8:
         return False
+    if CONTINUITY_INFO_PHRASE_RE.match(candidate):
+        return False
     if any(ch.isdigit() for ch in candidate):
         return False
     if candidate in NON_PERSON_TOKENS:
+        return False
+    if candidate.startswith(('我', '你', '他', '她', '先', '再', '又', '仍', '还', '继续', '低声', '忽然', '终于')):
         return False
     if candidate.endswith(NON_PERSON_SUFFIXES):
         return False
@@ -382,11 +609,62 @@ def _looks_like_continuity_name(name: str, text: str) -> bool:
         return False
     if '的' in candidate:
         return False
+    if any(token in candidate for token in ('私盐', '军仓', '账本', '账册', '木匣', '匣子', '西巷', '巷口', '暗记', '线索', '情报')):
+        return False
     patterns = [
         rf'{re.escape(candidate)}(?:说|问|笑|道|看|想|将|把|对|向|已|正|仍|又|判定|认为|解释|反驳)',
         rf'(?:对|向|和|与){re.escape(candidate)}',
     ]
     return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _stable_name_pool(prev: dict) -> list[str]:
+    names: list[str] = []
+    for item in (prev.get('scene_entities', []) or []):
+        if not isinstance(item, dict):
+            continue
+        primary = sanitize_runtime_name(item.get('primary_label', ''))
+        if primary and primary not in names:
+            names.append(primary)
+        for alias in (item.get('aliases', []) or []):
+            alias_text = sanitize_runtime_name(alias)
+            if alias_text and alias_text not in names:
+                names.append(alias_text)
+    for field in ('onstage_npcs', 'relevant_npcs'):
+        for name in (prev.get(field, []) or []):
+            text = sanitize_runtime_name(name)
+            if text and text not in names:
+                names.append(text)
+    for item in (prev.get('important_npcs', []) or []):
+        if not isinstance(item, dict):
+            continue
+        text = sanitize_runtime_name(item.get('primary_label', ''))
+        if text and text not in names:
+            names.append(text)
+    return names[:16]
+
+
+def _extract_recovery_candidates(text: str, prev: dict, *, limit: int = 12) -> list[str]:
+    candidates: list[str] = []
+    for name in _stable_name_pool(prev):
+        if name and name in text and name not in candidates:
+            candidates.append(name)
+        if len(candidates) >= limit:
+            return candidates
+    for match in STRUCTURED_NAME_RE.finditer(text):
+        candidate = sanitize_runtime_name(match.group(0))
+        if not candidate or candidate in candidates:
+            continue
+        if len(candidate) < 2 or len(candidate) > 8:
+            continue
+        candidates.append(candidate)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _judge_recovery_candidates(candidates: list[str], text: str, prev: dict) -> list[str] | None:
+    return judge_entity_candidates(candidates, text, _stable_name_pool(prev))
 
 
 def _recover_names_from_structure(current: dict, prev: dict) -> list[str]:
@@ -405,15 +683,19 @@ def _recover_names_from_structure(current: dict, prev: dict) -> list[str]:
             continue
         blocks.extend(str(item.get(field, '') or '') for field in ('label', 'goal', 'obstacle'))
     text = '\n'.join(block for block in blocks if block)
-    recovered: list[str] = []
+    heuristic_recovered: list[str] = []
     for match in STRUCTURED_NAME_RE.finditer(text):
         name = sanitize_runtime_name(match.group(0))
         if not _looks_like_continuity_name(name, text):
             continue
-        if name not in recovered:
-            recovered.append(name)
-        if len(recovered) >= 3:
+        if name not in heuristic_recovered:
+            heuristic_recovered.append(name)
+        if len(heuristic_recovered) >= 3:
             break
+    judged = _judge_recovery_candidates(_extract_recovery_candidates(text, prev), text, prev)
+    if judged is not None:
+        return dedupe_names(judged, limit=3)
+    recovered = heuristic_recovered
     return recovered
 
 
@@ -496,16 +778,21 @@ def _promote_degraded_candidates(candidate_pool: list[dict], prev_entities: list
 def _entity_match_score(prev: dict, item: dict) -> float:
     prev_names = _entity_name_set(prev)
     item_names = _entity_name_set(item)
-    name_overlap = 1.0 if prev_names & item_names else 0.0
+    name_overlap = 2.0 if prev_names & item_names else 0.0
+    signature_overlap = 0.0
+    prev_signatures = {_descriptor_signature(name) for name in prev_names if _descriptor_signature(name)}
+    item_signatures = {_descriptor_signature(name) for name in item_names if _descriptor_signature(name)}
+    if prev_signatures & item_signatures:
+        signature_overlap = 1.2
     role_prev = str((prev or {}).get('role_label', '') or '').strip()
     role_item = str((item or {}).get('role_label', '') or '').strip()
     role_score = 0.0
-    if role_prev and role_item and role_prev == role_item and role_prev != '待确认' and role_item != '待确认':
-        role_score = 0.7
+    if (name_overlap > 0 or signature_overlap > 0) and role_prev and role_item and role_prev == role_item and role_prev != '待确认' and role_item != '待确认':
+        role_score = 0.4
     link_prev = str((prev or {}).get('possible_link', '') or '').strip()
     link_item = str((item or {}).get('possible_link', '') or '').strip()
-    link_score = 0.2 if link_prev and link_item and link_prev == link_item else 0.0
-    return name_overlap + role_score + link_score
+    link_score = 0.4 if link_prev and link_item and link_prev == link_item else 0.0
+    return name_overlap + signature_overlap + role_score + link_score
 
 
 def _find_matching_prev_entity(prev_entities: list[dict], item: dict, used_ids: set[str]) -> dict | None:
@@ -519,7 +806,7 @@ def _find_matching_prev_entity(prev_entities: list[dict], item: dict, used_ids: 
         if score > best_score:
             best = prev
             best_score = score
-    return best if best_score >= 0.7 else None
+    return best if best_score >= 1.0 else None
 
 
 def _find_important_entity(item: dict, important_npcs: list[dict], prev_entities: list[dict], used_ids: set[str]) -> dict | None:
@@ -613,7 +900,15 @@ def merge_scene_entities(prev_entities: list[dict], candidate_entities: list[dic
 
     if not merged and onstage_names:
         return fallback_scene_entities(onstage_names)
-    return merged
+    return _normalize_merged_scene_entities(
+        merged,
+        onstage_names,
+        [
+            sanitize_runtime_name(item.get('primary_label', ''))
+            for item in (important_npcs or [])
+            if isinstance(item, dict) and sanitize_runtime_name(item.get('primary_label', ''))
+        ],
+    )
 
 
 def _merge_knowledge_scope(prev_scope: dict, new_scope: dict) -> dict:
@@ -861,7 +1156,17 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     important_npcs = current.get('important_npcs', prev.get('important_npcs', []))
     if not isinstance(important_npcs, list):
         important_npcs = prev.get('important_npcs', []) if isinstance(prev.get('important_npcs', []), list) else []
-    current['important_npcs'] = important_npcs
+    protected_entity_names = {
+        sanitize_runtime_name(item.get('primary_label', ''))
+        for item in (current.get('scene_entities', []) or [])
+        if isinstance(item, dict) and sanitize_runtime_name(item.get('primary_label', ''))
+    }
+    current['important_npcs'] = _normalize_important_npcs(
+        important_npcs,
+        protected_entity_names,
+        set(current.get('onstage_npcs', []) or []),
+        set(current.get('relevant_npcs', []) or []),
+    )
     recovered_relevant = _recover_relevant_from_continuity(current, prev)
     if recovered_relevant:
         current['relevant_npcs'] = dedupe_names(current.get('relevant_npcs', []) + recovered_relevant, limit=6)

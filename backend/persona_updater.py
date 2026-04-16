@@ -84,12 +84,23 @@ def _clear_local_layers(paths: dict) -> None:
             path.unlink()
 
 
-def _infer_lore_identity(name: str, lorebook_candidates: list[dict]) -> dict:
-    for item in lorebook_candidates or []:
+def _infer_candidate_identity(name: str, reference_candidates: list[dict]) -> dict:
+    for item in reference_candidates or []:
         if item.get('name') != name:
             continue
         summary = (item.get('summary') or '').strip()
         title = (item.get('title') or '').strip()
+        source = str(item.get('source', '') or '').strip()
+        if source == 'system_npc':
+            role_label = str(item.get('role_label', '') or '').strip()
+            if not role_label and title.startswith('系统级 NPC：'):
+                role_label = title.split('系统级 NPC：', 1)[1].strip()
+            return {
+                'faction': '系统级 NPC',
+                'base_region': '待确认',
+                'role_label': role_label or '待确认',
+                'summary': summary,
+            }
         return {
             'faction': '世界书既有 NPC',
             'base_region': '待确认',
@@ -188,10 +199,10 @@ def _has_proper_name(name: str) -> bool:
     return False
 
 
-def _is_worldbook_priority(name: str, lorebook_candidates: list[dict], previous: dict) -> bool:
-    if any((item.get('name') or '').strip() == name for item in (lorebook_candidates or [])):
+def _is_reference_priority(name: str, reference_candidates: list[dict], previous: dict) -> bool:
+    if any((item.get('name') or '').strip() == name for item in (reference_candidates or [])):
         return True
-    return previous.get('identity', {}).get('faction') == '世界书既有 NPC'
+    return previous.get('identity', {}).get('faction') in {'世界书既有 NPC', '系统级 NPC'}
 
 
 def _is_clue_bearer(entity: dict, state: dict, history: list[dict]) -> bool:
@@ -220,7 +231,7 @@ def _is_clue_bearer(entity: dict, state: dict, history: list[dict]) -> bool:
     return has_entity_presence and has_clue_signal
 
 
-def update_persona(session_id: str, lorebook_candidates: list[dict] | None = None) -> dict:
+def update_persona(session_id: str, reference_candidates: list[dict] | None = None) -> dict:
     state = load_state(session_id)
     history = load_history(session_id)
     paths = session_paths(session_id)
@@ -246,7 +257,7 @@ def update_persona(session_id: str, lorebook_candidates: list[dict] | None = Non
         if not name or name in known_names:
             continue
         inherited_seed = inherited.get(name, {})
-        lore_identity = _infer_lore_identity(name, lorebook_candidates or [])
+        lore_identity = _infer_candidate_identity(name, reference_candidates or [])
         entities.append({
             'primary_label': name,
             'aliases': [name],
@@ -282,9 +293,9 @@ def update_persona(session_id: str, lorebook_candidates: list[dict] | None = Non
         quiet_turns = _count_consecutive_quiet_turns(history, name, entity.get('aliases', []))
         turns = max(prev_turns, observed_turns, consecutive_turns, 1)
         dormant_turns = 0 if is_relevant else prev_dormant + 1
-        lore_identity = _infer_lore_identity(name, lorebook_candidates or [])
+        lore_identity = _infer_candidate_identity(name, reference_candidates or [])
         generic_service_npc = _is_service_npc(name, role_label) and not _has_proper_name(name)
-        worldbook_priority = _is_worldbook_priority(name, lorebook_candidates or [], previous)
+        worldbook_priority = _is_reference_priority(name, reference_candidates or [], previous)
         important_lock = name in important_names
         clue_bearer = _is_clue_bearer(entity, state, history)
         user_focus_priority = recent_user_focus >= 2

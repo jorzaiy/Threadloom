@@ -1159,6 +1159,16 @@ button:active {
   color: var(--ok);
 }
 
+.inline-feedback[data-kind='warning'] {
+  color: var(--warning, #e2a308);
+}
+
+.settings-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+}
+
 .settings-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1312,4 +1322,69 @@ button:active {
     width: 92vw;
     max-width: 92vw;
   }
+}
+
+/* LLM 首次设置引导 */
+.setup-guide-banner {
+  background: var(--color-ink-faint, #2a2520);
+  border: 1px solid var(--color-gold, #d4a843);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+.setup-guide-banner p {
+  margin: 4px 0;
+  font-size: 0.9rem;
+  color: var(--color-ink-light, #c4b8a8);
+}
+.setup-guide-banner strong {
+  color: var(--color-gold, #d4a843);
+}
+
+/* 登录弹窗 */
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+}
+.login-modal {
+  background: var(--bg-panel, #1e1b16);
+  border: 1px solid var(--border, #3a3428);
+  border-radius: 12px;
+  padding: 32px;
+  width: 340px;
+  max-width: 90vw;
+}
+.login-modal h2 {
+  margin: 0 0 16px;
+  color: var(--text-primary, #e8dcc8);
+}
+
+/* 用户列表项 */
+.user-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border, #3a3428);
+  font-size: 13px;
+  color: var(--text-secondary, #a89b8c);
+}
+.user-list-item .user-role {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-subtle, #2a2520);
+}
+.user-list-item .user-delete-btn {
+  background: none;
+  border: none;
+  color: var(--danger, #d44);
+  cursor: pointer;
+  font-size: 12px;
 }

@@ -36,6 +36,29 @@ DEFAULT_NARRATOR = {
 DEFAULT_STATE_KEEPER = {
     'model': '',
 }
+DEFAULT_ADVANCED_MODELS = {
+    'turn_analyzer': {
+        'provider': 'openai-compatible',
+        'model': 'heuristic-or-llm',
+        'temperature': 0.2,
+        'max_output_tokens': 700,
+        'stream': False,
+    },
+    'arbiter': {
+        'provider': 'openai-compatible',
+        'model': '',
+        'temperature': 0.2,
+        'max_output_tokens': 800,
+        'stream': False,
+    },
+    'state_keeper_candidate': {
+        'provider': SITE_PROVIDER_NAME,
+        'model': '',
+        'temperature': 0.0,
+        'max_output_tokens': 280,
+        'stream': False,
+    },
+}
 SYSTEM_ROLE_DEFAULTS = {
     'narrator': {
         'provider': 'llm',
@@ -54,22 +77,7 @@ SYSTEM_ROLE_DEFAULTS = {
         'model_role': 'state_keeper_candidate',
     },
 }
-SYSTEM_MODEL_DEFAULTS = {
-    'turn_analyzer': {
-        'provider': 'openai-compatible',
-        'model': 'heuristic-or-llm',
-        'temperature': 0.2,
-        'max_output_tokens': 700,
-        'stream': False,
-    },
-    'arbiter': {
-        'provider': 'openai-compatible',
-        'model': '',
-        'temperature': 0.2,
-        'max_output_tokens': 800,
-        'stream': False,
-    },
-}
+SYSTEM_MODEL_DEFAULTS = copy.deepcopy(DEFAULT_ADVANCED_MODELS)
 
 
 def read_json(path: Path):
@@ -225,13 +233,23 @@ def _slim_runtime_from_legacy(source: dict, site: dict) -> dict:
     if isinstance(source.get('narrator'), dict) and isinstance(source.get('state_keeper'), dict):
         narrator = dict(DEFAULT_NARRATOR)
         state_keeper = dict(DEFAULT_STATE_KEEPER)
-        narrator['model'] = _pick_model_with_fallback([narrator.get('model')], available)
-        state_keeper['model'] = _pick_model_with_fallback([state_keeper.get('model'), narrator.get('model')], available)
-        return {
+        narrator['model'] = _pick_model_with_fallback([
+            source.get('narrator', {}).get('model'),
+            narrator.get('model'),
+        ], available)
+        state_keeper['model'] = _pick_model_with_fallback([
+            source.get('state_keeper', {}).get('model'),
+            state_keeper.get('model'),
+            narrator['model'],
+        ], available)
+        payload = {
             'version': 1,
             'narrator': narrator,
             'state_keeper': state_keeper,
         }
+        if isinstance(source.get('advanced_models'), dict):
+            payload['advanced_models'] = copy.deepcopy(source['advanced_models'])
+        return payload
 
     legacy_models = source.get('models', {}) if isinstance(source.get('models', {}), dict) else {}
     narrator_legacy = legacy_models.get('narrator', {}) if isinstance(legacy_models.get('narrator', {}), dict) else {}
@@ -251,18 +269,36 @@ def _slim_runtime_from_legacy(source: dict, site: dict) -> dict:
         keeper_legacy.get('model') if str(keeper_legacy.get('provider', '') or '').strip() not in {'local-gemma'} else '',
         narrator['model'],
     ], available)
-    return {
+    payload = {
         'version': 1,
         'narrator': narrator,
         'state_keeper': state_keeper,
     }
+    payload['advanced_models'] = copy.deepcopy(DEFAULT_ADVANCED_MODELS)
+    return payload
 
 
 def load_user_model_store() -> dict:
     site = load_site_store()['site']
-    source = _legacy_model_source()
-    slim = _slim_runtime_from_legacy(source if isinstance(source, dict) else {}, site)
     current = read_json(USER_MODEL_RUNTIME_CONFIG) if USER_MODEL_RUNTIME_CONFIG.exists() else {}
+    if isinstance(current.get('narrator'), dict) and isinstance(current.get('state_keeper'), dict):
+        available = _available_site_models(site)
+        slim = {
+            'version': 1,
+            'narrator': {
+                'model': _pick_model_with_fallback([current.get('narrator', {}).get('model')], available),
+            },
+            'state_keeper': {
+                'model': _pick_model_with_fallback([current.get('state_keeper', {}).get('model')], available),
+            },
+        }
+        if isinstance(current.get('advanced_models'), dict):
+            slim['advanced_models'] = copy.deepcopy(current['advanced_models'])
+    else:
+        source = _legacy_model_source()
+        slim = _slim_runtime_from_legacy(source if isinstance(source, dict) else {}, site)
+        if isinstance(current.get('advanced_models'), dict):
+            slim['advanced_models'] = copy.deepcopy(current['advanced_models'])
     if current != slim:
         write_json(USER_MODEL_RUNTIME_CONFIG, slim)
     return slim
@@ -402,6 +438,7 @@ def get_model_config_snapshot() -> dict:
         'site': get_site_config_snapshot(),
         'narrator': copy.deepcopy(store.get('narrator', DEFAULT_NARRATOR)),
         'state_keeper': copy.deepcopy(store.get('state_keeper', DEFAULT_STATE_KEEPER)),
+        'advanced_models': copy.deepcopy(store.get('advanced_models', DEFAULT_ADVANCED_MODELS)),
     }
 
 
@@ -443,6 +480,7 @@ def load_runtime_config() -> dict:
     narrator = user_store.get('narrator', DEFAULT_NARRATOR)
     state_keeper = user_store.get('state_keeper', DEFAULT_STATE_KEEPER)
     models = copy.deepcopy(SYSTEM_MODEL_DEFAULTS)
+    advanced = copy.deepcopy(user_store.get('advanced_models', DEFAULT_ADVANCED_MODELS))
     narrator_defaults = _global_runtime_store().get('model_defaults', {}).get('narrator', {}) if isinstance(_global_runtime_store().get('model_defaults', {}), dict) else {}
     state_keeper_defaults = _global_runtime_store().get('model_defaults', {}).get('state_keeper', {}) if isinstance(_global_runtime_store().get('model_defaults', {}), dict) else {}
     models['narrator'] = {
@@ -460,12 +498,15 @@ def load_runtime_config() -> dict:
         'stream': bool(state_keeper_defaults.get('stream', False)),
     }
     models['state_keeper_candidate'] = {
-        'provider': SITE_PROVIDER_NAME,
-        'model': state_keeper.get('model', '') or narrator.get('model', ''),
-        'temperature': 0.0,
-        'max_output_tokens': 120,
-        'stream': False,
+        **copy.deepcopy(advanced.get('state_keeper_candidate', DEFAULT_ADVANCED_MODELS['state_keeper_candidate'])),
     }
+    if not models['state_keeper_candidate'].get('model'):
+        models['state_keeper_candidate']['model'] = state_keeper.get('model', '') or narrator.get('model', '')
+    for role_name in ('turn_analyzer', 'arbiter'):
+        models[role_name] = {
+            **copy.deepcopy(DEFAULT_ADVANCED_MODELS[role_name]),
+            **copy.deepcopy(advanced.get(role_name, {})),
+        }
     global_cfg['models'] = models
     global_cfg['roles'] = copy.deepcopy(SYSTEM_ROLE_DEFAULTS)
     return global_cfg
@@ -490,12 +531,16 @@ def resolve_source(path_str: str) -> Path:
 def resolve_provider_model(role: str = 'narrator') -> dict:
     cfg = load_runtime_config()
     role_cfg = cfg.get('models', {}).get(role, {})
+    override_env = f'THREADLOOM_OVERRIDE_{role.upper()}_MODEL'
+    override_model = str(os.environ.get(override_env, '') or '').strip()
+    override_max_tokens_env = f'THREADLOOM_OVERRIDE_{role.upper()}_MAX_TOKENS'
+    override_stream_env = f'THREADLOOM_OVERRIDE_{role.upper()}_STREAM'
     providers = load_openclaw_models().get('providers', {})
     provider_name = role_cfg.get('provider') or SITE_PROVIDER_NAME
     provider = providers.get(provider_name)
     if not provider:
         raise RuntimeError('No site configured for current user')
-    preferred_model = role_cfg.get('model') or ''
+    preferred_model = override_model or role_cfg.get('model') or ''
     models = _normalize_models(provider.get('models', []), provider.get('api', 'openai-completions'))
     model = next((item for item in models if item.get('id') == preferred_model), None)
     if model is None and models:
@@ -506,13 +551,26 @@ def resolve_provider_model(role: str = 'narrator') -> dict:
         raise RuntimeError(f'No model configured for role {role}')
     resolved_provider = dict(provider)
     resolved_provider['apiKey'] = _resolve_api_key(resolved_provider.get('apiKey', ''))
+    max_output_tokens = role_cfg.get('max_output_tokens', 1200)
+    override_max_tokens = str(os.environ.get(override_max_tokens_env, '') or '').strip()
+    if override_max_tokens:
+        try:
+            max_output_tokens = int(override_max_tokens)
+        except Exception:
+            pass
+    stream = bool(role_cfg.get('stream', role == 'narrator'))
+    override_stream = str(os.environ.get(override_stream_env, '') or '').strip().lower()
+    if override_stream in {'0', 'false', 'no'}:
+        stream = False
+    elif override_stream in {'1', 'true', 'yes'}:
+        stream = True
     return {
         'provider_name': provider_name,
         'provider': resolved_provider,
         'model': model,
         'temperature': role_cfg.get('temperature', 0.9),
-        'max_output_tokens': role_cfg.get('max_output_tokens', 1200),
-        'stream': bool(role_cfg.get('stream', role == 'narrator')),
+        'max_output_tokens': max_output_tokens,
+        'stream': stream,
         'is_local': False,
     }
 

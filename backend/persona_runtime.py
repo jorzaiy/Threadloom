@@ -81,6 +81,44 @@ def infer_persona_traits(name: str, role_label: str = '待确认') -> dict:
             stress_response=_hook('stress_response'),
         )
 
+    combined = f'{name} {role_label}'.strip()
+    if any(token in combined for token in ('掌柜', '店家')):
+        return _trait_block(
+            mbti='ISTJ',
+            mbti_conf=0.28,
+            archetype='守序经营者',
+            archetype_conf=0.3,
+            decision_style=('先保局面和规矩，再决定站队', 0.28),
+            social_strategy=('表面周旋，暗中留余地', 0.27),
+            conflict_style=('尽量不正面对撞，但会保护自己的地盘', 0.27),
+            speech_rhythm=('话少、稳、留三分余地', 0.3),
+            stress_response=('先压住场面，再找退路', 0.26),
+        )
+    if any(token in combined for token in ('小二', '跑堂')):
+        return _trait_block(
+            mbti='ISFJ',
+            mbti_conf=0.24,
+            archetype='谨慎服役者',
+            archetype_conf=0.28,
+            decision_style=('先看强势者脸色，再求自保', 0.25),
+            social_strategy=('顺着局势说话，尽量少惹事', 0.25),
+            conflict_style=('能躲就躲，避免卷进正面冲突', 0.24),
+            speech_rhythm=('快、小声、带点试探', 0.27),
+            stress_response=('慌但会立刻找最安全的站位', 0.25),
+        )
+    if any(token in combined for token in ('皂衣人', '镇北司', '官差', '官面')):
+        return _trait_block(
+            mbti='ESTJ',
+            mbti_conf=0.32,
+            archetype='执行者',
+            archetype_conf=0.36,
+            decision_style=('先执行命令，再根据阻碍调整动作', 0.32),
+            social_strategy=('压迫式推进，但仍会顾忌规矩与观感成本', 0.31),
+            conflict_style=('正面施压，必要时快速升级', 0.33),
+            speech_rhythm=('短句，直接，命令式', 0.35),
+            stress_response=('更强硬，但会优先维护目标与职责一致性', 0.3),
+        )
+
     return _trait_block(
         mbti='unknown',
         mbti_conf=0.0,

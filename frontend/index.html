@@ -117,6 +117,11 @@
 
       <div class="settings-body">
         <section class="settings-section">
+          <!-- LLM 首次设置引导横幅 -->
+          <div id="llmSetupGuide" class="setup-guide-banner" hidden>
+            <p>🔧 <strong>首次使用请先配置 LLM 连接</strong></p>
+            <p>填写站点地址和密钥，刷新模型列表后保存即可开始使用。</p>
+          </div>
           <div class="settings-stack">
             <section class="settings-subsection">
               <h3>站点连接</h3>
@@ -176,10 +181,87 @@
               </div>
               <div id="characterImportNote" class="inline-feedback"></div>
             </section>
+
+            <section class="settings-subsection">
+              <h3>导入 SillyTavern 聊天记录</h3>
+              <p class="settings-hint">仅支持当前角色卡的 .jsonl 聊天记录文件</p>
+              <div class="config-grid">
+                <label class="field field-wide">
+                  <span>选择 JSONL 文件</span>
+                  <input id="chatImportFileInput" type="file" accept=".jsonl" />
+                </label>
+              </div>
+              <div id="chatImportPreview" class="inline-feedback" hidden></div>
+              <div class="settings-actions">
+                <button id="chatImportPreviewBtn" type="button" class="subtle-btn">预览检查</button>
+                <button id="chatImportBtn" type="button" disabled>确认导入</button>
+              </div>
+              <div id="chatImportNote" class="inline-feedback"></div>
+            </section>
+
+            <!-- 多用户管理 -->
+            <section id="userManagementSection" class="settings-subsection" hidden>
+              <h3>用户管理</h3>
+              <div class="config-grid">
+                <label class="field">
+                  <span>多用户模式</span>
+                  <select id="multiUserToggle">
+                    <option value="off">关闭</option>
+                    <option value="on">开启</option>
+                  </select>
+                </label>
+              </div>
+              <div id="adminPasswordSection" class="config-grid" hidden>
+                <label class="field field-wide">
+                  <span>管理员密码</span>
+                  <input id="adminPasswordInput" type="password" placeholder="设置管理员密码" />
+                </label>
+                <div class="settings-actions">
+                  <button id="setAdminPasswordBtn" type="button" class="subtle-btn">设置密码</button>
+                </div>
+              </div>
+              <div id="userListSection" hidden>
+                <p class="settings-hint">已注册用户</p>
+                <div id="userListContainer"></div>
+                <div class="config-grid">
+                  <label class="field">
+                    <span>新用户名</span>
+                    <input id="newUserIdInput" type="text" placeholder="用户名" />
+                  </label>
+                  <label class="field">
+                    <span>密码</span>
+                    <input id="newUserPasswordInput" type="password" placeholder="密码" />
+                  </label>
+                </div>
+                <div class="settings-actions">
+                  <button id="createUserBtn" type="button">创建用户</button>
+                </div>
+              </div>
+              <div id="userManagementNote" class="inline-feedback"></div>
+            </section>
           </div>
         </section>
       </div>
     </aside>
+
+    <!-- 登录弹窗 -->
+    <div id="loginOverlay" class="login-overlay" hidden>
+      <div class="login-modal">
+        <h2>登录</h2>
+        <label class="field field-wide">
+          <span>用户名</span>
+          <input id="loginUserId" type="text" placeholder="输入用户名" />
+        </label>
+        <label class="field field-wide">
+          <span>密码</span>
+          <input id="loginPassword" type="password" placeholder="输入密码" />
+        </label>
+        <div class="settings-actions">
+          <button id="loginSubmitBtn" type="button">登录</button>
+        </div>
+        <div id="loginNote" class="inline-feedback"></div>
+      </div>
+    </div>
 
     <script src="/app.js"></script>
   </body>

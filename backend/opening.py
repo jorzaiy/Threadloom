@@ -5,29 +5,38 @@ import re
 from pathlib import Path
 
 from runtime_store import save_state
+from character_assets import load_character_core, load_openings
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CHAR = ROOT / 'character' / 'character-data.json'
-
-
-def read_json(path: Path):
-    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
-
-
-def load_character() -> dict:
-    return read_json(CHAR)
 
 
 def opening_bootstrap() -> dict:
-    char = load_character()
-    data = char.get('openingBootstrap') or char.get('openingState') or {}
+    openings = load_openings()
+    data = openings.get('bootstrap', {}) if isinstance(openings, dict) else {}
     return data if isinstance(data, dict) else {}
 
 
 def opening_hooks() -> list[str]:
-    char = load_character()
-    return char.get('openingHooks', []) or []
+    openings = load_openings()
+    options = openings.get('options', []) if isinstance(openings, dict) else []
+    hooks = []
+    for item in options:
+        if not isinstance(item, dict):
+            continue
+        full_text = str(item.get('full_text', '') or '').strip()
+        if full_text:
+            hooks.append(full_text)
+            continue
+        title = str(item.get('title', '') or '').strip()
+        prompt = str(item.get('prompt', '') or '').strip()
+        if title and prompt:
+            hooks.append(f'{title}：{prompt}')
+        elif title:
+            hooks.append(title)
+        elif prompt:
+            hooks.append(prompt)
+    return hooks
 
 
 def has_opening_hooks() -> bool:
@@ -40,8 +49,9 @@ def is_opening_command(text: str) -> bool:
 
 
 def build_opening_reply(user_text: str) -> str:
-    char = load_character()
-    opening = char.get('opening', '故事将从这里开始。')
+    char = load_character_core()
+    openings = load_openings()
+    opening = str(openings.get('menu_intro', '') or char.get('opening', '') or '故事将从这里开始。').strip()
     hooks = opening_hooks()
     t = (user_text or '').strip()
 

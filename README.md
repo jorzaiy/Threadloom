@@ -59,7 +59,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 
 当前 narrator 主输入已经收敛为两层：
 
-1. 最近 `10` 对 `user/assistant` turn 直接输入
+1. 最近 `12` 对 `user/assistant` turn 直接输入
 2. 更早历史只通过 keeper archive 命中补充
 
 当前明确不再作为 narrator 主输入的内容：

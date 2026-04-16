@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import json
 from pathlib import Path
-from typing import Optional
 
-from runtime_store import is_complete_assistant_item, load_canon, load_context, load_history, load_persona_index, load_state, load_summary
+from character_assets import load_system_npcs
+from keeper_record_retriever import retrieve_keeper_records
+from npc_bootstrap_agent import ensure_npc_registry
+from object_bootstrap_agent import ensure_object_registry
+from clue_bootstrap_agent import ensure_clue_registry
+from runtime_store import is_complete_assistant_item, load_canon, load_context, load_history, load_persona_index, load_state
 from paths import APP_ROOT, SHARED_ROOT, resolve_layered_source
 
 ROOT = SHARED_ROOT
@@ -19,61 +23,246 @@ def read_json(path: Path):
     return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
 
 
-def load_lorebook(lorebook_path: Path, trigger_text: str, max_entries: int = 12) -> list[dict]:
-    """加载世界书，根据 alwaysOn 和关键词匹配筛选条目。
+def _normalize_compact_text(text: str) -> str:
+    return ' '.join(str(text or '').split()).strip()
 
-    Args:
-        lorebook_path: 世界书 JSON 文件路径
-        trigger_text: 用于关键词匹配的文本（通常是用户输入 + 近期历史）
-        max_entries: 最多返回的条目数
 
-    Returns:
-        筛选后的世界书条目列表
-    """
+def _short_lore_text(text: str, limit: int) -> str:
+    value = _normalize_compact_text(text)
+    if not value:
+        return ''
+    if limit <= 0 or len(value) <= limit:
+        return value
+    return value[: max(0, limit - 3)] + '...'
+
+
+def _lorebook_match_score(entry: dict, trigger_lower: str) -> tuple[int, int]:
+    score = int(entry.get('priority', 0) or 0)
+    keyword_hits = 0
+    title = str(entry.get('title', '') or '').strip()
+    runtime_scope = str(entry.get('runtimeScope', '') or '').strip()
+    entry_type = str(entry.get('entryType', '') or '').strip()
+    if runtime_scope == 'archive_only' or entry_type == 'runtime_dump':
+        return -10**9, 0
+    if runtime_scope == 'foundation':
+        score += 6
+    if entry.get('featured'):
+        score += 4
+    if entry_type in {'npc', 'cast'}:
+        score += 2
+    if title and title.lower() in trigger_lower:
+        score += 8
+        keyword_hits += 1
+    for kw in entry.get('keywords', []) or []:
+        token = str(kw or '').strip()
+        if not token:
+            continue
+        if token.lower() in trigger_lower:
+            score += 6
+            keyword_hits += 1
+    return score, keyword_hits
+
+
+def _take_scored_entries(
+    selected: list[dict],
+    seen_ids: set[str],
+    scored_items: list[tuple[int, dict]],
+    *,
+    limit: int,
+) -> None:
+    if limit <= 0:
+        return
+    for _score, entry in scored_items:
+        if limit <= 0:
+            break
+        entry_id = str(entry.get('id', entry.get('title', '')) or '').strip()
+        if not entry_id or entry_id in seen_ids:
+            continue
+        selected.append(entry)
+        seen_ids.add(entry_id)
+        limit -= 1
+
+
+def load_lorebook(
+    lorebook_path: Path,
+    trigger_text: str,
+    *,
+    max_entries: int = 12,
+    min_entries: int = 2,
+    include_always_on: bool = True,
+    always_on_limit: int = 3,
+    matched_limit: int = 4,
+    foundation_rule_limit: int = 1,
+    foundation_world_limit: int = 1,
+    foundation_faction_limit: int = 1,
+    situational_faction_limit: int = 1,
+    situational_history_limit: int = 1,
+    situational_entry_limit: int = 2,
+) -> list[dict]:
+    """按预算加载世界书，避免 alwaysOn 整块压过最近窗口。"""
     data = read_json(lorebook_path)
     entries = data.get('entries', [])
-    selected = []
-    seen_ids = set()
+    selected: list[dict] = []
+    seen_ids: set[str] = set()
+    trigger_lower = trigger_text.lower()
 
-    # 先加 alwaysOn 条目
+    always_on_scored: list[tuple[int, dict]] = []
+    matched_scored: list[tuple[int, dict]] = []
     for entry in entries:
-        if entry.get('alwaysOn'):
-            entry_id = entry.get('id', entry.get('title', ''))
-            if entry_id not in seen_ids:
+        entry_id = str(entry.get('id', entry.get('title', '')) or '').strip()
+        if not entry_id:
+            continue
+        score, keyword_hits = _lorebook_match_score(entry, trigger_lower)
+        runtime_scope = str(entry.get('runtimeScope', '') or '').strip()
+        if score < -10**8:
+            continue
+        include_as_foundation = bool(entry.get('alwaysOn')) or runtime_scope == 'foundation'
+        if include_as_foundation:
+            if include_always_on:
+                always_on_scored.append((score, entry))
+            continue
+        if keyword_hits > 0:
+            matched_scored.append((score, entry))
+
+    always_on_scored.sort(key=lambda item: item[0], reverse=True)
+    matched_scored.sort(key=lambda item: item[0], reverse=True)
+    all_scored = sorted(always_on_scored + matched_scored, key=lambda item: item[0], reverse=True)
+
+    foundation_buckets = {
+        'rule': [],
+        'world': [],
+        'faction': [],
+        'other': [],
+    }
+    for item in always_on_scored:
+        entry = item[1]
+        entry_type = str(entry.get('entryType', '') or '').strip()
+        if entry_type == 'rule':
+            foundation_buckets['rule'].append(item)
+        elif entry_type in {'world', 'region'}:
+            foundation_buckets['world'].append(item)
+        elif entry_type == 'faction':
+            foundation_buckets['faction'].append(item)
+        else:
+            foundation_buckets['other'].append(item)
+
+    foundation_budget_used = 0
+    _take_scored_entries(selected, seen_ids, foundation_buckets['rule'], limit=min(always_on_limit, foundation_rule_limit))
+    foundation_budget_used = len(selected)
+    remaining_always_on = max(0, always_on_limit - foundation_budget_used)
+    _take_scored_entries(selected, seen_ids, foundation_buckets['world'], limit=min(remaining_always_on, foundation_world_limit))
+    foundation_budget_used = len(selected)
+    remaining_always_on = max(0, always_on_limit - foundation_budget_used)
+    _take_scored_entries(selected, seen_ids, foundation_buckets['faction'], limit=min(remaining_always_on, foundation_faction_limit))
+    foundation_budget_used = len(selected)
+    remaining_always_on = max(0, always_on_limit - foundation_budget_used)
+    _take_scored_entries(selected, seen_ids, foundation_buckets['other'], limit=remaining_always_on)
+
+    situational_buckets = {
+        'faction': [],
+        'history': [],
+        'entry': [],
+        'other': [],
+    }
+    for item in matched_scored:
+        entry = item[1]
+        entry_type = str(entry.get('entryType', '') or '').strip()
+        if entry_type == 'faction':
+            situational_buckets['faction'].append(item)
+        elif entry_type == 'history':
+            situational_buckets['history'].append(item)
+        elif entry_type in {'entry', 'region', 'npc', 'cast'}:
+            situational_buckets['entry'].append(item)
+        else:
+            situational_buckets['other'].append(item)
+
+    matched_budget_used = 0
+    _take_scored_entries(selected, seen_ids, situational_buckets['faction'], limit=min(matched_limit, situational_faction_limit))
+    matched_budget_used = len(selected) - foundation_budget_used
+    remaining_matched = max(0, matched_limit - matched_budget_used)
+    _take_scored_entries(selected, seen_ids, situational_buckets['history'], limit=min(remaining_matched, situational_history_limit))
+    matched_budget_used = len(selected) - foundation_budget_used
+    remaining_matched = max(0, matched_limit - matched_budget_used)
+    _take_scored_entries(selected, seen_ids, situational_buckets['entry'], limit=min(remaining_matched, situational_entry_limit))
+    matched_budget_used = len(selected) - foundation_budget_used
+    remaining_matched = max(0, matched_limit - matched_budget_used)
+    _take_scored_entries(selected, seen_ids, situational_buckets['other'], limit=remaining_matched)
+
+    minimum_target = min(max_entries, max(0, min_entries))
+    if len(selected) < minimum_target:
+        for pool in (always_on_scored, matched_scored, all_scored):
+            for _score, entry in pool:
+                if len(selected) >= minimum_target:
+                    break
+                entry_id = str(entry.get('id', entry.get('title', '')) or '').strip()
+                if entry_id in seen_ids:
+                    continue
                 selected.append(entry)
                 seen_ids.add(entry_id)
+            if len(selected) >= minimum_target:
+                break
 
-    # 再根据关键词匹配（不区分大小写）
-    trigger_lower = trigger_text.lower()
-    for entry in entries:
-        if entry.get('alwaysOn'):
-            continue
-        entry_id = entry.get('id', entry.get('title', ''))
-        if entry_id in seen_ids:
-            continue
-        keywords = entry.get('keywords', [])
-        if any(kw.lower() in trigger_lower for kw in keywords):
-            selected.append(entry)
-            seen_ids.add(entry_id)
-
-    # 按 priority 排序（高优先级在前）
-    selected.sort(key=lambda x: x.get('priority', 0), reverse=True)
     return selected[:max_entries]
 
 
-def format_lorebook_entries(entries: list[dict]) -> str:
-    """将世界书条目格式化为可注入 prompt 的文本"""
+def format_lorebook_entries(entries: list[dict], *, max_entry_chars: int = 320, max_total_chars: int = 2200) -> str:
+    """将世界书条目压缩为 narrator 可用的摘要形态。"""
     if not entries:
         return '暂无相关世界书条目'
 
     lines = []
+    total_chars = 0
     for entry in entries:
         title = entry.get('title', entry.get('id', '未命名'))
-        content = entry.get('content', '')
-        lines.append(f'### {title}')
-        lines.append(content)
-        lines.append('')
-    return '\n'.join(lines).strip()
+        content = _short_lore_text(entry.get('content', ''), max_entry_chars)
+        if not content:
+            continue
+        block = f"### {title}\n{content}\n"
+        if lines and total_chars + len(block) > max_total_chars:
+            break
+        if not lines and len(block) > max_total_chars:
+            allowed = max(80, max_total_chars - len(f"### {title}\n") - 1)
+            block = f"### {title}\n{_short_lore_text(content, allowed)}\n"
+        lines.append(block.rstrip())
+        total_chars += len(block)
+    return '\n\n'.join(lines).strip() if lines else '暂无相关世界书条目'
+
+
+def summarize_lorebook_entries(entries: list[dict], *, max_entry_chars: int = 320, max_total_chars: int = 2200) -> dict:
+    blocks = []
+    total_chars = 0
+    items = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get('title', entry.get('id', '未命名')) or '未命名').strip()
+        content = _short_lore_text(entry.get('content', ''), max_entry_chars)
+        if not content:
+            continue
+        block = f"### {title}\n{content}\n"
+        if blocks and total_chars + len(block) > max_total_chars:
+            break
+        if not blocks and len(block) > max_total_chars:
+            allowed = max(80, max_total_chars - len(f"### {title}\n") - 1)
+            content = _short_lore_text(content, allowed)
+            block = f"### {title}\n{content}\n"
+        blocks.append(block.rstrip())
+        item_chars = len(block.rstrip())
+        total_chars += len(block)
+        items.append({
+            'id': str(entry.get('id', '') or '').strip(),
+            'title': title,
+            'entryType': str(entry.get('entryType', '') or '').strip() or 'entry',
+            'runtimeScope': str(entry.get('runtimeScope', '') or '').strip() or 'situational',
+            'featured': bool(entry.get('featured', False)),
+            'priority': int(entry.get('priority', 0) or 0),
+            'injected_chars': item_chars,
+        })
+    return {
+        'text': '\n\n'.join(blocks).strip() if blocks else '暂无相关世界书条目',
+        'items': items,
+        'total_chars': len('\n\n'.join(blocks).strip()) if blocks else 0,
+    }
 
 
 def extract_lorebook_npc_candidates(entries: list[dict], onstage: list[str], relevant: list[str], limit: int = 8) -> list[dict]:
@@ -93,6 +282,35 @@ def extract_lorebook_npc_candidates(entries: list[dict], onstage: list[str], rel
             'title': title,
             'summary': (entry.get('content') or '').strip(),
             'priority': entry.get('priority', 0),
+            'source': 'lorebook_npc',
+        })
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def extract_system_npc_candidates(onstage: list[str], relevant: list[str], limit: int = 8) -> list[dict]:
+    data = load_system_npcs()
+    core_items = data.get('core', []) if isinstance(data.get('core', []), list) else []
+    items = core_items
+    names_in_use = set(onstage or []) | set(relevant or [])
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get('name', '') or '').strip()
+        if not name or name in names_in_use or name in seen:
+            continue
+        seen.add(name)
+        candidates.append({
+            'name': name,
+            'title': f"系统级 NPC：{name}",
+            'summary': str(item.get('summary', '') or '').strip(),
+            'priority': int(item.get('priority', 0) or 0),
+            'faction': str(item.get('faction', '') or '').strip(),
+            'role_label': str(item.get('role_label', '') or '').strip(),
+            'source': 'system_npc',
         })
         if len(candidates) >= limit:
             break
@@ -158,6 +376,7 @@ def build_featured_cast(lorebook_path: Path, trigger_text: str, onstage: list[st
                 'title': f'世界书 / {title}',
                 'summary': content,
                 'priority': score,
+                'source': 'featured_cast',
             }))
 
     scored.sort(key=lambda item: item[0], reverse=True)
@@ -286,13 +505,55 @@ def load_npc_profiles(npc_dir: Path, names: list[str], limit: int = 4) -> list[d
     return out[:limit]
 
 
+def select_recent_history_window(items: list[dict], limit_pairs: int) -> list[dict]:
+    if limit_pairs <= 0:
+        return []
+    filtered = []
+    for item in items or []:
+        if item.get('role') == 'assistant' and not is_complete_assistant_item(item):
+            continue
+        filtered.append(item)
+    if not filtered:
+        return []
+
+    pair_count = 0
+    start_index = len(filtered)
+    pending_user = False
+    for index in range(len(filtered) - 1, -1, -1):
+        role = filtered[index].get('role')
+        if role == 'assistant':
+            pending_user = True
+            start_index = index
+        elif role == 'user' and pending_user:
+            pair_count += 1
+            pending_user = False
+            start_index = index
+            if pair_count >= limit_pairs:
+                break
+    return filtered[start_index:]
+
+
+def count_complete_turn_pairs(items: list[dict]) -> int:
+    pair_count = 0
+    pending_user = False
+    for item in items or []:
+        role = item.get('role')
+        if role == 'user':
+            pending_user = True
+        elif role == 'assistant' and pending_user and is_complete_assistant_item(item):
+            pair_count += 1
+            pending_user = False
+    return pair_count
+
+
 def build_runtime_context(session_id: str) -> dict:
     cfg = load_runtime_config()
     sources = cfg.get('sources', {})
+    memory_cfg = cfg.get('memory', {}) if isinstance(cfg.get('memory', {}), dict) else {}
+    refresh_policy = cfg.get('refresh_policy', {}) if isinstance(cfg.get('refresh_policy', {}), dict) else {}
 
     runtime_rules = read_text(resolve_source(sources['runtime_rules']))
     state_json = load_state(session_id)
-    summary_text = load_summary(session_id)
     canon_text = load_canon(session_id)
     session_context = load_context(session_id)
     character_core = read_json(resolve_source(sources['character_core']))
@@ -318,12 +579,28 @@ def build_runtime_context(session_id: str) -> dict:
     persona = load_persona_summaries(onstage + relevant, session_id=session_id)
     npc_profiles = load_npc_profiles(resolve_source(sources['npc_profiles_dir']), onstage + relevant)
     recent_history_all = load_history(session_id)
-    recent_history = []
-    for item in recent_history_all:
-        if item.get('role') == 'assistant' and not is_complete_assistant_item(item):
-            continue
-        recent_history.append(item)
-    recent_history = recent_history[-cfg.get('refresh_policy', {}).get('recent_history_turns', 10):]
+    current_pair_count = count_complete_turn_pairs(recent_history_all)
+    npc_registry = ensure_npc_registry(session_id, recent_history_all)
+    object_registry = ensure_object_registry(session_id, recent_history_all)
+    clue_registry = ensure_clue_registry(session_id, recent_history_all)
+    recent_history_pairs = int(
+        memory_cfg.get(
+            'recent_history_turns',
+            refresh_policy.get('recent_history_turns', 12),
+        ) or 12
+    )
+    recent_history_pairs = max(1, recent_history_pairs)
+    recent_history = select_recent_history_window(
+        recent_history_all,
+        recent_history_pairs,
+    )
+    keeper_records = retrieve_keeper_records(
+        session_id,
+        state_json,
+        recent_window_pairs=recent_history_pairs,
+        current_pair_count=current_pair_count,
+        limit=4,
+    )
     arbiter_signals = state_json.get('arbiter_signals', {}) if isinstance(state_json.get('arbiter_signals', {}), dict) else {}
     active_threads = state_json.get('active_threads', []) if isinstance(state_json.get('active_threads', []), list) else []
     important_npcs = state_json.get('important_npcs', []) if isinstance(state_json.get('important_npcs', []), list) else []
@@ -373,17 +650,61 @@ def build_runtime_context(session_id: str) -> dict:
     trigger_text = '\n'.join(trigger_parts)
 
     lorebook_strategy = preset.get('lorebookStrategy', {})
-    max_lore_entries = lorebook_strategy.get('maxEntries', 12)
-    lorebook_entries = load_lorebook(lorebook_path, trigger_text, max_lore_entries)
-    lorebook_text = format_lorebook_entries(lorebook_entries)
-    lorebook_npc_candidates = extract_lorebook_npc_candidates(lorebook_entries, onstage, relevant)
-    featured_cast = build_featured_cast(lorebook_path, trigger_text, onstage, relevant)
-    merged_candidates = list(lorebook_npc_candidates)
-    seen_candidate_names = {item['name'] for item in merged_candidates}
+    max_lore_entries = int(lorebook_strategy.get('maxEntries', 6) or 6)
+    min_lore_entries = int(lorebook_strategy.get('minEntries', 2) or 2)
+    include_always_on = bool(lorebook_strategy.get('includeAlwaysOn', True))
+    always_on_limit = int(lorebook_strategy.get('alwaysOnMaxEntries', 3) or 3)
+    matched_limit = int(lorebook_strategy.get('matchedMaxEntries', max(0, max_lore_entries - always_on_limit)) or max(0, max_lore_entries - always_on_limit))
+    foundation_rule_limit = int(lorebook_strategy.get('foundationRuleMaxEntries', 1) or 1)
+    foundation_world_limit = int(lorebook_strategy.get('foundationWorldMaxEntries', 1) or 1)
+    foundation_faction_limit = int(lorebook_strategy.get('foundationFactionMaxEntries', 1) or 1)
+    situational_faction_limit = int(lorebook_strategy.get('situationalFactionMaxEntries', 1) or 1)
+    situational_history_limit = int(lorebook_strategy.get('situationalHistoryMaxEntries', 1) or 1)
+    situational_entry_limit = int(lorebook_strategy.get('situationalEntryMaxEntries', 2) or 2)
+    max_entry_chars = int(lorebook_strategy.get('maxEntryChars', 320) or 320)
+    max_total_chars = int(lorebook_strategy.get('maxTotalChars', 2200) or 2200)
+    system_npc_limit = int(lorebook_strategy.get('systemNpcLimit', 3) or 3)
+    lorebook_npc_limit = int(lorebook_strategy.get('lorebookNpcLimit', 4) or 4)
+    featured_cast_limit = int(lorebook_strategy.get('featuredCastLimit', 3) or 3)
+
+    lorebook_entries = load_lorebook(
+        lorebook_path,
+        trigger_text,
+        max_entries=max_lore_entries,
+        min_entries=min_lore_entries,
+        include_always_on=include_always_on,
+        always_on_limit=always_on_limit,
+        matched_limit=matched_limit,
+        foundation_rule_limit=foundation_rule_limit,
+        foundation_world_limit=foundation_world_limit,
+        foundation_faction_limit=foundation_faction_limit,
+        situational_faction_limit=situational_faction_limit,
+        situational_history_limit=situational_history_limit,
+        situational_entry_limit=situational_entry_limit,
+    )
+    lorebook_summary = summarize_lorebook_entries(
+        lorebook_entries,
+        max_entry_chars=max_entry_chars,
+        max_total_chars=max_total_chars,
+    )
+    lorebook_text = lorebook_summary['text']
+    system_npc_candidates = extract_system_npc_candidates(onstage, relevant, limit=system_npc_limit)
+    lorebook_npc_candidates = extract_lorebook_npc_candidates(lorebook_entries, onstage, relevant, limit=lorebook_npc_limit)
+    featured_cast = build_featured_cast(lorebook_path, trigger_text, onstage, relevant, limit=featured_cast_limit)
+    merged_lorebook_candidates = list(lorebook_npc_candidates)
+    seen_lorebook_candidate_names = {item['name'] for item in merged_lorebook_candidates}
     for item in featured_cast:
+        if item['name'] in seen_lorebook_candidate_names:
+            continue
+        merged_lorebook_candidates.append(item)
+        seen_lorebook_candidate_names.add(item['name'])
+
+    continuity_candidates = list(system_npc_candidates)
+    seen_candidate_names = {item['name'] for item in continuity_candidates}
+    for item in merged_lorebook_candidates:
         if item['name'] in seen_candidate_names:
             continue
-        merged_candidates.append(item)
+        continuity_candidates.append(item)
         seen_candidate_names.add(item['name'])
 
     # --- Preset 内容提取 ---
@@ -399,7 +720,6 @@ def build_runtime_context(session_id: str) -> dict:
         'player_profile_json': player_profile_json,
         'canon': canon_text,
         'state_text': state_text,
-        'summary_text': summary_text,
         'active_preset': {
             'name': active_preset_name,
             'data': preset,
@@ -408,7 +728,10 @@ def build_runtime_context(session_id: str) -> dict:
         },
         'lorebook_text': lorebook_text,
         'lorebook_entries': lorebook_entries,
-        'lorebook_npc_candidates': merged_candidates,
+        'lorebook_injection': lorebook_summary,
+        'lorebook_npc_candidates': merged_lorebook_candidates,
+        'system_npc_candidates': system_npc_candidates,
+        'continuity_candidates': continuity_candidates,
         'scene_facts': {
             'time': state_json.get('time', '待确认'),
             'location': state_json.get('location', '待确认'),
@@ -420,6 +743,11 @@ def build_runtime_context(session_id: str) -> dict:
             'immediate_goal': [state_json.get('immediate_goal', '待确认')],
             'immediate_risks': state_json.get('immediate_risks', []),
             'carryover_clues': state_json.get('carryover_clues', []),
+            'tracked_objects': state_json.get('tracked_objects', []),
+            'possession_state': state_json.get('possession_state', []),
+            'object_visibility': state_json.get('object_visibility', []),
+            'knowledge_scope': state_json.get('knowledge_scope', {}),
+            'resolved_events': state_json.get('resolved_events', []),
             'arbiter_signals': arbiter_signals,
             'active_threads': active_threads,
             'important_npcs': important_npcs,
@@ -427,4 +755,6 @@ def build_runtime_context(session_id: str) -> dict:
         'persona': persona,
         'npc_profiles': npc_profiles,
         'recent_history': recent_history,
+        'npc_registry': npc_registry,
+        'keeper_records': keeper_records,
     }
