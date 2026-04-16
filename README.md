@@ -42,6 +42,10 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - 动态角色卡名称、副标题与侧栏封面图
 - **泛化架构**：所有卡特定逻辑已从代码移到 `character-data.json["hints"]`，支持任意角色卡
 - API Key 支持环境变量引用（`$VAR` 或 `env:VAR`）
+- API 韧性：模型调用自动重试 429/503 错误（指数退避，最多 3 次，尊重 `Retry-After`）
+- 原子文件写入：所有 state/archive 写入防崩溃/断电数据损坏
+- 结构化知情边界：`knowledge_scope` 独立追踪主角和各 NPC 已知信息，替代纯文本软约束
+- 线程生命周期管理：按类型分级保留、`cooling_down` 过渡态、`resolved_events` 归档
 - turn trace 支持通过 `trace.enabled` 和 `trace.keep_last_turns` 控制是否落盘及保留数量
 - 角色卡导入已开始切到 `v0.3` 产物结构：
   - `character-data.json`

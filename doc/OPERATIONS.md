@@ -185,6 +185,11 @@ http://127.0.0.1:8765
 - 前端默认会话选择已切到“最近更新的活动会话优先”，不再固化到 `story-live`
 - 角色卡侧栏已改为动态读取角色卡元数据和缩略封面图
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间自动共享私下信息
+- 所有文件写入（`runtime_store.py`、`keeper_archive.py`）已改为原子写入：先写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
+- 模型调用层（`model_client.py`、`local_model_client.py`）已加入 `_retry_on_rate_limit` 装饰器：429/503 错误自动指数退避重试（最多 3 次），尊重 `Retry-After` 头
+- state 中新增 `knowledge_scope` 字段：独立追踪 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，由 keeper 按回合提取增量，`state_bridge.py` 合并去重（主角上限 30，单 NPC 上限 15），`narrator_input.py` 渲染为结构化知情边界
+- state 中新增 `resolved_events[]` 字段：线程经 `active → watch → cooling_down → resolved` 状态机过渡后归档（最多 20 条）
+- thread tracker 已改用按类型分级的保留策略 `THREAD_RETENTION_CONFIG`（main:4, risk:3, clue:2, arbiter:1），替代旧的统一 `THREAD_RETENTION_TURNS`
 
 ## 当前适合怎么调试
 
@@ -434,8 +439,8 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
 - 同名实体仍没有完整的 disambiguation 交互，当前只是后端直出实体列表并在歧义时保守展示
 - summary / important NPC / thread tracker 之间仍可能互相放大弱信号
 - 主角目前还没有独立的 runtime 层，observer/主角信息仍需要继续和 NPC 层做强隔离
-- 已解决事件还没有独立事件归档层，退出 active state 后仍主要依赖 summary 和记忆层保存
-- 信息隔离仍主要靠 prompt 约束 + 状态收口，尚未形成独立的 knowledge scope 数据层
+- ~~已解决事件还没有独立事件归档层~~ → 已补 `resolved_events`：线程经 `cooling_down` 过渡后归档到 `state.resolved_events[]`（最多 20 条）
+- ~~信息隔离仍主要靠 prompt 约束~~ → 已补 `knowledge_scope`：state 中新增 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，keeper 按回合提取增量，narrator_input 渲染结构化知情边界
 - 物件状态层已经接线完成，但当前真实回合中的抽取强度还不够；链路已通，实际产出仍需要继续调强
 - 当前单回合精确回放已优先覆盖 runtime 主链；opening 菜单态暂不作为主要回放目标
 - `state_updater.py` 当前仍处于主路径重构中；旧 heuristics 已被证明会对异题材记录产生幽灵状态，明天应继续把它们下沉到 legacy fallback

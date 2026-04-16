@@ -6,20 +6,21 @@
 
 - `server.py`：HTTP 服务入口
 - `handler_message.py`：`POST /api/message` 主链入口
-- `runtime_store.py`：session 目录、文件读写与状态快照
+- `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照
 - `bootstrap_session.py`：新 session bootstrap
 - `context_builder.py`：runtime 上下文装配，当前 narrator 主链为 `recent window + keeper archive`
-- `narrator_input.py`：narrator prompt 拼装
-- `model_config.py` / `model_client.py`：模型配置与模型调用
+- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界
+- `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
+- `local_model_client.py`：本地模型调用（含 429/503 自动重试）
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
-- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接
-- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）
+- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；含 `_merge_knowledge_scope()` 增量合并
+- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 已扩展为同时提取 `knowledge_scope` 增量
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
 - `persona_updater.py` / `persona_runtime.py`：session-local persona 流转与展示骨架
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
-- `thread_tracker.py`：active threads 更新
+- `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器
 - `opening.py`：opening 菜单与开局状态机
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
@@ -55,6 +56,9 @@
 - 前端默认会话选择已改为最近更新会话优先
 - 角色卡侧栏已动态读取角色卡元数据和缩略封面图
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间私下信息自动外溢
+- NPC 间信息隔离已升级为结构化 `knowledge_scope` 系统：state 中追踪 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，keeper 按回合提取增量，`state_bridge.py` 合并去重，`narrator_input.py` 渲染为结构化知情边界
+- 所有文件写入已改为原子写入模式（`_atomic_write_text()` / `_atomic_write_json()`）：写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
+- 模型调用已加入 API 韧性层：`_retry_on_rate_limit` 装饰器在 429/503 错误时自动指数退避重试（最多 3 次），尊重 `Retry-After` 响应头；远端和本地模型调用均已覆盖
 - `summary` 与独立 `mid digest` 当前不再作为 narrator prompt 的主输入块
 - 世界书注入当前已改成预算驱动，避免 `alwaysOn` 与整段 lore 压过最近窗口
  - 世界书预算当前已细化到 `runtimeScope / entryType`：
@@ -194,5 +198,6 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - `state_keeper` 仍主要从 narrator prose 反提 state
 - arbiter 仍主要覆盖少数高风险事件类型
 - analyzer / state keeper 虽已分模，但默认配置仍偏实验态
-- 主角 runtime 与已解决事件归档层仍未独立落地
-- NPC 间信息隔离仍未独立成结构化 knowledge scope 层
+- 主角 runtime 仍未独立落地
+- ~~NPC 间信息隔离仍未独立成结构化 knowledge scope 层~~ → 已补 `knowledge_scope`
+- ~~已解决事件归档层仍未独立落地~~ → 已补 `resolved_events`
