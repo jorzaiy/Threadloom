@@ -8,7 +8,10 @@ const composer = document.getElementById('composer');
 const input = document.getElementById('input');
 const regenerateBtn = document.getElementById('regenerateBtn');
 const statusBar = document.getElementById('statusBar');
-const debugPanel = document.getElementById('debugPanel');
+const debugFloatPanel = document.getElementById('debugFloatPanel');
+const debugBackdrop = document.getElementById('debugBackdrop');
+const debugCloseBtn = document.getElementById('debugCloseBtn');
+const debugToggleBtn = document.getElementById('debugToggleBtn');
 const stateColumn = document.getElementById('stateColumn');
 const mobileStateToggle = document.getElementById('mobileStateToggle');
 const settingsBtn = document.getElementById('settingsBtn');
@@ -36,10 +39,25 @@ const saveSiteConfigBtn = document.getElementById('saveSiteConfigBtn');
 const discoverSiteModelsBtn = document.getElementById('discoverSiteModelsBtn');
 const siteStatusNote = document.getElementById('siteStatusNote');
 const modelConfigNote = document.getElementById('modelConfigNote');
+const charWizardStep1 = document.getElementById('charWizardStep1');
+const charWizardStep2 = document.getElementById('charWizardStep2');
+const charWizardStep3 = document.getElementById('charWizardStep3');
+const charWizardStartBtn = document.getElementById('charWizardStartBtn');
+const charWizardCancelBtn = document.getElementById('charWizardCancelBtn');
 const characterImportFileInput = document.getElementById('characterImportFileInput');
 const characterImportNameInput = document.getElementById('characterImportNameInput');
 const importCharacterBtn = document.getElementById('importCharacterBtn');
 const characterImportNote = document.getElementById('characterImportNote');
+const characterProfileDraftInput = document.getElementById('characterProfileDraftInput');
+const saveCharacterProfileDraftBtn = document.getElementById('saveCharacterProfileDraftBtn');
+const skipCharacterProfileDraftBtn = document.getElementById('skipCharacterProfileDraftBtn');
+const characterProfileDraftNote = document.getElementById('characterProfileDraftNote');
+const chatWizardStep1 = document.getElementById('chatWizardStep1');
+const chatWizardStep2 = document.getElementById('chatWizardStep2');
+const chatWizardStep3 = document.getElementById('chatWizardStep3');
+const chatWizardStartBtn = document.getElementById('chatWizardStartBtn');
+const chatWizardCancelBtn = document.getElementById('chatWizardCancelBtn');
+const chatWizardBackBtn = document.getElementById('chatWizardBackBtn');
 const chatImportFileInput = document.getElementById('chatImportFileInput');
 const chatImportPreviewBtn = document.getElementById('chatImportPreviewBtn');
 const chatImportBtn = document.getElementById('chatImportBtn');
@@ -87,18 +105,60 @@ let modelConfig = {
 };
 let characterItems = [];
 let currentUserId = 'default-user';
-let multiUserEnabled = false;
-let sessionToken = localStorage.getItem('threadloom_token') || '';
+
+function hideCharacterProfileDraft() {
+  if (charWizardStep3) charWizardStep3.hidden = true;
+  if (charWizardStep1) charWizardStep1.hidden = false;
+  if (characterProfileDraftInput) characterProfileDraftInput.value = '';
+  if (characterProfileDraftNote) {
+    characterProfileDraftNote.textContent = '';
+    characterProfileDraftNote.dataset.kind = '';
+  }
+}
+
+function showCharacterProfileDraft(draft) {
+  if (!characterProfileDraftPanel || !characterProfileDraftInput) return;
+  characterProfileDraftInput.value = JSON.stringify(draft || {}, null, 2);
+  characterProfileDraftPanel.hidden = false;
+  if (characterProfileDraftNote) {
+    characterProfileDraftNote.textContent = '可直接保存，也可以按当前角色卡世界观略作修改后再保存。';
+    characterProfileDraftNote.dataset.kind = 'info';
+  }
+}
+
+async function saveCharacterProfileDraft() {
+  if (!characterProfileDraftInput) return;
+  let override;
+  try {
+    override = JSON.parse(characterProfileDraftInput.value || '{}');
+  } catch (err) {
+    if (characterProfileDraftNote) {
+      characterProfileDraftNote.textContent = `JSON 解析失败：${err.message}`;
+      characterProfileDraftNote.dataset.kind = 'error';
+    }
+    return;
+  }
+  const data = await apiJson('/api/characters/profile-override', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({override}),
+  });
+  renderCharacterCard(data.character_card || lastCharacterCard);
+  if (characterProfileDraftNote) {
+    characterProfileDraftNote.textContent = '角色卡主角设定已保存并应用。';
+    characterProfileDraftNote.dataset.kind = 'ok';
+  }
+}
 
 function applyWebConfig(nextConfig = {}) {
   webConfig = {
     ...webConfig,
     ...nextConfig,
   };
-  if (debugPanel) {
-    debugPanel.hidden = !webConfig.show_debug_panel;
+  if (debugToggleBtn) {
+    debugToggleBtn.hidden = !webConfig.show_debug_panel;
     if (!webConfig.show_debug_panel) {
-      debugPanel.open = false;
+      closeDebugPanel();
     } else if (webConfig.default_debug) {
       debugPanel.open = true;
     }
@@ -313,16 +373,12 @@ function validateRuntimeDraft(draft) {
 }
 
 async function apiJson(url, options = {}) {
-  if (sessionToken) {
-    options.headers = { ...options.headers, 'Authorization': `Bearer ${sessionToken}` };
-  }
   if (options.body && !options.headers?.['Content-Type']) {
     options.headers = { ...options.headers, 'Content-Type': 'application/json' };
   }
   const res = await fetch(url, options);
   const data = await res.json();
   if (!res.ok) {
-    if (res.status === 401 && multiUserEnabled) { showLoginModal(); }
     throw new Error(data?.error?.message || `request failed: ${url}`);
   }
   return data;
@@ -571,10 +627,6 @@ function renderMessages(items) {
     article.appendChild(label);
     article.appendChild(body);
     messagesEl.appendChild(article);
-  }
-
-  if (isWaitingForResponse) {
-    showTypingIndicator();
   }
 
   if (historyToolbar) {
@@ -1047,6 +1099,10 @@ async function importCharacterCard() {
   currentSessionId = '';
   renderCharacterCard(data.character_card || lastCharacterCard);
   renderCharacterSelect();
+   hideCharacterProfileDraft();
+   if (data.player_profile_override_draft && typeof data.player_profile_override_draft === 'object') {
+    showCharacterProfileDraft(data.player_profile_override_draft);
+   }
   if (characterImportFileInput) characterImportFileInput.value = '';
   if (characterImportNameInput) characterImportNameInput.value = '';
   await loadSessions();
@@ -1142,7 +1198,6 @@ composer.addEventListener('submit', async (e) => {
     });
     pendingUserMessage = null;
     isWaitingForResponse = false;
-    hideTypingIndicator();
     shouldStickToBottom = true;
     await loadHistory();
     renderState(data.state_snapshot || {});
@@ -1156,7 +1211,6 @@ composer.addEventListener('submit', async (e) => {
   } catch (err) {
     pendingUserMessage = null;
     isWaitingForResponse = false;
-    hideTypingIndicator();
     input.value = originalText;
     renderMessages(lastHistoryItems);
     setStatus(`错误：${err.message}`, 'error');
@@ -1238,6 +1292,23 @@ document.addEventListener('click', (e) => {
 settingsCloseBtn?.addEventListener('click', closeSettings);
 settingsBackdrop?.addEventListener('click', closeSettings);
 
+function openDebugPanel() {
+  if (debugFloatPanel) debugFloatPanel.dataset.open = 'true';
+  if (debugBackdrop) debugBackdrop.hidden = false;
+}
+
+function closeDebugPanel() {
+  if (debugFloatPanel) debugFloatPanel.dataset.open = 'false';
+  if (debugBackdrop) debugBackdrop.hidden = true;
+}
+
+debugToggleBtn?.addEventListener('click', () => {
+  if (debugFloatPanel?.dataset.open === 'true') closeDebugPanel();
+  else openDebugPanel();
+});
+debugCloseBtn?.addEventListener('click', closeDebugPanel);
+debugBackdrop?.addEventListener('click', closeDebugPanel);
+
 saveSiteConfigBtn?.addEventListener('click', async () => {
   try {
     await saveSiteConfig();
@@ -1284,6 +1355,7 @@ loadEarlierBtn?.addEventListener('click', async () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeSettings();
+    closeDebugPanel();
     closeMobileSidebar();
     toggleSessionDock(false);
   }
@@ -1299,6 +1371,18 @@ characterSelectEl?.addEventListener('change', async (e) => {
   }
 });
 
+charWizardStartBtn?.addEventListener('click', () => {
+  if (charWizardStep1) charWizardStep1.hidden = true;
+  if (charWizardStep2) charWizardStep2.hidden = false;
+});
+
+charWizardCancelBtn?.addEventListener('click', () => {
+  if (charWizardStep2) charWizardStep2.hidden = true;
+  if (charWizardStep1) charWizardStep1.hidden = false;
+  if (characterImportFileInput) characterImportFileInput.value = '';
+  if (characterImportNameInput) characterImportNameInput.value = '';
+});
+
 importCharacterBtn?.addEventListener('click', async () => {
   try {
     if (characterImportNote) {
@@ -1310,6 +1394,7 @@ importCharacterBtn?.addEventListener('click', async () => {
       characterImportNote.textContent = '角色卡已导入并切换';
       characterImportNote.dataset.kind = 'ok';
     }
+    if (charWizardStep2) charWizardStep2.hidden = true;
     setStatus('角色卡已导入', 'ok');
   } catch (err) {
     if (characterImportNote) {
@@ -1320,8 +1405,48 @@ importCharacterBtn?.addEventListener('click', async () => {
   }
 });
 
+saveCharacterProfileDraftBtn?.addEventListener('click', async () => {
+  try {
+    await saveCharacterProfileDraft();
+    setStatus('主角设定已保存', 'ok');
+  } catch (err) {
+    if (characterProfileDraftNote) {
+      characterProfileDraftNote.textContent = err.message;
+      characterProfileDraftNote.dataset.kind = 'error';
+    }
+    setStatus(`错误：${err.message}`, 'error');
+  }
+});
+
+skipCharacterProfileDraftBtn?.addEventListener('click', () => {
+  hideCharacterProfileDraft();
+  setStatus('已跳过本次主角设定补充', 'ok');
+});
+
+saveCharacterProfileDraftBtn?.addEventListener('click', async () => {
+  // After save, reset wizard
+});
+
 /* --- 聊天记录导入 --- */
 let _chatImportContentB64 = null;
+
+chatWizardStartBtn?.addEventListener('click', () => {
+  if (chatWizardStep1) chatWizardStep1.hidden = true;
+  if (chatWizardStep2) chatWizardStep2.hidden = false;
+});
+
+chatWizardCancelBtn?.addEventListener('click', () => {
+  if (chatWizardStep2) chatWizardStep2.hidden = true;
+  if (chatWizardStep1) chatWizardStep1.hidden = false;
+  if (chatImportFileInput) chatImportFileInput.value = '';
+});
+
+chatWizardBackBtn?.addEventListener('click', () => {
+  if (chatWizardStep3) chatWizardStep3.hidden = true;
+  if (chatWizardStep2) chatWizardStep2.hidden = false;
+  _chatImportContentB64 = null;
+  if (chatImportBtn) chatImportBtn.disabled = true;
+});
 
 chatImportPreviewBtn?.addEventListener('click', async () => {
   const file = chatImportFileInput?.files?.[0];
@@ -1345,6 +1470,8 @@ chatImportPreviewBtn?.addEventListener('click', async () => {
         ` | 消息：${resp.message_count || 0} 条` + (ok ? ' ✓ 匹配' : ' ⚠ 不匹配（名称不一致）'));
     }
     chatImportBtn.disabled = !resp.match;
+    if (chatWizardStep2) chatWizardStep2.hidden = true;
+    if (chatWizardStep3) chatWizardStep3.hidden = false;
     _chatNote(resp.match ? '校验通过，可以导入' : '角色名不匹配，请检查', resp.match ? 'ok' : 'warning');
   } catch (err) {
     _chatNote(err.message, 'error');
@@ -1367,6 +1494,10 @@ chatImportBtn?.addEventListener('click', async () => {
     _chatImportContentB64 = null;
     if (chatImportPreview) chatImportPreview.hidden = true;
     chatImportBtn.disabled = true;
+    // Reset wizard to step 1
+    if (chatWizardStep3) chatWizardStep3.hidden = true;
+    if (chatWizardStep1) chatWizardStep1.hidden = false;
+    if (chatImportFileInput) chatImportFileInput.value = '';
     const r = resp.report || {};
     _chatNote(`导入成功：${r.stats?.imported_message_count || 0} 条消息 → 会话 ${r.target_session || ''}`, 'ok');
     setStatus('聊天记录已导入', 'ok');
@@ -1398,151 +1529,13 @@ function _readFileBase64(file) {
   });
 }
 
-/* --- 多用户管理 --- */
-const loginOverlay = document.getElementById('loginOverlay');
-const loginSubmitBtn = document.getElementById('loginSubmitBtn');
-const loginUserId = document.getElementById('loginUserId');
-const loginPassword = document.getElementById('loginPassword');
-const loginNote = document.getElementById('loginNote');
-const userManagementSection = document.getElementById('userManagementSection');
-const multiUserToggle = document.getElementById('multiUserToggle');
-const adminPasswordSection = document.getElementById('adminPasswordSection');
-const userListSection = document.getElementById('userListSection');
-const userManagementNote = document.getElementById('userManagementNote');
-
-function showLoginModal() {
-  if (loginOverlay) loginOverlay.hidden = false;
-}
-
-function hideLoginModal() {
-  if (loginOverlay) loginOverlay.hidden = true;
-}
-
-// 登出
-document.getElementById('logoutBtn')?.addEventListener('click', async () => {
-  try {
-    await apiJson('/api/auth/logout', { method: 'POST' });
-  } catch { /* ignore */ }
-  sessionToken = '';
-  localStorage.removeItem('threadloom_token');
-  location.reload();
-});
-
-loginSubmitBtn?.addEventListener('click', async () => {
-  const uid = loginUserId?.value?.trim() || '';
-  const pwd = loginPassword?.value || '';
-  if (!uid) { if (loginNote) { loginNote.textContent = '请输入用户名'; loginNote.dataset.kind = 'error'; } return; }
-  try {
-    const data = await apiJson('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ user_id: uid, password: pwd }),
-    });
-    sessionToken = data.token;
-    currentUserId = data.user_id;
-    localStorage.setItem('threadloom_token', sessionToken);
-    hideLoginModal();
-    location.reload();
-  } catch (err) {
-    if (loginNote) { loginNote.textContent = err.message; loginNote.dataset.kind = 'error'; }
-  }
-});
-
 async function checkAuth() {
   try {
     const data = await apiJson('/api/auth/me');
-    currentUserId = data.user_id;
-    multiUserEnabled = data.multi_user_enabled;
-    if (multiUserEnabled && !sessionToken && currentUserId === 'default-user') {
-      // 多用户模式但无令牌 → 仍可用默认用户（兼容无密码管理员）
-    }
-  } catch (err) {
-    if (multiUserEnabled && String(err?.message || '').match(/401|unauthorized/i)) {
-      showLoginModal();
-    }
+    currentUserId = data.user_id || 'default-user';
+  } catch (_err) {
+    currentUserId = 'default-user';
   }
-}
-
-async function loadUserManagement() {
-  if (currentUserId !== 'default-user') {
-    if (userManagementSection) userManagementSection.hidden = true;
-    return;
-  }
-  if (userManagementSection) userManagementSection.hidden = false;
-  if (multiUserToggle) multiUserToggle.value = multiUserEnabled ? 'on' : 'off';
-  if (adminPasswordSection) adminPasswordSection.hidden = !multiUserEnabled;
-  if (userListSection) userListSection.hidden = !multiUserEnabled;
-  if (multiUserEnabled) await renderUserList();
-}
-
-multiUserToggle?.addEventListener('change', async () => {
-  const enabled = multiUserToggle.value === 'on';
-  try {
-    await apiJson('/api/multi-user', { method: 'POST', body: JSON.stringify({ enabled }) });
-    multiUserEnabled = enabled;
-    if (adminPasswordSection) adminPasswordSection.hidden = !enabled;
-    if (userListSection) userListSection.hidden = !enabled;
-    if (enabled) await renderUserList();
-    _userNote(enabled ? '多用户模式已开启' : '多用户模式已关闭', 'ok');
-  } catch (err) { _userNote(err.message, 'error'); }
-});
-
-document.getElementById('setAdminPasswordBtn')?.addEventListener('click', async () => {
-  const pwd = document.getElementById('adminPasswordInput')?.value || '';
-  if (!pwd) { _userNote('密码不能为空', 'error'); return; }
-  try {
-    await apiJson('/api/users', { method: 'POST', body: JSON.stringify({ action: 'set_admin_password', password: pwd }) });
-    _userNote('管理员密码已设置', 'ok');
-    document.getElementById('adminPasswordInput').value = '';
-  } catch (err) { _userNote(err.message, 'error'); }
-});
-
-document.getElementById('createUserBtn')?.addEventListener('click', async () => {
-  const uid = document.getElementById('newUserIdInput')?.value?.trim() || '';
-  const pwd = document.getElementById('newUserPasswordInput')?.value || '';
-  if (!uid || !pwd) { _userNote('用户名和密码不能为空', 'error'); return; }
-  try {
-    await apiJson('/api/users', { method: 'POST', body: JSON.stringify({ action: 'create', user_id: uid, password: pwd }) });
-    _userNote(`用户 "${uid}" 已创建`, 'ok');
-    document.getElementById('newUserIdInput').value = '';
-    document.getElementById('newUserPasswordInput').value = '';
-    await renderUserList();
-  } catch (err) { _userNote(err.message, 'error'); }
-});
-
-async function renderUserList() {
-  const container = document.getElementById('userListContainer');
-  if (!container) return;
-  try {
-    const data = await apiJson('/api/users');
-    container.innerHTML = '';
-    for (const u of (data.users || [])) {
-      const row = document.createElement('div');
-      row.className = 'user-list-item';
-      const info = document.createElement('span');
-      info.textContent = u.user_id + ' ';
-      const _roleSpan = document.createElement('span'); _roleSpan.className = 'user-role'; _roleSpan.textContent = u.role; info.appendChild(_roleSpan);
-      row.appendChild(info);
-      if (u.user_id !== 'default-user') {
-        const del = document.createElement('button');
-        del.className = 'user-delete-btn';
-        del.textContent = '删除';
-        del.addEventListener('click', async () => {
-          if (!confirm(`确定删除用户 "${u.user_id}"？`)) return;
-          try {
-            await apiJson('/api/users', { method: 'POST', body: JSON.stringify({ action: 'delete', user_id: u.user_id }) });
-            await renderUserList();
-            _userNote(`用户 "${u.user_id}" 已删除`, 'ok');
-          } catch (err) { _userNote(err.message, 'error'); }
-        });
-        row.appendChild(del);
-      }
-      container.appendChild(row);
-    }
-  } catch (err) { _userNote(err.message, 'error'); }
-}
-
-function _userNote(msg, kind) {
-  if (userManagementNote) { userManagementNote.textContent = msg; userManagementNote.dataset.kind = kind || ''; }
 }
 
 (async function init() {
@@ -1558,7 +1551,6 @@ function _userNote(msg, kind) {
     ]);
     await loadHistory();
     await loadState();
-    await loadUserManagement();
     closeSettings();
     toggleSessionDock(false);
     shouldStickToBottom = true;
