@@ -102,7 +102,7 @@ def _short(text: str, limit: int = 120) -> str:
 
 def _registry_summary(registry: dict) -> list[dict]:
     out = []
-    for item in (registry.get('entities', []) or [])[:10]:
+    for item in (registry.get('entities', []) or [])[:20]:
         if not isinstance(item, dict):
             continue
         out.append({
@@ -148,11 +148,11 @@ def _normalize_entities(items) -> list[dict]:
             aliases.insert(0, canonical)
         out.append({
             'canonical_name': canonical,
-            'aliases': aliases[:8],
+            'aliases': aliases[:12],
             'role_label': str(item.get('role_label', '') or '待确认').strip() or '待确认',
             'faction': str(item.get('faction', '') or '待确认').strip() or '待确认',
             'stability': str(item.get('stability', '') or 'low').strip() or 'low',
-            'notes': _short(item.get('notes', ''), limit=80),
+            'notes': _short(item.get('notes', ''), limit=200),
         })
         seen.add(canonical)
     return out

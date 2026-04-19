@@ -156,7 +156,7 @@ def _turn_pairs(items: list[dict]) -> list[tuple[dict, dict]]:
 
 def _is_valid_object_label(label: str) -> bool:
     """检查候选标签是否像物件名。"""
-    if not label or len(label) < 2 or len(label) > 6:
+    if not label or len(label) < 2 or len(label) > 8:
         return False
     if label in _NOT_OBJECTS:
         return False
@@ -215,7 +215,7 @@ def _build_classify_prompt(existing_objects: list[dict], candidates: list[dict],
             {'label': o.get('label', ''), 'holder': o.get('holder', '')}
             for o in existing_objects[:10]
         ],
-        'candidates': candidates[:15],
+        'candidates': candidates[:25],
         'context_snippet': context_text[:800],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)

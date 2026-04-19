@@ -56,6 +56,15 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _truncate(value: str, limit: int, label: str = '') -> str:
+    """Truncate string with logging when content is lost."""
+    if len(value) <= limit:
+        return value
+    if label:
+        logger.warning('Truncated %s from %d to %d chars', label, len(value), limit)
+    return value[:limit]
+
+
 def _read_png_chunks(data: bytes) -> list[tuple[str, bytes]]:
     if data[:8] != b'\x89PNG\r\n\x1a\n':
         raise ValueError('not a valid PNG file')
@@ -221,21 +230,21 @@ def _extract_character_core(card_json: dict) -> dict:
     summary_parts = [part for part in (description, scenario) if part]
     core = {
         'name': name or '未命名角色卡',
-        'role': personality[:240],
+        'role': _truncate(personality, 240, 'character role/personality'),
         'coreDescription': {
             'title': name or '未命名角色卡',
-            'tagline': scenario[:120],
-            'summary': '\n\n'.join(summary_parts)[:1200],
+            'tagline': _truncate(scenario, 120, 'scenario/tagline'),
+            'summary': _truncate('\n\n'.join(summary_parts), 1200, 'character summary'),
         },
         'opening': '故事将从这里开始。',
-        'notes': creator_notes[:800],
+        'notes': _truncate(creator_notes, 800, 'creator notes'),
         'source': {
             'spec': str(card_json.get('spec', '') or '').strip(),
             'spec_version': str(card_json.get('spec_version', '') or '').strip(),
         },
     }
     if system_prompt:
-        core['system_summary'] = system_prompt[:1200]
+        core['system_summary'] = _truncate(system_prompt, 1200, 'system prompt')
     return core
 
 
@@ -396,6 +405,34 @@ def _extract_lorebook(card_json: dict) -> dict:
     return {
         'name': _clean_text((raw_book or {}).get('name', '')),
         'entries': normalized,
+    }
+
+
+def _is_runtime_template_lorebook_entry(entry: dict) -> bool:
+    if not isinstance(entry, dict):
+        return True
+    title = str(entry.get('title', '') or '').strip()
+    content = str(entry.get('content', '') or '')
+    entry_type = str(entry.get('entryType', '') or '').strip()
+    runtime_scope = str(entry.get('runtimeScope', '') or '').strip()
+    title_lower = title.lower()
+    if runtime_scope == 'archive_only' or entry_type in {'runtime_aux', 'runtime_dump'}:
+        return True
+    if any(token in title for token in ('状态栏', '人际', '记忆', '总结条目', 'TavernDB-', 'ReadableDataTable', 'OutlineTable', 'ImportantPersonsIndex', 'PersonsHeader')):
+        return True
+    if any(token in title_lower for token in ('wrapperstart', 'wrapperend', '[event]', '[system]', '[meta]', 'number', 'favor', 'meet')):
+        return True
+    if any(token in content for token in ('{%','{{user.','{{ user.','user.relationships','[EVENT]','[SYSTEM]','[META]','TavernDB-','ReadableDataTable','OutlineTable','ImportantPersonsIndex','PersonsHeader')):
+        return True
+    return False
+
+
+def _filter_runtime_lorebook_entries(lorebook: dict) -> dict:
+    entries = lorebook.get('entries', []) if isinstance(lorebook.get('entries', []), list) else []
+    filtered = [entry for entry in entries if not _is_runtime_template_lorebook_entry(entry)]
+    return {
+        **lorebook,
+        'entries': filtered,
     }
 
 
@@ -1026,8 +1063,9 @@ def _write_runtime_baselines(core: dict, lorebook: dict, system_npcs: dict) -> N
 def import_card_bundle(card_json: dict, *, png_data: bytes | None = None) -> dict:
     raw_card_hash = _stable_hash(json.dumps(card_json, ensure_ascii=False, sort_keys=True))
     core = _extract_character_core(card_json)
-    lorebook = _extract_lorebook(card_json)
-    system_npcs = _extract_system_npcs(lorebook, card_json)
+    raw_lorebook = _extract_lorebook(card_json)
+    system_npcs = _extract_system_npcs(raw_lorebook, card_json)
+    lorebook = _filter_runtime_lorebook_entries(raw_lorebook)
     openings = _extract_openings_payload(card_json)
     backups = _write_imported_backups(card_json, png_data, raw_card_hash=raw_card_hash)
     covers = _write_cover_assets(png_data, raw_card_hash=raw_card_hash)

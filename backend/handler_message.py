@@ -576,12 +576,13 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         state_keeper_trace = {}
         fragment_state = build_state_from_fragment(state, state_fragment, session_id)
+        provider_used = 'skeleton+fragment' if skeleton_keeper_diagnostics and not skeleton_keeper_diagnostics.get('fallback_used') else 'fragment-baseline'
         fragment_state['state_keeper_diagnostics'] = {
-            'provider_requested': 'fragment-only',
-            'provider_used': 'fragment-baseline',
+            'provider_requested': 'skeleton-only',
+            'provider_used': provider_used,
             'model_usage': None,
             'fallback_used': False,
-            'skipped_reason': f'non-consolidation turn ({current_turn_num}/{consolidate_every})',
+            'skipped_reason': f'non-consolidation turn ({current_turn_num}/{consolidate_every}), skeleton keeper provides core fields',
         }
         save_state(session_id, fragment_state)
         try:

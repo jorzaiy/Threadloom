@@ -138,7 +138,7 @@ def _heuristic_extract_clues(window_pairs: list[tuple[dict, dict]]) -> list[dict
             })
     # 按匹配模式数量排序取前 8 个
     candidates.sort(key=lambda x: x['pattern_count'], reverse=True)
-    return candidates[:8]
+    return candidates[:12]
 
 
 def _build_classify_prompt(existing_clues: list[dict], candidates: list[dict], context_text: str) -> str:

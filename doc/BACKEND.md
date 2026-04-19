@@ -212,15 +212,53 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 
 ## 近期变更
 
-### State Keeper 调用频率修正
+### State Keeper 三层架构与调度策略
 
-`handler_message.py` 原先每轮无条件调用 `call_state_keeper()`（LLM 提取），导致非合并轮也发送 LLM 请求，影响主要事件和当前目标的提取精度。
+**修改前**：`handler_message.py` 每轮无条件调用 `call_state_keeper()`（fill LLM），对所有字段做全量提取。这导致：
+- 每轮都消耗 LLM 配额（~5KB 输入 / 480 tokens 输出）
+- keeper 只能看到最近几轮上下文，无法提取跨轮的长期目标
+- 主要事件和 `immediate_goal` 精度偏低
 
-修正后行为：
+**修改后（三层混合策略）**：
+
+| 层                | 模块                | 触发频率           | 输入大小 | 提取字段                              |
+| ----              | ----                | ----               | ----     | ----                                  |
+| 启发式            | `state_updater.py`  | 每轮               | ~1KB     | 全字段（保守推理）                     |
+| Skeleton LLM      | `state_keeper.py`   | 每完整轮           | ~2KB     | time, location, main_event, onstage_npcs, immediate_goal |
+| Fill LLM          | `state_keeper.py`   | 每 N 轮（默认 12） | ~5KB     | scene_core, risks, clues, tracked_objects, knowledge_scope |
+
 - 读取 `config/runtime.json` 中 `memory.consolidate_every_turns`（默认 12）
-- 仅在轮数为该值的倍数时调用完整 LLM keeper
-- 非合并轮使用 `build_state_from_fragment()` + `update_state()` 轻量更新
-- 诊断信息中 `skipped_reason` 标注跳过原因
+- 非合并轮使用 skeleton + `build_state_from_fragment()` + `update_state()` 轻量更新
+- 诊断信息中 `provider` 标注为 `skeleton+fragment` 或 `full_fill`
+
+### 上下文窗口与输出优化
+
+**修改前**：
+- `recent_history_turns`: 12 轮
+- `narrator.max_output_tokens`: 1200
+- `lorebookStrategy.maxTotalChars`: 2200（world-sim-balanced 预设）
+
+**修改后**：
+- `recent_history_turns`: **8 轮**（`config/runtime.json`）— 减少约 30% 上下文注入量
+- `narrator.max_output_tokens`: **1000** — 降低每轮生成的 token 消耗
+- `lorebookStrategy.maxTotalChars`: **1500**（`character/presets/world-sim-balanced.json`）— 减少世界书注入上限
+
+单轮总上下文约从 30KB 降至 22-25KB。
+
+### 角色卡导入管线精度优化
+
+提升 3 个 bootstrap agent 的提取精度上限：
+
+| 参数                                     | 修改前  | 修改后  | 文件                         |
+| ----                                     | ----    | ----    | ----                         |
+| NPC 注册表发送给 LLM 的数量              | 10 条   | 20 条   | `npc_bootstrap_agent.py`     |
+| NPC 别名保留数量                          | 8 个    | 12 个   | `npc_bootstrap_agent.py`     |
+| NPC notes 截断长度                        | 80 字符 | 200 字符| `npc_bootstrap_agent.py`     |
+| 物件候选发送数量                          | 15 个   | 25 个   | `object_bootstrap_agent.py`  |
+| 物件标签最大长度                          | 6 字符  | 8 字符  | `object_bootstrap_agent.py`  |
+| 线索候选发送数量                          | 8 个    | 12 个   | `clue_bootstrap_agent.py`    |
+
+另在 `card_importer.py` 中新增 `_truncate()` 辅助函数，当字段被截断时自动输出 WARNING 日志，便于排查导入精度问题。
 
 ### 前端 UI 重构
 
