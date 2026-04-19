@@ -41,14 +41,11 @@
                 <div id="sessionDockList" class="session-dock-list"></div>
               </div>
             </div>
-        <button id="debugToggleBtn" class="icon-btn settings-icon-btn" type="button" aria-label="调试信息" hidden>
-          <span class="material-symbols-outlined">bug_report</span>
+        <button id="debugToggleBtn" class="icon-btn settings-icon-btn" type="button" aria-label="状态面板">
+          <span class="material-symbols-outlined">explore</span>
         </button>
         <button id="settingsBtn" class="icon-btn settings-icon-btn" type="button" aria-haspopup="dialog" aria-controls="settingsPanel" aria-expanded="false" aria-label="打开设置">
           <span class="material-symbols-outlined">settings</span>
-        </button>
-        <button id="mobileStateToggle" class="icon-btn mobile-state-toggle" type="button" aria-label="打开状态面板">
-          <span class="material-symbols-outlined">view_sidebar</span>
         </button>
                 </div>
               </div>
@@ -60,7 +57,17 @@
           </div>
         </form>
       </main>
-      <aside id="stateColumn" class="state-column">
+    </div>
+
+    <div id="debugBackdrop" class="debug-backdrop" hidden></div>
+    <aside id="debugFloatPanel" class="debug-float-panel" aria-hidden="true">
+      <div class="debug-float-header">
+        <h2>状态面板</h2>
+        <button id="debugCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭面板">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="debug-float-body">
         <section class="card sidebar-group">
           <details class="sidebar-details" open>
             <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">explore</span>当前状态</summary>
@@ -85,20 +92,14 @@
             <div id="entityDetail" class="sidebar-details-body entity-detail-body">点击状态面板中的 NPC 名称查看详情</div>
           </details>
         </section>
-
-      </aside>
-    </div>
-
-    <div id="debugBackdrop" class="debug-backdrop" hidden></div>
-    <aside id="debugFloatPanel" class="debug-float-panel" aria-hidden="true">
-      <div class="debug-float-header">
-        <h2>调试诊断</h2>
-        <button id="debugCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭调试">
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>
-      <div class="debug-float-body">
-        <pre id="debugDetail">发送一轮消息后显示</pre>
+        <section class="card sidebar-group">
+          <details class="sidebar-details">
+            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">bug_report</span>调试诊断</summary>
+            <div class="sidebar-details-body">
+              <pre id="debugDetail">发送一轮消息后显示</pre>
+            </div>
+          </details>
+        </section>
       </div>
     </aside>
 

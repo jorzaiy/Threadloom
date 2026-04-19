@@ -45,8 +45,7 @@ body {
   height: 100vh;
 }
 
-.chat-column,
-.state-column {
+.chat-column {
   padding: 16px 24px;
 }
 
@@ -60,51 +59,6 @@ body {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(249, 246, 241, 0.08) 100%),
     radial-gradient(circle at top left, rgba(211, 232, 213, 0.18), transparent 34%);
-}
-
-.state-column {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  background: linear-gradient(180deg, rgba(250, 246, 240, 0.98) 0%, rgba(244, 241, 234, 0.98) 100%);
-  backdrop-filter: blur(12px);
-  position: fixed;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%) translateY(100%);
-  width: min(62rem, 94vw);
-  max-height: 70vh;
-  overflow-y: auto;
-  border: 1px solid rgba(127, 109, 91, 0.14);
-  border-bottom: 0;
-  border-radius: 24px 24px 0 0;
-  box-shadow: 0 -18px 50px rgba(33, 29, 25, 0.14);
-  padding: 20px 22px 24px;
-  z-index: 75;
-  opacity: 0;
-  pointer-events: none;
-  transition: transform 220ms ease, opacity 180ms ease;
-}
-
-.state-column[data-mobile-open='true'] {
-  transform: translateX(-50%) translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.state-column[hidden] {
-  display: none;
-}
-
-.state-column::before {
-  content: '状态面板';
-  display: block;
-  font-family: 'Inter', sans-serif;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.22em;
-  color: var(--text-muted);
-  margin-bottom: 2px;
 }
 
 .topbar {
@@ -539,12 +493,12 @@ button:active {
 }
 
 .messages::-webkit-scrollbar,
-.state-column::-webkit-scrollbar {
+.debug-float-body::-webkit-scrollbar {
   width: 4px;
 }
 
 .messages::-webkit-scrollbar-thumb,
-.state-column::-webkit-scrollbar-thumb {
+.debug-float-body::-webkit-scrollbar-thumb {
   background: var(--surface-variant);
 }
 
@@ -811,6 +765,22 @@ button:active {
   margin-top: 2px;
   padding-top: 8px;
   border-top: 1px solid rgba(195, 200, 193, 0.35);
+}
+
+.session-dock-separator {
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  padding: 8px 6px 4px;
+  border-top: 1px solid rgba(195, 200, 193, 0.3);
+  margin-top: 4px;
+}
+
+.session-dock-archived .session-dock-open {
+  opacity: 0.6;
+  font-style: italic;
 }
 
 .session-dock-new-btn {
@@ -1368,20 +1338,24 @@ button:active {
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.04em;
-  color: var(--text-muted);
-  background: none;
+  color: var(--primary);
+  background: var(--primary-soft);
   border: none;
+  border-radius: 10px 10px 0 0;
   cursor: pointer;
-  transition: color 160ms ease;
+  transition: background 160ms ease, color 160ms ease;
   white-space: nowrap;
 }
 
 .settings-tab-btn:hover {
+  background: rgba(199, 222, 205, 0.78);
   color: var(--text);
 }
 
 .settings-tab-btn[aria-selected='true'] {
-  color: var(--primary);
+  color: var(--text);
+  background: transparent;
+  font-weight: 600;
 }
 
 .settings-tab-btn[aria-selected='true']::after {
@@ -1575,37 +1549,10 @@ button:active {
     border-right: 0;
   }
 
-  .state-column {
-    width: min(94vw, 62rem);
-    max-height: 78vh;
-    padding: 18px 18px 22px;
-  }
-}
-
-.mobile-state-toggle {
-  display: inline-flex;
-  align-items: center;
-  padding: 8px;
-  border: 1px solid rgba(127, 109, 91, 0.18);
-  background: rgba(255, 255, 255, 0.66);
-  box-shadow: var(--shadow-soft);
-}
-
-.mobile-state-toggle .material-symbols-outlined {
-  font-size: 18px;
-}
-
-.mobile-state-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(26, 28, 27, 0.16);
-  backdrop-filter: blur(4px);
-  z-index: 72;
 }
 
 @media (max-width: 720px) {
-  .chat-column,
-  .state-column {
+  .chat-column {
     padding: 16px;
   }
 
@@ -1756,7 +1703,7 @@ button:active {
   left: 50%;
   transform: translateX(-50%) translateY(100%);
   width: min(56rem, 92vw);
-  max-height: 50vh;
+  max-height: 70vh;
   background: var(--background);
   border: 1px solid rgba(195, 200, 193, 0.5);
   border-bottom: 0;
@@ -1797,6 +1744,9 @@ button:active {
   flex: 1;
   overflow-y: auto;
   padding: 12px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .debug-float-body pre {

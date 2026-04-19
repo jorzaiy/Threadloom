@@ -13,8 +13,6 @@ const debugFloatPanel = document.getElementById('debugFloatPanel');
 const debugBackdrop = document.getElementById('debugBackdrop');
 const debugCloseBtn = document.getElementById('debugCloseBtn');
 const debugToggleBtn = document.getElementById('debugToggleBtn');
-const stateColumn = document.getElementById('stateColumn');
-const mobileStateToggle = document.getElementById('mobileStateToggle');
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settingsPanel');
 const settingsBackdrop = document.getElementById('settingsBackdrop');
@@ -188,22 +186,10 @@ function applyWebConfig(nextConfig = {}) {
     ...webConfig,
     ...nextConfig,
   };
-  if (debugToggleBtn) {
-    debugToggleBtn.hidden = !webConfig.show_debug_panel;
-    if (!webConfig.show_debug_panel) {
-      closeDebugPanel();
-    } else if (webConfig.default_debug) {
-      debugPanel.open = true;
-    }
-  }
-  if (stateColumn) {
-    stateColumn.hidden = !webConfig.show_state_panel;
-  }
 }
 
 function openSettings(tab) {
   if (!settingsPanel || !settingsBackdrop) return;
-  closeMobileSidebar();
   settingsPanel.dataset.open = 'true';
   settingsPanel.setAttribute('aria-hidden', 'false');
   settingsBackdrop.hidden = false;
@@ -260,7 +246,7 @@ function sessionId() {
 }
 
 function topSessions(items) {
-  return (items || [])
+  const active = (items || [])
     .filter(item => !item.archived && !item.replay)
     .sort((a, b) => {
       const messageGap = (b.last_message_ts || 0) - (a.last_message_ts || 0);
@@ -268,6 +254,11 @@ function topSessions(items) {
       return (b.updated_at_ns || 0) - (a.updated_at_ns || 0);
     })
     .slice(0, 5);
+  const archived = (items || [])
+    .filter(item => item.archived && !item.replay)
+    .sort((a, b) => (b.updated_at_ns || 0) - (a.updated_at_ns || 0))
+    .slice(0, 10);
+  return { active, archived };
 }
 
 function setStatus(text, kind = 'info') {
@@ -473,17 +464,18 @@ async function loadCharacters() {
 function renderSessionDock() {
   if (!sessionDockList) return;
   sessionDockList.innerHTML = '';
-  const items = topSessions(sessionItems);
+  const { active, archived } = topSessions(sessionItems);
 
-  for (const item of items) {
+  function createSessionRow(item, isArchived) {
     const row = document.createElement('div');
-    row.className = 'session-dock-item';
+    row.className = 'session-dock-item' + (isArchived ? ' session-dock-archived' : '');
     if (item.session_id === sessionId()) row.dataset.active = 'true';
 
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'session-dock-open';
-    openBtn.textContent = item.session_id;
+    const label = item.session_id.replace(/^archive-\d+-/, '');
+    openBtn.textContent = isArchived ? `📦 ${label}` : item.session_id;
     openBtn.addEventListener('click', async () => {
       currentSessionId = item.session_id;
       updateSessionIndicator();
@@ -518,7 +510,21 @@ function renderSessionDock() {
 
     row.appendChild(openBtn);
     row.appendChild(deleteBtn);
-    sessionDockList.appendChild(row);
+    return row;
+  }
+
+  for (const item of active) {
+    sessionDockList.appendChild(createSessionRow(item, false));
+  }
+
+  if (archived.length) {
+    const sep = document.createElement('div');
+    sep.className = 'session-dock-separator';
+    sep.textContent = '已归档';
+    sessionDockList.appendChild(sep);
+    for (const item of archived) {
+      sessionDockList.appendChild(createSessionRow(item, true));
+    }
   }
 
   const newGameRow = document.createElement('div');
@@ -1600,38 +1606,6 @@ settingsBtn?.addEventListener('click', () => {
   }
 });
 
-function openMobileSidebar() {
-  if (!stateColumn) return;
-  closeSettings();
-  stateColumn.dataset.mobileOpen = 'true';
-  mobileStateToggle?.setAttribute('aria-expanded', 'true');
-  let backdrop = document.querySelector('.mobile-state-backdrop');
-  if (!backdrop) {
-    backdrop = document.createElement('div');
-    backdrop.className = 'mobile-state-backdrop';
-    backdrop.addEventListener('click', closeMobileSidebar);
-    document.body.appendChild(backdrop);
-  } else {
-    backdrop.hidden = false;
-  }
-}
-
-function closeMobileSidebar() {
-  if (!stateColumn) return;
-  stateColumn.dataset.mobileOpen = 'false';
-  mobileStateToggle?.setAttribute('aria-expanded', 'false');
-  const backdrop = document.querySelector('.mobile-state-backdrop');
-  if (backdrop) backdrop.hidden = true;
-}
-
-mobileStateToggle?.addEventListener('click', () => {
-  if (stateColumn?.dataset.mobileOpen === 'true') {
-    closeMobileSidebar();
-  } else {
-    openMobileSidebar();
-  }
-});
-
 sessionIndicator?.addEventListener('click', () => {
   toggleSessionDock();
 });
@@ -1783,7 +1757,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeSettings();
     closeDebugPanel();
-    closeMobileSidebar();
     toggleSessionDock(false);
   }
 });

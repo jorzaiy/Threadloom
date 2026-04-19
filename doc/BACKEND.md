@@ -27,11 +27,12 @@
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
 - `session_lifecycle.py`：new game / delete / session list
 - `regenerate_turn.py`：partial 回复回滚与重试
-- `user_manager.py`：多用户管理、bcrypt 密码认证、session token 管理
+- `user_manager.py`：多用户管理底层保留模块（bcrypt 密码认证、session token 管理），当前产品面默认关闭
 - `object_bootstrap_agent.py`：物品抽取 bootstrap（四策略启发式→LLM判定→merge）
 - `clue_bootstrap_agent.py`：情报抽取 bootstrap（模式匹配→LLM分类→merge）
 - `npc_bootstrap_agent.py`：NPC抽取 bootstrap（对话启发式→LLM分类→merge）
 - `import_sillytavern_chat.py`：SillyTavern JSONL 聊天记录导入（CLI + API）
+- `legacy_tools/`：历史迁移 / 实验脚本归档目录，不属于当前主链运行时
 
 ## 当前主策略
 
@@ -99,7 +100,8 @@
   - 可切换当前活跃角色卡
   - 可在设置面板内导入新的角色卡
   - 当前默认用户标签固定显示为 `default_user`
-  - 当前阶段不做用户管理，只在接口和展示层保留用户作用域 → 已补多用户管理模块（`user_manager.py`），含 bcrypt 认证与 session token
+  - 当前阶段不做用户管理，产品面默认仍为单用户 `default-user`
+  - 多用户相关底层代码已保留在 `user_manager.py`，但 `/api/users`、`/api/multi-user`、`/api/auth/login`、`/api/auth/logout` 当前统一视为实验态关闭
   - `state_keeper_candidate` 现已提升至 800 max_output_tokens（原 280 导致 JSON 截断）
   - 三条 bootstrap（NPC/物品/情报）均已通过 LLM 回合测试
 
@@ -150,9 +152,7 @@
     - foundation 底板规则 / 世界观条目
     - situational 场景相关 lore
     - NPC / cast / faction 等可调入层
- - 对旧卡可使用：
-   - `python3 backend/migrate_lorebook_metadata.py`
-   - 为既有 `lorebook.json` 回填上述 metadata
+  - 历史上曾提供过 metadata 回填脚本；这类一次性迁移工具现已归档到 `backend/legacy_tools/`
 - `openings.json`
   - 开局菜单、开局 bootstrap、开局选项
 - `system-npcs.json`
@@ -189,6 +189,7 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - 当前 narrator 默认优先只吃 `system-npcs.core`
 - `faction_named / roster` 当前主要用于存档和后续导入器调优，不默认高频注入
 - `runtime_store.py` / `server.py` 优先读取 `assets/` 下的角色卡封面
+- 导入器当前会额外过滤 SillyTavern 前端模板、隐藏脚本、状态栏、人际模板等 runtime 噪声，避免它们进入最终 `lorebook.json`
 
 当前目标不是“导得越多越好”，而是：
 
@@ -208,3 +209,23 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - 主角 runtime 仍未独立落地
 - ~~NPC 间信息隔离仍未独立成结构化 knowledge scope 层~~ → 已补 `knowledge_scope`
 - ~~已解决事件归档层仍未独立落地~~ → 已补 `resolved_events`
+
+## 近期变更
+
+### State Keeper 调用频率修正
+
+`handler_message.py` 原先每轮无条件调用 `call_state_keeper()`（LLM 提取），导致非合并轮也发送 LLM 请求，影响主要事件和当前目标的提取精度。
+
+修正后行为：
+- 读取 `config/runtime.json` 中 `memory.consolidate_every_turns`（默认 12）
+- 仅在轮数为该值的倍数时调用完整 LLM keeper
+- 非合并轮使用 `build_state_from_fragment()` + `update_state()` 轻量更新
+- 诊断信息中 `skipped_reason` 标注跳过原因
+
+### 前端 UI 重构
+
+- **设置面板** 重组为三页签：连接与模型 / 角色卡 / 用户设定；未激活页签使用绿色背景
+- **侧边栏合并至浮动面板**：原 `stateColumn` 侧边栏的 4 个分区（当前状态、NPC、物件与线程、NPC 详情）已移入调试浮动面板，并新增"调试诊断"折叠区；移除了侧边栏按钮
+- **Session Dock 显示归档会话**：开始新游戏后，已归档的 session 仍会出现在 dock 底部（带📦标记和"已归档"分隔线），不再消失
+- **角色卡缩略图缓存**：移除了 `?t=${Date.now()}` cache-buster，启用浏览器缓存和 `loading="lazy"`
+- **角色卡切换**：添加了 error handling 和自动关闭设置面板

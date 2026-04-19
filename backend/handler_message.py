@@ -14,7 +14,7 @@ try:
     from .context_builder import build_runtime_context
     from .bootstrap_session import bootstrap_session
     from .opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
-    from .model_config import resolve_provider_model
+    from .model_config import resolve_provider_model, load_runtime_config
     from .model_client import call_model
     from .model_client import looks_incomplete_reply
     from .narrator_input import build_narrator_input, prompt_block_stats
@@ -35,7 +35,7 @@ except ImportError:
     from context_builder import build_runtime_context
     from bootstrap_session import bootstrap_session
     from opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
-    from model_config import resolve_provider_model
+    from model_config import resolve_provider_model, load_runtime_config
     from model_client import call_model
     from model_client import looks_incomplete_reply
     from narrator_input import build_narrator_input, prompt_block_stats
@@ -512,59 +512,83 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
 
     state_error = None
     state_keeper_diagnostics = None
-    try:
-        state, state_keeper_trace = call_state_keeper(
-            session_id,
-            reply,
-            state_fragment=state_fragment,
-            user_text=text,
-            return_trace=True,
-        )
-        state_keeper_diagnostics = state.get('state_keeper_diagnostics', {})
-    except Exception as err:
-        state_error = str(err)
+    state_keeper_trace = {}
+    current_turn_num = meta['last_turn_id'] + 1
+    cfg = load_runtime_config()
+    consolidate_every = cfg.get('memory', {}).get('consolidate_every_turns', 12)
+    is_consolidation_turn = consolidate_every > 0 and current_turn_num % consolidate_every == 0
+
+    if is_consolidation_turn:
+        try:
+            state, state_keeper_trace = call_state_keeper(
+                session_id,
+                reply,
+                state_fragment=state_fragment,
+                user_text=text,
+                return_trace=True,
+            )
+            state_keeper_diagnostics = state.get('state_keeper_diagnostics', {})
+        except Exception as err:
+            state_error = str(err)
+            fragment_state = build_state_from_fragment(state, state_fragment, session_id)
+            fragment_state['state_keeper_diagnostics'] = {
+                'provider_requested': 'llm',
+                'provider_used': 'fragment-baseline',
+                'model_usage': None,
+                'fallback_used': True,
+                'fallback_reason': state_error,
+            }
+            save_state(session_id, fragment_state)
+            try:
+                state = update_state(session_id)
+            except Exception as fallback_err:
+                turn_trace['runtime']['state_keeper'] = {
+                    'diagnostics': {
+                        'provider_requested': 'llm',
+                        'provider_used': 'fragment-baseline',
+                        'model_usage': None,
+                        'fallback_used': True,
+                        'fallback_reason': state_error,
+                    },
+                    'trace': copy.deepcopy(state_keeper_trace),
+                    'state_error': state_error,
+                    'fallback_update_error': str(fallback_err),
+                }
+                turn_trace['post_turn'] = {
+                    'state': copy.deepcopy(fragment_state),
+                    'state_snapshot': build_state_snapshot(fragment_state),
+                }
+                turn_trace['failure'] = {
+                    'type': type(fallback_err).__name__,
+                    'message': str(fallback_err),
+                    'stage': 'state_updater_fallback',
+                }
+                _save_turn_trace_safe(session_id, turn_id, turn_trace)
+                raise
+            state_keeper_diagnostics = {
+                'provider_requested': 'llm',
+                'provider_used': 'fragment+heuristic-fallback',
+                'model_usage': None,
+                'fallback_used': True,
+            'fallback_reason': state_error,
+        }
+        state['state_keeper_diagnostics'] = state_keeper_diagnostics
+    else:
+        state_keeper_trace = {}
         fragment_state = build_state_from_fragment(state, state_fragment, session_id)
         fragment_state['state_keeper_diagnostics'] = {
-            'provider_requested': 'llm',
+            'provider_requested': 'fragment-only',
             'provider_used': 'fragment-baseline',
             'model_usage': None,
-            'fallback_used': True,
-            'fallback_reason': state_error,
+            'fallback_used': False,
+            'skipped_reason': f'non-consolidation turn ({current_turn_num}/{consolidate_every})',
         }
         save_state(session_id, fragment_state)
         try:
             state = update_state(session_id)
-        except Exception as fallback_err:
-            turn_trace['runtime']['state_keeper'] = {
-                'diagnostics': {
-                    'provider_requested': 'llm',
-                    'provider_used': 'fragment-baseline',
-                    'model_usage': None,
-                    'fallback_used': True,
-                    'fallback_reason': state_error,
-                },
-                'trace': copy.deepcopy(state_keeper_trace),
-                'state_error': state_error,
-                'fallback_update_error': str(fallback_err),
-            }
-            turn_trace['post_turn'] = {
-                'state': copy.deepcopy(fragment_state),
-                'state_snapshot': build_state_snapshot(fragment_state),
-            }
-            turn_trace['failure'] = {
-                'type': type(fallback_err).__name__,
-                'message': str(fallback_err),
-                'stage': 'state_updater_fallback',
-            }
-            _save_turn_trace_safe(session_id, turn_id, turn_trace)
-            raise
-        state_keeper_diagnostics = {
-            'provider_requested': 'llm',
-            'provider_used': 'fragment+heuristic-fallback',
-            'model_usage': None,
-            'fallback_used': True,
-            'fallback_reason': state_error,
-        }
+        except Exception:
+            state = fragment_state
+        state_keeper_diagnostics = fragment_state.get('state_keeper_diagnostics', {})
         state['state_keeper_diagnostics'] = state_keeper_diagnostics
     turn_trace['runtime']['state_keeper'] = {
         'diagnostics': copy.deepcopy(state_keeper_diagnostics),
