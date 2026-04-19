@@ -8,6 +8,7 @@ const composer = document.getElementById('composer');
 const input = document.getElementById('input');
 const regenerateBtn = document.getElementById('regenerateBtn');
 const statusBar = document.getElementById('statusBar');
+const topbarContext = document.getElementById('topbarContext');
 const debugFloatPanel = document.getElementById('debugFloatPanel');
 const debugBackdrop = document.getElementById('debugBackdrop');
 const debugCloseBtn = document.getElementById('debugCloseBtn');
@@ -22,6 +23,7 @@ const sessionIndicator = document.getElementById('sessionIndicator');
 const sessionIndicatorLabel = document.getElementById('sessionIndicatorLabel');
 const characterScopeEl = document.getElementById('characterScope');
 const characterSelectEl = document.getElementById('characterSelect');
+const settingsCharacterSelectEl = document.getElementById('settingsCharacterSelect');
 const characterSubtitleEl = document.getElementById('characterSubtitle');
 const characterCoverEl = document.getElementById('characterCover');
 const characterCoverFallbackEl = document.getElementById('characterCoverFallback');
@@ -39,6 +41,12 @@ const saveSiteConfigBtn = document.getElementById('saveSiteConfigBtn');
 const discoverSiteModelsBtn = document.getElementById('discoverSiteModelsBtn');
 const siteStatusNote = document.getElementById('siteStatusNote');
 const modelConfigNote = document.getElementById('modelConfigNote');
+const userAvatarFileInput = document.getElementById('userAvatarFileInput');
+const editBaseUserProfileBtn = document.getElementById('editBaseUserProfileBtn');
+const editCharacterProfileOverrideBtn = document.getElementById('editCharacterProfileOverrideBtn');
+const uploadUserAvatarBtn = document.getElementById('uploadUserAvatarBtn');
+const deleteUserAvatarBtn = document.getElementById('deleteUserAvatarBtn');
+const userProfileNote = document.getElementById('userProfileNote');
 const charWizardStep1 = document.getElementById('charWizardStep1');
 const charWizardStep2 = document.getElementById('charWizardStep2');
 const charWizardStep3 = document.getElementById('charWizardStep3');
@@ -48,6 +56,9 @@ const characterImportFileInput = document.getElementById('characterImportFileInp
 const characterImportNameInput = document.getElementById('characterImportNameInput');
 const importCharacterBtn = document.getElementById('importCharacterBtn');
 const characterImportNote = document.getElementById('characterImportNote');
+const characterManageNote = document.getElementById('characterManageNote');
+const characterManageGrid = document.getElementById('characterManageGrid');
+const characterProfileDraftPanel = document.getElementById('characterProfileDraftPanel');
 const characterProfileDraftInput = document.getElementById('characterProfileDraftInput');
 const saveCharacterProfileDraftBtn = document.getElementById('saveCharacterProfileDraftBtn');
 const skipCharacterProfileDraftBtn = document.getElementById('skipCharacterProfileDraftBtn');
@@ -63,6 +74,15 @@ const chatImportPreviewBtn = document.getElementById('chatImportPreviewBtn');
 const chatImportBtn = document.getElementById('chatImportBtn');
 const chatImportPreview = document.getElementById('chatImportPreview');
 const chatImportNote = document.getElementById('chatImportNote');
+const profileEditorBackdrop = document.getElementById('profileEditorBackdrop');
+const profileEditorPanel = document.getElementById('profileEditorPanel');
+const profileEditorTitle = document.getElementById('profileEditorTitle');
+const profileEditorLabel = document.getElementById('profileEditorLabel');
+const profileEditorInput = document.getElementById('profileEditorInput');
+const profileEditorSaveBtn = document.getElementById('profileEditorSaveBtn');
+const profileEditorCancelBtn = document.getElementById('profileEditorCancelBtn');
+const profileEditorCloseBtn = document.getElementById('profileEditorCloseBtn');
+const profileEditorNote = document.getElementById('profileEditorNote');
 
 let lastDebug = null;
 let lastCharacterCard = null;
@@ -73,6 +93,8 @@ let historyHasMore = false;
 let historyNextBefore = null;
 let historyTotalCount = 0;
 let isLoadingEarlierHistory = false;
+let historyRevealAllowed = false;
+let inlineHistoryVisible = false;
 let currentSessionId = '';
 let sessionItems = [];
 let isWaitingForResponse = false;
@@ -105,10 +127,16 @@ let modelConfig = {
 };
 let characterItems = [];
 let currentUserId = 'default-user';
+let userProfile = {};
+let userAvatarUrl = null;
+let currentCharacterProfileOverride = {};
+let profileEditorMode = '';
 
 function hideCharacterProfileDraft() {
   if (charWizardStep3) charWizardStep3.hidden = true;
+  if (charWizardStep2) charWizardStep2.hidden = true;
   if (charWizardStep1) charWizardStep1.hidden = false;
+  if (characterProfileDraftPanel) characterProfileDraftPanel.hidden = false;
   if (characterProfileDraftInput) characterProfileDraftInput.value = '';
   if (characterProfileDraftNote) {
     characterProfileDraftNote.textContent = '';
@@ -118,6 +146,9 @@ function hideCharacterProfileDraft() {
 
 function showCharacterProfileDraft(draft) {
   if (!characterProfileDraftPanel || !characterProfileDraftInput) return;
+  if (charWizardStep1) charWizardStep1.hidden = true;
+  if (charWizardStep2) charWizardStep2.hidden = true;
+  if (charWizardStep3) charWizardStep3.hidden = false;
   characterProfileDraftInput.value = JSON.stringify(draft || {}, null, 2);
   characterProfileDraftPanel.hidden = false;
   if (characterProfileDraftNote) {
@@ -127,14 +158,16 @@ function showCharacterProfileDraft(draft) {
 }
 
 async function saveCharacterProfileDraft() {
-  if (!characterProfileDraftInput) return;
+  const sourceInput = profileEditorMode === 'override' ? profileEditorInput : characterProfileDraftInput;
+  if (!sourceInput) return;
   let override;
   try {
-    override = JSON.parse(characterProfileDraftInput.value || '{}');
+    override = JSON.parse(sourceInput.value || '{}');
   } catch (err) {
-    if (characterProfileDraftNote) {
-      characterProfileDraftNote.textContent = `JSON 解析失败：${err.message}`;
-      characterProfileDraftNote.dataset.kind = 'error';
+    const targetNote = profileEditorMode === 'override' ? profileEditorNote : characterProfileDraftNote;
+    if (targetNote) {
+      targetNote.textContent = `JSON 解析失败：${err.message}`;
+      targetNote.dataset.kind = 'error';
     }
     return;
   }
@@ -168,12 +201,14 @@ function applyWebConfig(nextConfig = {}) {
   }
 }
 
-function openSettings() {
+function openSettings(tab) {
   if (!settingsPanel || !settingsBackdrop) return;
+  closeMobileSidebar();
   settingsPanel.dataset.open = 'true';
   settingsPanel.setAttribute('aria-hidden', 'false');
   settingsBackdrop.hidden = false;
   settingsBtn?.setAttribute('aria-expanded', 'true');
+  if (tab) switchSettingsTab(tab);
 }
 
 function closeSettings() {
@@ -182,6 +217,13 @@ function closeSettings() {
   settingsPanel.setAttribute('aria-hidden', 'true');
   settingsBackdrop.hidden = true;
   settingsBtn?.setAttribute('aria-expanded', 'false');
+}
+
+function switchSettingsTab(tabName) {
+  const tabBtns = document.querySelectorAll('.settings-tabs .settings-tab-btn');
+  const tabPanels = document.querySelectorAll('.settings-tab-panel');
+  tabBtns.forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tabName)));
+  tabPanels.forEach(p => p.dataset.active = String(p.dataset.tabPanel === tabName));
 }
 
 function toggleSessionDock(forceOpen) {
@@ -195,6 +237,22 @@ function updateSessionIndicator() {
   if (sessionIndicatorLabel) {
     sessionIndicatorLabel.textContent = currentSessionId || '未选择';
   }
+}
+
+function renderTopbarContext() {
+  if (!topbarContext) return;
+  topbarContext.textContent = `${currentUserDisplayName()} · ${currentCharacterDisplayName()}`;
+}
+
+function updateHistoryToolbarVisibility() {
+  const nearTop = messagesEl ? messagesEl.scrollTop <= 24 : false;
+  if (historyToolbar) {
+    historyToolbar.hidden = !(historyHasMore && historyRevealAllowed && nearTop && !shouldStickToBottom);
+  }
+}
+
+function shouldShowInlineLoadEarlier() {
+  return Boolean(historyHasMore && historyRevealAllowed && messagesEl && messagesEl.scrollTop <= 24 && !shouldStickToBottom);
 }
 
 function sessionId() {
@@ -289,16 +347,19 @@ function renderCharacterCard(card) {
       if (characterCoverFallbackEl) characterCoverFallbackEl.hidden = false;
     }
   }
+  renderTopbarContext();
 }
 
 function renderCharacterSelect() {
-  if (!characterSelectEl) return;
-  setSelectOptions(
-    characterSelectEl,
-    characterItems.map(item => ({value: item.character_id, label: item.name || item.character_id})),
-    lastCharacterCard?.character_id || '',
-    item => item.label,
-  );
+  const items = characterItems.map(item => ({value: item.character_id, label: item.name || item.character_id}));
+  const selected = lastCharacterCard?.character_id || '';
+  if (characterSelectEl) {
+    setSelectOptions(characterSelectEl, items, selected, item => item.label);
+  }
+  if (settingsCharacterSelectEl) {
+    setSelectOptions(settingsCharacterSelectEl, items, selected, item => item.label);
+  }
+  renderCharacterManageGrid();
 }
 
 function resetSidePanels() {
@@ -603,20 +664,291 @@ async function saveModelRuntimeConfig() {
   }
 }
 
+function currentUserDisplayName() {
+  const name = String(userProfile?.name || userProfile?.courtesyName || '').trim();
+  return name || 'user';
+}
+
+function currentCharacterDisplayName() {
+  return String(lastCharacterCard?.name || lastCharacterCard?.title || '').trim() || 'world';
+}
+
+function renderUserProfileEditor() {
+}
+
+function openProfileEditor(mode, title, label, payload) {
+  profileEditorMode = mode;
+  if (profileEditorTitle) profileEditorTitle.textContent = title;
+  if (profileEditorLabel) profileEditorLabel.textContent = label;
+  if (profileEditorInput) profileEditorInput.value = JSON.stringify(payload || {}, null, 2);
+  if (profileEditorNote) {
+    profileEditorNote.textContent = '';
+    profileEditorNote.dataset.kind = '';
+  }
+  if (profileEditorBackdrop) profileEditorBackdrop.hidden = false;
+  if (profileEditorPanel) {
+    profileEditorPanel.dataset.open = 'true';
+    profileEditorPanel.setAttribute('aria-hidden', 'false');
+  }
+}
+
+function closeProfileEditor() {
+  profileEditorMode = '';
+  if (profileEditorBackdrop) profileEditorBackdrop.hidden = true;
+  if (profileEditorPanel) {
+    profileEditorPanel.dataset.open = 'false';
+    profileEditorPanel.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function renderCharacterManageGrid() {
+  if (!characterManageGrid) return;
+  characterManageGrid.innerHTML = '';
+  for (const item of characterItems) {
+    const card = document.createElement('section');
+    card.className = 'character-manage-card';
+    if (item.active) card.dataset.active = 'true';
+
+    const coverWrap = document.createElement('div');
+    coverWrap.className = 'character-manage-cover-wrap';
+    if (item.cover_url) {
+      const img = document.createElement('img');
+      img.className = 'character-manage-cover';
+      img.src = item.cover_url;
+      img.loading = 'lazy';
+      img.alt = item.name || item.character_id;
+      img.addEventListener('error', () => {
+        coverWrap.innerHTML = '';
+        const fallback = document.createElement('div');
+        fallback.className = 'character-manage-cover-fallback';
+        fallback.textContent = (item.name || item.character_id || 'TL').trim().slice(0, 2);
+        coverWrap.appendChild(fallback);
+      });
+      coverWrap.appendChild(img);
+    } else {
+      const fallback = document.createElement('div');
+      fallback.className = 'character-manage-cover-fallback';
+      fallback.textContent = (item.name || item.character_id || 'TL').trim().slice(0, 2);
+      coverWrap.appendChild(fallback);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'character-manage-copy';
+    const title = document.createElement('strong');
+    title.textContent = item.name || item.character_id;
+    const scope = document.createElement('p');
+    scope.className = 'character-manage-scope';
+    scope.textContent = item.character_id;
+    const summary = document.createElement('p');
+    summary.className = 'character-manage-summary';
+    const rawSummary = String(item.summary || item.subtitle || '暂无简介').replace(/\s+/g, ' ').trim();
+    summary.textContent = rawSummary.length > 30 ? `${rawSummary.slice(0, 30)}...` : rawSummary;
+    body.appendChild(title);
+    body.appendChild(scope);
+    body.appendChild(summary);
+
+    const actions = document.createElement('div');
+    actions.className = 'character-manage-actions';
+    if (item.active) {
+      const activeTag = document.createElement('span');
+      activeTag.className = 'character-manage-active';
+      activeTag.textContent = '当前激活';
+      actions.appendChild(activeTag);
+    } else {
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'subtle-danger';
+      deleteBtn.textContent = '删除';
+      deleteBtn.addEventListener('click', async () => {
+        if (!window.confirm(`确定要删除角色卡“${item.name || item.character_id}”吗？此操作会删除该角色卡目录及其会话。`)) return;
+        try {
+          const data = await apiJson('/api/character/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({character_id: item.character_id}),
+          });
+          characterItems = data.characters || [];
+          renderCharacterCard(data.character_card || null);
+          renderCharacterSelect();
+          renderCharacterManageGrid();
+          if (characterManageNote) {
+            characterManageNote.textContent = `已删除角色卡：${data.deleted_character_id}`;
+            characterManageNote.dataset.kind = 'ok';
+          }
+        } catch (err) {
+          if (characterManageNote) {
+            characterManageNote.textContent = err.message;
+            characterManageNote.dataset.kind = 'error';
+          }
+        }
+      });
+      actions.appendChild(deleteBtn);
+
+      card.addEventListener('click', async (event) => {
+        if (event.target instanceof HTMLElement && event.target.closest('button')) return;
+        if (!window.confirm(`切换到角色卡“${item.name || item.character_id}”吗？`)) return;
+        try {
+          setStatus('切换角色卡中...', 'working');
+          await selectCharacter(item.character_id);
+          closeSettings();
+          setStatus('角色卡已切换', 'ok');
+        } catch (err) {
+          setStatus(`切换失败：${err.message}`, 'error');
+          if (characterManageNote) {
+            characterManageNote.textContent = `切换失败：${err.message}`;
+            characterManageNote.dataset.kind = 'error';
+          }
+        }
+      });
+    }
+
+    card.appendChild(coverWrap);
+    card.appendChild(body);
+    card.appendChild(actions);
+    characterManageGrid.appendChild(card);
+  }
+}
+
+async function loadUserProfile() {
+  const data = await apiJson('/api/user-profile');
+  userProfile = data.profile || {};
+  userAvatarUrl = data.avatar_url || null;
+  renderUserProfileEditor();
+  renderTopbarContext();
+}
+
+async function loadCharacterProfileOverride() {
+  const data = await apiJson('/api/character/profile-override');
+  currentCharacterProfileOverride = data.override || {};
+}
+
+async function saveUserProfile() {
+  let profile;
+  try {
+    profile = JSON.parse(profileEditorInput?.value || '{}');
+  } catch (err) {
+    throw new Error(`用户设定 JSON 解析失败：${err.message}`);
+  }
+  const data = await apiJson('/api/user-profile', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({profile}),
+  });
+  userProfile = data.profile || {};
+  userAvatarUrl = data.avatar_url || userAvatarUrl;
+}
+
+async function uploadUserAvatar() {
+  const file = userAvatarFileInput?.files?.[0];
+  if (!file) throw new Error('请选择头像文件');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const data = await apiJson('/api/user-avatar', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      filename: file.name,
+      file_base64: btoa(binary),
+    }),
+  });
+  userAvatarUrl = data.avatar_url ? `${data.avatar_url}?t=${Date.now()}` : null;
+}
+
+async function deleteUserAvatar() {
+  const data = await apiJson('/api/user-avatar/delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({}),
+  });
+  userAvatarUrl = data.avatar_url || null;
+}
+
 function renderMessages(items) {
   lastHistoryItems = items;
   messagesEl.innerHTML = '';
+  const shouldShowLoadEarlierInline = shouldShowInlineLoadEarlier();
+  inlineHistoryVisible = shouldShowLoadEarlierInline;
+
+  if (shouldShowLoadEarlierInline && loadEarlierBtn) {
+    const wrap = document.createElement('div');
+    wrap.className = 'history-inline-wrap';
+    const inlineBtn = loadEarlierBtn.cloneNode(true);
+    inlineBtn.disabled = isLoadingEarlierHistory;
+    inlineBtn.textContent = isLoadingEarlierHistory ? '加载中...' : '加载更早记录';
+    inlineBtn.addEventListener('click', async () => {
+      try {
+        await loadEarlierHistory();
+      } catch (err) {
+        setStatus(`错误：${err.message}`, 'error');
+      }
+    });
+    wrap.appendChild(inlineBtn);
+    messagesEl.appendChild(wrap);
+  }
+
   const allItems = [...items];
   if (pendingUserMessage) {
     allItems.push({role: 'user', content: pendingUserMessage, pending: true});
+  }
+  if (!allItems.length) {
+    const empty = document.createElement('section');
+    empty.className = 'empty-session-card';
+    const title = document.createElement('h2');
+    title.textContent = `${currentUserDisplayName()} · ${currentCharacterDisplayName()}`;
+    const note = document.createElement('p');
+    note.textContent = '当前角色卡下还没有可继续的会话。你可以直接开始新对话，或先导入已有聊天记录。';
+    const actions = document.createElement('div');
+    actions.className = 'empty-session-actions';
+    const newBtn = document.createElement('button');
+    newBtn.type = 'button';
+    newBtn.textContent = '开始新对话';
+    newBtn.addEventListener('click', async () => {
+      try {
+        await startNewGame();
+        setStatus('已开始新对话', 'ok');
+      } catch (err) {
+        setStatus(`错误：${err.message}`, 'error');
+      }
+    });
+    const importBtn = document.createElement('button');
+    importBtn.type = 'button';
+    importBtn.className = 'subtle-btn';
+    importBtn.textContent = '导入聊天记录';
+    importBtn.addEventListener('click', () => openSettings('character'));
+    actions.appendChild(newBtn);
+    actions.appendChild(importBtn);
+    empty.appendChild(title);
+    empty.appendChild(note);
+    empty.appendChild(actions);
+    messagesEl.appendChild(empty);
+    return;
   }
   for (const item of allItems) {
     const article = document.createElement('article');
     article.className = `msg ${item.role}`;
     if (item.pending) article.classList.add('pending');
+    const head = document.createElement('div');
+    head.className = 'msg-head';
+    const avatar = document.createElement(item.role === 'assistant' && lastCharacterCard?.cover_url ? 'img' : 'div');
+    avatar.className = `msg-avatar ${item.role}`;
+    if (avatar instanceof HTMLImageElement) {
+      avatar.src = lastCharacterCard.cover_url;
+      avatar.alt = currentCharacterDisplayName();
+    } else {
+      const text = item.role === 'user' ? currentUserDisplayName() : currentCharacterDisplayName();
+      avatar.textContent = (text || '?').trim().slice(0, 1).toUpperCase();
+      if (item.role === 'user' && userAvatarUrl) {
+        avatar.style.backgroundImage = `url("${userAvatarUrl}")`;
+        avatar.textContent = '';
+        avatar.classList.add('has-image');
+      }
+    }
     const label = document.createElement('div');
     label.className = 'msg-label';
-    label.textContent = item.role === 'user' ? 'Player' : 'World';
+    label.textContent = item.role === 'user' ? currentUserDisplayName() : currentCharacterDisplayName();
+    head.appendChild(avatar);
+    head.appendChild(label);
     const body = document.createElement('div');
     body.className = 'msg-body';
     if (item.role === 'assistant') {
@@ -624,14 +956,12 @@ function renderMessages(items) {
     } else {
       body.textContent = item.content;
     }
-    article.appendChild(label);
+    article.appendChild(head);
     article.appendChild(body);
     messagesEl.appendChild(article);
   }
 
-  if (historyToolbar) {
-    historyToolbar.hidden = !historyHasMore;
-  }
+  if (historyToolbar) historyToolbar.hidden = true;
   if (loadEarlierBtn) {
     loadEarlierBtn.disabled = isLoadingEarlierHistory;
     loadEarlierBtn.textContent = isLoadingEarlierHistory ? '加载中...' : '加载更早记录';
@@ -698,6 +1028,14 @@ function scrollToLatest(options = {}) {
 
 function focusLatestAssistant(options = {}) {
   scrollToLatest(options);
+}
+
+function jumpToConversationEnd() {
+  shouldStickToBottom = true;
+  historyRevealAllowed = false;
+  inlineHistoryVisible = false;
+  focusLatestAssistant({ smooth: false });
+  requestAnimationFrame(updateHistoryToolbarVisibility);
 }
 
 function isNearBottom(threshold = 96) {
@@ -991,7 +1329,9 @@ async function loadHistory() {
     historyHasMore = false;
     historyNextBefore = null;
     historyTotalCount = 0;
+    historyRevealAllowed = false;
     renderMessages([]);
+    updateHistoryToolbarVisibility();
     updateSessionIndicator();
     return;
   }
@@ -1005,6 +1345,7 @@ async function loadHistory() {
   renderCharacterCard(data.character_card || lastCharacterCard);
   updateSessionIndicator();
   renderMessages(data.messages || []);
+  updateHistoryToolbarVisibility();
   if (wasNearBottom) {
     shouldStickToBottom = true;
   }
@@ -1032,9 +1373,7 @@ async function loadEarlierHistory() {
     });
   } finally {
     isLoadingEarlierHistory = false;
-    if (historyToolbar) {
-      historyToolbar.hidden = !historyHasMore;
-    }
+    updateHistoryToolbarVisibility();
     if (loadEarlierBtn) {
       loadEarlierBtn.disabled = false;
       loadEarlierBtn.textContent = '加载更早记录';
@@ -1065,15 +1404,17 @@ async function selectCharacter(characterId) {
   currentSessionId = '';
   renderCharacterCard(data.character_card || lastCharacterCard);
   renderCharacterSelect();
-  await loadSessions();
+  await Promise.all([loadSessions(), loadCharacterProfileOverride()]);
   resetSidePanels();
   if (currentSessionId) {
     await loadHistory();
     await loadState();
+    jumpToConversationEnd();
   } else {
     renderMessages([]);
     renderState({});
   }
+  renderTopbarContext();
 }
 
 async function importCharacterCard() {
@@ -1099,10 +1440,11 @@ async function importCharacterCard() {
   currentSessionId = '';
   renderCharacterCard(data.character_card || lastCharacterCard);
   renderCharacterSelect();
-   hideCharacterProfileDraft();
-   if (data.player_profile_override_draft && typeof data.player_profile_override_draft === 'object') {
+  await loadCharacterProfileOverride();
+  hideCharacterProfileDraft();
+  if (data.player_profile_override_draft && typeof data.player_profile_override_draft === 'object') {
     showCharacterProfileDraft(data.player_profile_override_draft);
-   }
+  }
   if (characterImportFileInput) characterImportFileInput.value = '';
   if (characterImportNameInput) characterImportNameInput.value = '';
   await loadSessions();
@@ -1110,6 +1452,7 @@ async function importCharacterCard() {
   if (currentSessionId) {
     await loadHistory();
     await loadState();
+    jumpToConversationEnd();
   } else {
     renderMessages([]);
     renderState({});
@@ -1130,8 +1473,7 @@ async function startNewGame() {
   resetSidePanels();
   renderDebug({new_game: {session_id: data.session_id || sessionId(), archived_to: data.archived_to || null}});
   updateSessionIndicator();
-  shouldStickToBottom = true;
-  focusLatestAssistant({ smooth: false });
+  jumpToConversationEnd();
 }
 
 async function deleteSession(targetSessionId = sessionId()) {
@@ -1151,6 +1493,7 @@ async function deleteSession(targetSessionId = sessionId()) {
     if (next) {
       await loadHistory();
       await loadState();
+      jumpToConversationEnd();
     } else {
       renderMessages([]);
       renderState({});
@@ -1238,6 +1581,15 @@ regenerateBtn.addEventListener('click', async () => {
 
 messagesEl.addEventListener('scroll', () => {
   shouldStickToBottom = isNearBottom();
+  if (!shouldStickToBottom && messagesEl.scrollTop <= 24) {
+    historyRevealAllowed = true;
+  }
+  const nextInlineVisible = shouldShowInlineLoadEarlier();
+  if (nextInlineVisible !== inlineHistoryVisible) {
+    renderMessages(lastHistoryItems);
+    return;
+  }
+  updateHistoryToolbarVisibility();
 });
 
 settingsBtn?.addEventListener('click', () => {
@@ -1250,7 +1602,9 @@ settingsBtn?.addEventListener('click', () => {
 
 function openMobileSidebar() {
   if (!stateColumn) return;
+  closeSettings();
   stateColumn.dataset.mobileOpen = 'true';
+  mobileStateToggle?.setAttribute('aria-expanded', 'true');
   let backdrop = document.querySelector('.mobile-state-backdrop');
   if (!backdrop) {
     backdrop = document.createElement('div');
@@ -1265,6 +1619,7 @@ function openMobileSidebar() {
 function closeMobileSidebar() {
   if (!stateColumn) return;
   stateColumn.dataset.mobileOpen = 'false';
+  mobileStateToggle?.setAttribute('aria-expanded', 'false');
   const backdrop = document.querySelector('.mobile-state-backdrop');
   if (backdrop) backdrop.hidden = true;
 }
@@ -1291,6 +1646,22 @@ document.addEventListener('click', (e) => {
 
 settingsCloseBtn?.addEventListener('click', closeSettings);
 settingsBackdrop?.addEventListener('click', closeSettings);
+
+// Settings Tab Navigation
+(function initSettingsTabs() {
+  const tabBtns = document.querySelectorAll('.settings-tabs .settings-tab-btn');
+  const tabPanels = document.querySelectorAll('.settings-tab-panel');
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.tab;
+      tabBtns.forEach(b => b.setAttribute('aria-selected', 'false'));
+      tabPanels.forEach(p => p.dataset.active = 'false');
+      btn.setAttribute('aria-selected', 'true');
+      const panel = document.querySelector(`.settings-tab-panel[data-tab-panel="${target}"]`);
+      if (panel) panel.dataset.active = 'true';
+    });
+  });
+})();
 
 function openDebugPanel() {
   if (debugFloatPanel) debugFloatPanel.dataset.open = 'true';
@@ -1344,6 +1715,62 @@ saveModelConfigBtn?.addEventListener('click', async () => {
   }
 });
 
+editBaseUserProfileBtn?.addEventListener('click', () => {
+  openProfileEditor('base', '维护基础设定', '当前用户基础设定（JSON）', userProfile);
+});
+
+editCharacterProfileOverrideBtn?.addEventListener('click', async () => {
+  try {
+    await loadCharacterProfileOverride();
+    openProfileEditor('override', '维护当前角色卡强化设定', '当前角色卡强化设定（JSON）', currentCharacterProfileOverride);
+  } catch (err) {
+    if (userProfileNote) {
+      userProfileNote.textContent = err.message;
+      userProfileNote.dataset.kind = 'error';
+    }
+  }
+});
+
+uploadUserAvatarBtn?.addEventListener('click', () => {
+  userAvatarFileInput?.click();
+});
+
+userAvatarFileInput?.addEventListener('change', async () => {
+  try {
+    await uploadUserAvatar();
+    if (userProfileNote) {
+      userProfileNote.textContent = '用户头像已上传';
+      userProfileNote.dataset.kind = 'ok';
+    }
+    renderMessages(lastHistoryItems);
+    setStatus('用户头像已上传', 'ok');
+  } catch (err) {
+    if (userProfileNote) {
+      userProfileNote.textContent = err.message;
+      userProfileNote.dataset.kind = 'error';
+    }
+    setStatus(`错误：${err.message}`, 'error');
+  }
+});
+
+deleteUserAvatarBtn?.addEventListener('click', async () => {
+  try {
+    await deleteUserAvatar();
+    if (userProfileNote) {
+      userProfileNote.textContent = '用户头像已删除';
+      userProfileNote.dataset.kind = 'ok';
+    }
+    renderMessages(lastHistoryItems);
+    setStatus('用户头像已删除', 'ok');
+  } catch (err) {
+    if (userProfileNote) {
+      userProfileNote.textContent = err.message;
+      userProfileNote.dataset.kind = 'error';
+    }
+    setStatus(`错误：${err.message}`, 'error');
+  }
+});
+
 loadEarlierBtn?.addEventListener('click', async () => {
   try {
     await loadEarlierHistory();
@@ -1370,6 +1797,47 @@ characterSelectEl?.addEventListener('change', async (e) => {
     setStatus(`错误：${err.message}`, 'error');
   }
 });
+
+settingsCharacterSelectEl?.addEventListener('change', async (e) => {
+  try {
+    setStatus('切换角色卡中...', 'working');
+    await selectCharacter(e.target.value);
+    closeSettings();
+    setStatus('角色卡已切换', 'ok');
+  } catch (err) {
+    setStatus(`错误：${err.message}`, 'error');
+  }
+});
+
+profileEditorSaveBtn?.addEventListener('click', async () => {
+  try {
+    if (profileEditorMode === 'base') {
+      await saveUserProfile();
+      if (userProfileNote) {
+        userProfileNote.textContent = '基础设定已保存';
+        userProfileNote.dataset.kind = 'ok';
+      }
+      renderMessages(lastHistoryItems);
+    } else if (profileEditorMode === 'override') {
+      await saveCharacterProfileDraft();
+      await loadCharacterProfileOverride();
+      if (userProfileNote) {
+        userProfileNote.textContent = '当前卡强化设定已保存';
+        userProfileNote.dataset.kind = 'ok';
+      }
+    }
+    closeProfileEditor();
+  } catch (err) {
+    if (profileEditorNote) {
+      profileEditorNote.textContent = err.message;
+      profileEditorNote.dataset.kind = 'error';
+    }
+  }
+});
+
+profileEditorCancelBtn?.addEventListener('click', closeProfileEditor);
+profileEditorCloseBtn?.addEventListener('click', closeProfileEditor);
+profileEditorBackdrop?.addEventListener('click', closeProfileEditor);
 
 charWizardStartBtn?.addEventListener('click', () => {
   if (charWizardStep1) charWizardStep1.hidden = true;
@@ -1421,10 +1889,6 @@ saveCharacterProfileDraftBtn?.addEventListener('click', async () => {
 skipCharacterProfileDraftBtn?.addEventListener('click', () => {
   hideCharacterProfileDraft();
   setStatus('已跳过本次主角设定补充', 'ok');
-});
-
-saveCharacterProfileDraftBtn?.addEventListener('click', async () => {
-  // After save, reset wizard
 });
 
 /* --- 聊天记录导入 --- */
@@ -1508,6 +1972,7 @@ chatImportBtn?.addEventListener('click', async () => {
       resetSidePanels();
       await loadHistory();
       await loadState();
+      jumpToConversationEnd();
       renderSessionDock();
     }
   } catch (err) {
@@ -1546,6 +2011,7 @@ async function checkAuth() {
     await Promise.all([
       loadSessions(),
       loadCharacters(),
+      loadUserProfile(),
       loadSiteConfig(),
       loadModelConfig(),
     ]);
@@ -1553,8 +2019,7 @@ async function checkAuth() {
     await loadState();
     closeSettings();
     toggleSessionDock(false);
-    shouldStickToBottom = true;
-    focusLatestAssistant({ smooth: false });
+    jumpToConversationEnd();
 
     // LLM 首次设置引导：检测未配置时自动弹出设置面板
     const needsSetup = !siteConfig.base_url || siteConfig.status !== 'ready';

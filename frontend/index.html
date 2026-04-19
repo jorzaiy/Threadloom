@@ -17,10 +17,21 @@
       <main class="chat-column">
         <header class="topbar">
           <div class="brand-block">
-            <h1>Threadloom</h1>
-            <p class="brand-subtitle">The Living Manuscript</p>
+            <h1><img src="/favicon.svg" alt="Threadloom logo" class="brand-logo" />Threadloom</h1>
           </div>
-          <div class="topbar-actions">
+          <div id="topbarContext" class="topbar-context">user · world</div>
+        </header>
+        <div id="historyToolbar" class="history-toolbar" hidden>
+          <button id="loadEarlierBtn" class="subtle-btn history-load-btn" type="button">加载更早记录</button>
+        </div>
+        <section id="messages" class="messages"></section>
+        <form id="composer" class="composer">
+          <div class="composer-shell">
+            <textarea id="input" placeholder="输入消息..." rows="2"></textarea>
+            <div class="composer-footer">
+              <div class="composer-status-row">
+                <div id="statusBar" class="status-bar">就绪</div>
+                <div class="topbar-actions bottom-controls">
             <div class="session-dock-wrap topbar-session-dock">
               <button id="sessionIndicator" class="session-pill session-indicator-trigger" type="button" aria-expanded="false" aria-controls="sessionDockPanel">
                 <span id="sessionIndicatorLabel" class="session-indicator-label">story-live</span>
@@ -39,17 +50,8 @@
         <button id="mobileStateToggle" class="icon-btn mobile-state-toggle" type="button" aria-label="打开状态面板">
           <span class="material-symbols-outlined">view_sidebar</span>
         </button>
-      </div>
-        </header>
-        <div id="historyToolbar" class="history-toolbar" hidden>
-          <button id="loadEarlierBtn" class="subtle-btn history-load-btn" type="button">加载更早记录</button>
-        </div>
-        <section id="messages" class="messages"></section>
-        <form id="composer" class="composer">
-          <div class="composer-shell">
-            <textarea id="input" placeholder="输入消息..." rows="2"></textarea>
-            <div class="composer-footer">
-              <div id="statusBar" class="status-bar">就绪</div>
+                </div>
+              </div>
               <div class="composer-actions">
                 <button id="regenerateBtn" type="button" hidden>重新生成上一条</button>
                 <button type="submit">发送</button>
@@ -59,20 +61,6 @@
         </form>
       </main>
       <aside id="stateColumn" class="state-column">
-        <section class="card character-card">
-          <div class="character-cover-wrap">
-            <img id="characterCover" class="character-cover" alt="角色卡封面" hidden />
-            <div id="characterCoverFallback" class="character-cover-fallback">TL</div>
-          </div>
-          <div class="character-copy">
-            <p class="character-label">Character Card</p>
-            <p id="characterScope" class="character-scope">default_user / 未选择角色卡</p>
-            <div class="character-name-row">
-              <select id="characterSelect" class="character-select" aria-label="选择当前用户角色卡"></select>
-            </div>
-            <p id="characterSubtitle" class="character-subtitle">待加载</p>
-          </div>
-        </section>
         <section class="card sidebar-group">
           <details class="sidebar-details" open>
             <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">explore</span>当前状态</summary>
@@ -126,12 +114,22 @@
         </button>
       </div>
 
+      <!-- Settings Tab Bar -->
+      <nav class="settings-tabs" role="tablist">
+        <button class="settings-tab-btn" role="tab" aria-selected="true" data-tab="connection">连接与模型</button>
+        <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="character">角色卡</button>
+        <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="user">用户设定</button>
+      </nav>
+
       <div class="settings-body">
+          <!-- Tab: 连接与模型 -->
+          <div class="settings-tab-panel" data-tab-panel="connection" data-active="true">
           <!-- LLM 首次设置引导横幅 -->
           <div id="llmSetupGuide" class="setup-guide-banner" hidden>
             <p>🔧 <strong>首次使用请先配置 LLM 连接</strong></p>
             <p>填写站点地址和密钥，刷新模型列表后保存即可开始使用。</p>
           </div>
+
             <section class="settings-subsection">
               <h3>站点连接</h3>
               <div class="config-grid">
@@ -172,7 +170,10 @@
               </div>
               <div id="modelConfigNote" class="inline-feedback">温度和最大输出长度由系统默认管理。</div>
             </section>
+          </div>
 
+          <!-- Tab: 角色卡 -->
+          <div class="settings-tab-panel" data-tab-panel="character">
             <section class="settings-subsection wizard-section">
               <h3>角色卡导入</h3>
               <div id="charWizardStep1" class="wizard-step">
@@ -194,7 +195,8 @@
                   <button id="charWizardCancelBtn" type="button" class="subtle-btn">取消</button>
                 </div>
               </div>
-              <div id="charWizardStep3" class="wizard-step" hidden>
+              <div id="charWizardStep3" class="wizard-step profile-draft-panel" hidden>
+                <div id="characterProfileDraftPanel">
                 <p class="settings-hint">已为当前角色卡生成一份主角设定特化草稿。可直接保存，也可以先跳过。</p>
                 <label class="field field-wide">
                   <span>角色卡特化设定草稿（JSON）</span>
@@ -205,8 +207,15 @@
                   <button id="skipCharacterProfileDraftBtn" type="button" class="subtle-btn">暂时跳过</button>
                 </div>
                 <div id="characterProfileDraftNote" class="inline-feedback"></div>
+                </div>
               </div>
               <div id="characterImportNote" class="inline-feedback"></div>
+            </section>
+
+            <section class="settings-subsection">
+              <h3>角色卡管理</h3>
+              <div id="characterManageGrid" class="character-manage-grid"></div>
+              <div id="characterManageNote" class="inline-feedback"></div>
             </section>
 
             <section class="settings-subsection wizard-section">
@@ -236,7 +245,47 @@
               </div>
               <div id="chatImportNote" class="inline-feedback"></div>
             </section>
+          </div>
 
+          <!-- Tab: 用户设定 -->
+          <div class="settings-tab-panel" data-tab-panel="user">
+            <section class="settings-subsection">
+              <h3>用户设定</h3>
+              <div class="settings-actions">
+                <button id="editBaseUserProfileBtn" type="button">维护基础设定</button>
+                <button id="editCharacterProfileOverrideBtn" type="button" class="subtle-btn">维护当前卡强化设定</button>
+                <button id="uploadUserAvatarBtn" type="button" class="subtle-btn">上传头像</button>
+                <button id="deleteUserAvatarBtn" type="button" class="subtle-danger">删除头像</button>
+              </div>
+              <input id="userAvatarFileInput" type="file" accept=".png,.jpg,.jpeg,.webp" hidden />
+              <div id="userProfileNote" class="inline-feedback"></div>
+            </section>
+          </div>
+
+      </div>
+    </aside>
+
+    <div id="profileEditorBackdrop" class="settings-backdrop" hidden></div>
+    <aside id="profileEditorPanel" class="settings-panel profile-editor-panel" aria-hidden="true">
+      <div class="settings-header">
+        <div>
+          <p class="settings-kicker">维护设定</p>
+          <h2 id="profileEditorTitle">编辑设定</h2>
+        </div>
+        <button id="profileEditorCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭设定编辑">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="settings-body">
+        <label class="field field-wide">
+          <span id="profileEditorLabel">JSON</span>
+          <textarea id="profileEditorInput" rows="18" spellcheck="false"></textarea>
+        </label>
+        <div class="settings-actions">
+          <button id="profileEditorSaveBtn" type="button">保存</button>
+          <button id="profileEditorCancelBtn" type="button" class="subtle-btn">取消</button>
+        </div>
+        <div id="profileEditorNote" class="inline-feedback"></div>
       </div>
     </aside>
 
