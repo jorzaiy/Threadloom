@@ -37,6 +37,42 @@
   - `暗影 / 皂衣人`
 - 这类问题当前更像 scene entity merge 与 important NPC alias 过滤不够保守，而不是 narrator 主链本身失效
 
+## 2026-04-16 Clean Session Regression
+
+这轮后续又新增了两组“从现有剧情 history 派生干净测试 session，再跑真实 HTTP 回归”的验证。
+
+目标：
+
+- 避开旧 session 已落盘的脏 state
+- 验证“脚本候选 + LLM 判定”的通用实体恢复策略是否能在 live 写回里压住垃圾名字
+- 确认这条路径不是只对单一角色卡有效
+
+当前结论：
+
+- judge 驱动的通用实体恢复路径已在 `碎影江湖` 的干净 session 真实回归里证明有效
+- `血蚀纪` clean session 的真实 HTTP 回归也已通过：世界书未注入模板垃圾，抽象机制词未再进入人物池
+- 在 `碎影江湖` clean session 上，原先的：
+  - `三处私盐`
+  - `可真正先`
+  - `这句话真`
+  - `笠人`
+  这类垃圾名字已被显著压制
+
+跨题材状态：
+
+- `血蚀纪` clean session 当前未再复现抽象机制词误入人物池
+- `scene_entities / important_npcs / relevant_npcs / continuity_candidates` 在 4 轮真实 HTTP 回归里都保持干净
+
+仍需继续观察的点：
+
+- judge 路径当前已补上“抽象概念 / 系统机制词误入人物池”的通用过滤，但仍需继续观察跨题材长跑稳定性
+- 对真正相似别称的稳定归并（例如“毡笠人 / 毡笠身影”）仍需继续依赖 keeper / merge 层规则
+- active_threads 近期暴露过“旧 risk key 挂新 label”的 continuity 错位问题；现已改为主要继承 `thread_id`，避免旧线程名残留到新内容上
+- narrator 对“过渡态场景”的输出近期有越写越短的趋势；现已补轻约束，要求即使是回屋、关门、烧水、换位等桥段，也要给出具体环境变化、人物反应、动作后的余波或正在累积的细节变化，但不为了“有戏”而每轮硬塞危险感
+- narrator 当前额外补了一层目标导向：维持一个会自己流转的 RP 世界，主角是参与者与观察者，而不是唯一驱动器
+- active_threads 目前已开始使用本地 `thread label composer`，把 `main thread` 从“暴露风险”这类抽象标签收回到更可演的当前局势描述
+- 上游名字过滤已补一层通用“语气副词 / 形容词碎片”拦截，避免 `笑嘻嘻 / 淡淡 / 轻轻` 这类词继续混入 `scene_entities / relevant_npcs / important_npcs`
+
 ## 当前主优点
 
 当前这套原型比旧 transcript-first 链路更好的地方：
@@ -65,7 +101,7 @@
 - `runtime.json` 里的 `default_debug / show_debug_panel / history_page_size` 已贯通到 API 与前端
 - 对已污染的旧 session，现已验证可通过离线重建方式直接把主状态从旧开局壳拉回当前剧情
 - 前端默认会话选择已改为最近更新会话优先；旧的 `story-live` 不再应默认抢占入口
-- 角色卡侧栏已改为动态读取角色卡元数据与缩略封面，不再直接吃原始大图
+- 设置中的角色卡管理已改为动态读取角色卡元数据与缩略封面，不再直接吃原始大图
 - narrator 输入层已加入更通用的信息边界提示，不再只针对“主角独知观察”做窄补丁
 - `README.md`、`API.md`、`OPERATIONS.md` 已改为反映当前代码现状，而不是旧草图
 
@@ -77,7 +113,7 @@
 
 现状：
 - skeleton + fill 双 keeper 均使用 `gemma-4-31b-it`，提取 prompt 已加入字段级质量指南和正反例
-- skeleton keeper `max_output_tokens` 调高至 280，配合截断 JSON 补全 fallback，LLM 成功率 93%+
+- `state_keeper_candidate` 现由用户级 `advanced_models` 配置控制，默认上限已高于早期 280 截断阶段
 - heuristic 层重写为评分式架构：`_score_sentence()` 替代关键词猜世界，加入元文本过滤和中文自然断点截断
 - 在 4 组跨题材长记录测试中（维克托、九幽大陆、血蚀纪），关键指标全部归零
 
@@ -129,23 +165,19 @@
 - 这是小问题，但会持续影响可观察性
 - 后续应让 state snapshot 直接给前端可展示的 `entity_id + display_name + short role` 列表，而不是前端再拿名字回查
 
-### 5. web 配置到 UI 的映射已打通，但还不完整
+### 5. web 配置到 UI 的映射已基本打通
 
 当前已打通：
 - `default_debug`
 - `show_debug_panel`
 - `history_page_size`
-
-但还没打通：
 - `show_state_panel`
 
 影响：
 - 已接通的配置现在真的会改变前端行为
-- 但仍有一部分配置停留在“有定义、未消费”的状态
 
 结论：
-- 下一步要么继续把 `show_state_panel` 接到布局层
-- 要么删掉未消费配置，避免假配置继续积累
+- 当前这一层主要剩余工作转为减少无效配置项与补文档，而不是继续补 UI 接线
 
 ### 6. 主角 runtime 仍缺位；事件归档层已初步落地
 

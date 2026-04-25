@@ -1,9 +1,50 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#455849"/>
-  <!-- 丝线横杠 -->
-  <path d="M8 11 C 12 9, 20 13, 24 11" stroke="#d3e8d5" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-  <!-- 针状竖杠 -->
-  <path d="M16 11 L 16 24" stroke="#d3e8d5" stroke-width="2.5" stroke-linecap="round"/>
-  <!-- 针眼/装饰点 -->
-  <circle cx="16" cy="26" r="1.2" fill="#d3e8d5"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- 鎏金渐变 (用于笔尖) -->
+    <linearGradient id="goldGrad" x1="100" y1="50" x2="400" y2="450" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f0d58b" />
+      <stop offset="50%" stop-color="#d4a843" />
+      <stop offset="100%" stop-color="#9c782b" />
+    </linearGradient>
+    
+    <!-- 鼠尾草绿渐变 (用于纺线) -->
+    <linearGradient id="sageGrad" x1="50" y1="100" x2="450" y2="450" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#a8c7a6" />
+      <stop offset="50%" stop-color="#7d9381" />
+      <stop offset="100%" stop-color="#556b58" />
+    </linearGradient>
+    
+  </defs>
+
+  <!-- 1. 背景纺线 (绕过右上方，从笔尖孔洞穿出，落向左下方) -->
+  <path d="M 420 180
+           C 460 120, 380 50, 320 100
+           S 280 180, 256 240
+           S 160 380, 90 410"
+        fill="none" stroke="url(#sageGrad)" stroke-width="22" stroke-linecap="round"/>
+
+  <!-- 2. 核心部件：黄金笔尖 (镂空出孔洞，遮挡背景线) -->
+  <path d="
+      M 216 90
+      Q 256 70 296 90
+      C 316 160 326 210 326 260
+      C 326 350 286 420 256 460
+      C 226 420 186 350 186 260
+      C 186 210 196 160 216 90 Z
+      M 256 215
+      A 25 25 0 1 0 256 265
+      A 25 25 0 1 0 256 215 Z
+  " fill="#f8f5ef" stroke="url(#goldGrad)" stroke-width="14" stroke-linejoin="round" fill-rule="evenodd"/>
+
+  <!-- 3. 笔尖中缝 -->
+  <line x1="256" y1="265" x2="256" y2="448" stroke="url(#goldGrad)" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- 4. 笔尖上部的金属雕纹装饰 -->
+  <path d="M 216 150 Q 256 162 296 150" fill="none" stroke="url(#goldGrad)" stroke-width="8" stroke-linecap="round"/>
+
+  <!-- 5. 前景纺线 (从左侧起笔，跨过笔尖上方，完美衔接背景线) -->
+  <path d="M 80 180
+           C 120 280, 180 340, 256 340
+           S 380 240, 420 180"
+        fill="none" stroke="url(#sageGrad)" stroke-width="22" stroke-linecap="round"/>
 </svg>

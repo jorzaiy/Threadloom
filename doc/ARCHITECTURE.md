@@ -61,6 +61,9 @@
 - 提交用户输入
 - 显示当前状态面板
 - 可选显示调试面板
+- 桌面端把状态/调试面板作为右侧抽屉呈现，保持主阅读区纵向空间
+- 移动端隐藏顶部 header，将 session、状态面板、设置入口收进输入区控制行，并把状态面板作为底部弹层
+- 状态面板当前跟踪 `main_event / immediate_goal / carryover_signals / scene_entities / tracked_objects / possession_state / object_visibility`，不再把 `active_threads` 作为默认用户可见主面板项目
 
 不负责：
 - prompt 拼装
@@ -97,7 +100,7 @@
 - `summary` 当前仍保留为 session-local 写回 / 调试产物
 - `summary` 当前不再作为 narrator 主输入
 - narrator 当前主输入收敛为：
-  - 最近 `10` 对 turn 的 rolling window
+  - 最近 `12` 对 turn 的 rolling window
   - 命中的 keeper archive 结构记录
 
 当前已落地的 persona 责任：
@@ -112,6 +115,7 @@
 当前角色卡 source 目录建议形态：
 
 - `character-data.json`
+- `player-profile.override.json`（可选）
 - `lorebook.json`
 - `openings.json`
 - `system-npcs.json`
@@ -123,6 +127,7 @@
 其中：
 
 - `character-data.json` 是角色核心
+- `player-profile.override.json` 是当前角色卡对主角档案的特化覆盖
 - `lorebook.json` 是世界知识
 - `openings.json` 是开局菜单与 bootstrap
 - `system-npcs.json` 是系统级既有人物
@@ -133,6 +138,21 @@
 - `assets/` 是封面等静态资产
 
 这比旧的“把各种 hints、开局、系统规则、前端残余字段一起塞进 character-data.json”更稳，也更容易泛化到不同角色卡。
+
+## 主角档案分层
+
+当前 RP 主角档案建议分两层：
+
+- 用户级基础档案：`runtime-data/<user>/profile/player-profile.base.json`
+- 角色卡特化覆盖：`runtime-data/<user>/characters/<character_id>/source/player-profile.override.json`
+
+运行时会先读取基础档案，再叠加当前角色卡覆盖，形成当前 narrator / state 主链消费的主角档案。
+
+补充说明：
+
+- `USER.md` 不再作为 RP narrator 主链输入
+- narrator 运行时只消费一份收短后的玩家档案摘要，避免完整人物设定每轮过度挤占上下文
+- `player-profile.json` / `player-profile.md` 当前主要作为兼容副本与可读导出
 
 ### Runtime 启动顺序
 
@@ -146,7 +166,7 @@
 6. `memory/state.md`
 7. relevant `memory/npcs/*.md`
 8. relevant `runtime/persona-seeds/*`
-9. 最近 `10` 对 recent history
+9. 最近 `12` 对 recent history
 10. keeper archive recall 命中
 
 原则：
@@ -168,6 +188,85 @@
 - 可调入世界书人物
 - `summary`（调试 / 运维 / 写回用途）
 
+## Narrator Prompt 分层
+
+当前 narrator prompt 采用分层权重，而不是简单删块：
+
+强约束层：
+- 玩家档案（runtime slim 版）
+- 当前硬锚点
+- 知情边界
+- 最近窗口
+
+连续性层：
+- 人物连续性表
+- 活跃线程
+- 重要物件与持有关系
+- 较早结构记录
+- 相关 NPC 档案
+- Onstage Persona
+
+候选知识层：
+- 系统级 NPC
+- 可调入世界书 NPC
+- 世界书正文
+
+当前运行原则：
+- 若强约束层与候选知识层冲突，一律以强约束层为准。
+- 连续性层用于维持旧人物、旧物件、旧线程与中程记忆，不可压过最近窗口与当前硬锚点。
+- 候选知识层只表示“可调用”，不表示“此刻已在场”或“当前已发生”。
+- narrator 的目标不是围着主角单点响应，而是维持一个会自己流转的 RP 世界：主角是参与者与观察者，不是唯一驱动器。
+
+当前已开始把部分候选知识块改成规则版条件注入：
+- 世界书正文：只有在当前场景明显需要世界规则/势力/地点解释时才注入
+- 系统级 NPC / 世界书 NPC 候选：只有在 onstage/relevant/important NPC 与 recent window 或 active_threads 命中时才注入
+- 相关 NPC 档案：默认只给 onstage NPC，必要时再补少量 relevant/important NPC
+
+当前 selector 已从 `context_builder.py` 中抽离为独立模块：
+- `backend/selector.py`
+- 职责：在 narrator 开写前决定这一轮是否值得补 `lorebook_text / system_npc_candidates / lorebook_npc_candidates / npc_profiles`
+
+当前 keeper 前也已接入一层最小 `event_ledger`：
+- `backend/event_ledger.py`
+- 职责：先从本轮 narrator 回复里筛出更像“局势句”的候选，再交给 keeper 写 `main_event`
+- 当前不承担 NPC 过滤职责，边界仍与 NPC pipeline 分离
+
+## Event / Signal / Summary / Thread Draft
+
+当前建议把这四层分开看，而不是都当成“连续性结构”：
+
+- `signal`
+  - 面向当前 narrator / selector
+  - 表示：当前仍未消失、接下来几拍仍会影响局势推进的 `risk / clue / mixed` 信号
+  - 更新频率：高频，尽量每轮都能维护
+
+- `event`
+  - 面向 recall / summary
+  - 表示：最近 3 回合左右到底发生了什么值得检索的事件片段
+  - 默认不直送 narrator；只有 selector 判断 recent window 不足以恢复背景时才回流
+
+- `summary`
+  - 面向长程压缩
+  - 表示：更长阶段的压缩结果
+  - 默认不常驻 narrator，只在旧事件确实回流时条件注入
+
+- `thread`
+  - 面向 state/debug 观察
+  - 表示：keeper 当前如何把局势拆成主线/风险/线索的运行时辅助结构
+  - 当前实验方向是不再让它主导 narrator 或 selector
+
+这个草案的核心原则是：
+- narrator 负责真正推进
+- event 负责检索
+- signal 负责当前方向约束
+- summary 负责长程压缩
+- thread 若保留，也尽量不要再承担 steering 职责
+
+当前 preset 已重新定位为“节奏 / 镜头 / 注入预算调制器”，而不是世界真相或事实边界的主来源：
+- 默认 preset：`runtime-data/default-user/presets/world-sim-core.json`
+- 主角控制权、知情边界、世界自主流转等长期规则，应放在 `runtime-rules.md`
+- 旧 preset 已归档到 `runtime-data/default-user/presets/legacy/`，不再作为当前主链默认选择
+
 不应成为主真相源：
 - 超长聊天 transcript
 
@@ -179,7 +278,7 @@
 - 输入框
 - 发送按钮
 
-### 右侧：状态区
+### 状态区
 - 当前时间
 - 当前地点
 - 当前主事件
@@ -189,6 +288,7 @@
 - Immediate Risks
 
 说明：
+- 当前状态区已改为浮动面板，不再是常驻右侧栏。
 - `Onstage NPCs` / `Relevant NPCs` 中的每个名字都应可点击。
 - 点击后打开一个只读详情面板，展示对应 `scene entity` 的当前数据。
 - 第一版不提供任何人工编辑按钮。

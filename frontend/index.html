@@ -32,21 +32,25 @@
               <div class="composer-status-row">
                 <div id="statusBar" class="status-bar">就绪</div>
                 <div class="topbar-actions bottom-controls">
-            <div class="session-dock-wrap topbar-session-dock">
-              <button id="sessionIndicator" class="session-pill session-indicator-trigger" type="button" aria-expanded="false" aria-controls="sessionDockPanel">
-                <span id="sessionIndicatorLabel" class="session-indicator-label">story-live</span>
-                <span class="material-symbols-outlined session-indicator-chevron" aria-hidden="true">expand_more</span>
-              </button>
-              <div id="sessionDockPanel" class="session-dock-panel" hidden>
-                <div id="sessionDockList" class="session-dock-list"></div>
-              </div>
-            </div>
-        <button id="debugToggleBtn" class="icon-btn settings-icon-btn" type="button" aria-label="状态面板">
-          <span class="material-symbols-outlined">explore</span>
-        </button>
-        <button id="settingsBtn" class="icon-btn settings-icon-btn" type="button" aria-haspopup="dialog" aria-controls="settingsPanel" aria-expanded="false" aria-label="打开设置">
-          <span class="material-symbols-outlined">settings</span>
-        </button>
+                  <div class="session-dock-wrap topbar-session-dock">
+                    <button id="sessionIndicator" class="session-pill session-indicator-trigger" type="button" aria-expanded="false" aria-controls="sessionDockPanel">
+                      <span id="sessionIndicatorLabel" class="session-indicator-label">story-live</span>
+                      <span class="material-symbols-outlined session-indicator-chevron" aria-hidden="true">expand_more</span>
+                    </button>
+                    <div id="sessionDockPanel" class="session-dock-panel" hidden>
+                      <div class="session-dock-heading">
+                        <span>Session 管理</span>
+                        <small>切换、删除或新建当前角色卡会话</small>
+                      </div>
+                      <div id="sessionDockList" class="session-dock-list"></div>
+                    </div>
+                  </div>
+                  <button id="debugToggleBtn" class="icon-btn settings-icon-btn" type="button" aria-label="状态面板">
+                    <span class="material-symbols-outlined">explore</span>
+                  </button>
+                  <button id="settingsBtn" class="icon-btn settings-icon-btn" type="button" aria-haspopup="dialog" aria-controls="settingsPanel" aria-expanded="false" aria-label="打开设置">
+                    <span class="material-symbols-outlined">settings</span>
+                  </button>
                 </div>
               </div>
               <div class="composer-actions">
@@ -59,6 +63,7 @@
       </main>
     </div>
 
+    <div id="sessionBackdrop" class="settings-backdrop" hidden></div>
     <div id="debugBackdrop" class="debug-backdrop" hidden></div>
     <aside id="debugFloatPanel" class="debug-float-panel" aria-hidden="true">
       <div class="debug-float-header">
@@ -82,7 +87,7 @@
         </section>
         <section class="card sidebar-group">
           <details class="sidebar-details">
-            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">inventory_2</span>物件与线程</summary>
+            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">inventory_2</span>物件与信号</summary>
             <div id="objectThreadSection" class="sidebar-details-body"></div>
           </details>
         </section>
@@ -107,8 +112,8 @@
     <aside id="settingsPanel" class="settings-panel" aria-hidden="true">
       <div class="settings-header">
         <div>
-          <p class="settings-kicker">设置</p>
-          <h2>系统配置</h2>
+          <p class="settings-kicker">Settings</p>
+          <h2>运行设置</h2>
         </div>
         <button id="settingsCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭设置">
           <span class="material-symbols-outlined">close</span>
@@ -117,9 +122,9 @@
 
       <!-- Settings Tab Bar -->
       <nav class="settings-tabs" role="tablist">
-        <button class="settings-tab-btn" role="tab" aria-selected="true" data-tab="connection">连接与模型</button>
-        <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="character">角色卡</button>
-        <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="user">用户设定</button>
+        <button class="settings-tab-btn" role="tab" aria-selected="true" data-tab="connection">模型连接</button>
+        <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="character">角色与导入</button>
+        <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="user">玩家设定</button>
       </nav>
 
       <div class="settings-body">
@@ -132,7 +137,10 @@
           </div>
 
             <section class="settings-subsection">
-              <h3>站点连接</h3>
+              <div class="settings-section-head">
+                <h3>站点连接</h3>
+                <p>配置当前用户使用的 LLM API 入口。密钥留空时会保留已有配置。</p>
+              </div>
               <div class="config-grid">
                 <label class="field field-wide">
                   <span>站点地址</span>
@@ -155,7 +163,10 @@
             </section>
 
             <section class="settings-subsection">
-              <h3>模型分配</h3>
+              <div class="settings-section-head">
+                <h3>模型分配</h3>
+                <p>为叙事和 keeper 选择模型。温度、输出长度等高级参数由运行时配置管理。</p>
+              </div>
               <div class="config-grid">
                 <label class="field">
                   <span>叙事模型</span>
@@ -176,7 +187,10 @@
           <!-- Tab: 角色卡 -->
           <div class="settings-tab-panel" data-tab-panel="character">
             <section class="settings-subsection wizard-section">
-              <h3>角色卡导入</h3>
+              <div class="settings-section-head">
+                <h3>角色卡导入</h3>
+                <p>导入新的角色卡，并生成结构化运行时资产。</p>
+              </div>
               <div id="charWizardStep1" class="wizard-step">
                 <button id="charWizardStartBtn" type="button" class="subtle-btn wizard-trigger">选择角色卡文件导入</button>
               </div>
@@ -214,13 +228,19 @@
             </section>
 
             <section class="settings-subsection">
-              <h3>角色卡管理</h3>
+              <div class="settings-section-head">
+                <h3>角色卡管理</h3>
+                <p>切换当前角色卡，查看导入后的角色资产。</p>
+              </div>
               <div id="characterManageGrid" class="character-manage-grid"></div>
               <div id="characterManageNote" class="inline-feedback"></div>
             </section>
 
             <section class="settings-subsection wizard-section">
-              <h3>导入 SillyTavern 聊天记录</h3>
+              <div class="settings-section-head">
+                <h3>聊天记录导入</h3>
+                <p>导入当前角色卡的 SillyTavern JSONL 历史，用于迁移旧会话。</p>
+              </div>
               <div id="chatWizardStep1" class="wizard-step">
                 <button id="chatWizardStartBtn" type="button" class="subtle-btn wizard-trigger">选择聊天记录导入</button>
                 <p class="settings-hint" style="margin-top:6px">仅支持当前角色卡的 .jsonl 文件</p>
@@ -251,7 +271,10 @@
           <!-- Tab: 用户设定 -->
           <div class="settings-tab-panel" data-tab-panel="user">
             <section class="settings-subsection">
-              <h3>用户设定</h3>
+              <div class="settings-section-head">
+                <h3>玩家设定</h3>
+                <p>维护用户基础档案、当前角色卡覆盖设定和头像。</p>
+              </div>
               <div class="settings-actions">
                 <button id="editBaseUserProfileBtn" type="button">维护基础设定</button>
                 <button id="editCharacterProfileOverrideBtn" type="button" class="subtle-btn">维护当前卡强化设定</button>

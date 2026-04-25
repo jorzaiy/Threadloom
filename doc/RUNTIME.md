@@ -11,7 +11,7 @@
 - active preset
 - `state`
 - `scene persona seeds`
-- 最近 `10` 对 recent history
+- 最近 `12` 对 recent history
 
 这些是当前回合的最低事实层，必须每轮都以它们为准。
 
@@ -61,7 +61,7 @@
 - `state`
 - 相关 `npc profiles`
 - `persona seeds`
-- 最近 `10` 对 turn 的 rolling window
+- 最近 `12` 对 turn 的 rolling window
 - 命中的 keeper archive
 - 可调入世界书人物
 
@@ -82,7 +82,6 @@
   "time": "...",
   "location": "...",
   "main_event": "...",
-  "scene_core": "...",
   "onstage_npcs": ["..."],
   "relevant_npcs": ["..."],
   "immediate_goal": "...",
@@ -234,7 +233,6 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
     "time": "...",
     "location": "...",
     "main_event": "...",
-    "scene_core": "...",
     "onstage_npcs": ["..."],
     "relevant_npcs": ["..."],
     "immediate_goal": "...",

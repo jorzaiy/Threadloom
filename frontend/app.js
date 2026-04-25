@@ -11,6 +11,7 @@ const statusBar = document.getElementById('statusBar');
 const topbarContext = document.getElementById('topbarContext');
 const debugFloatPanel = document.getElementById('debugFloatPanel');
 const debugBackdrop = document.getElementById('debugBackdrop');
+const sessionBackdrop = document.getElementById('sessionBackdrop');
 const debugCloseBtn = document.getElementById('debugCloseBtn');
 const debugToggleBtn = document.getElementById('debugToggleBtn');
 const settingsBtn = document.getElementById('settingsBtn');
@@ -216,6 +217,7 @@ function toggleSessionDock(forceOpen) {
   if (!sessionDockPanel) return;
   const nextOpen = typeof forceOpen === 'boolean' ? forceOpen : sessionDockPanel.hidden;
   sessionDockPanel.hidden = !nextOpen;
+  if (sessionBackdrop) sessionBackdrop.hidden = !nextOpen;
   sessionIndicator?.setAttribute('aria-expanded', String(nextOpen));
 }
 
@@ -794,9 +796,17 @@ function renderCharacterManageGrid() {
         if (event.target instanceof HTMLElement && event.target.closest('button')) return;
         if (!window.confirm(`切换到角色卡“${item.name || item.character_id}”吗？`)) return;
         try {
+          if (characterManageNote) {
+            characterManageNote.textContent = `正在切换到：${item.name || item.character_id}`;
+            characterManageNote.dataset.kind = '';
+          }
           setStatus('切换角色卡中...', 'working');
           await selectCharacter(item.character_id);
           closeSettings();
+          if (characterManageNote) {
+            characterManageNote.textContent = `已切换到：${item.name || item.character_id}`;
+            characterManageNote.dataset.kind = 'ok';
+          }
           setStatus('角色卡已切换', 'ok');
         } catch (err) {
           setStatus(`切换失败：${err.message}`, 'error');
@@ -1062,6 +1072,7 @@ function renderState(state) {
   const table = document.createElement('table');
   table.className = 'state-table';
   for (const [label, value] of rows) {
+    if (!value || value === '待确认') continue;
     const tr = document.createElement('tr');
     const th = document.createElement('th');
     th.textContent = label;
@@ -1071,32 +1082,43 @@ function renderState(state) {
     tr.appendChild(td);
     table.appendChild(tr);
   }
-  stateEl.appendChild(table);
+  if (table.children.length) {
+    stateEl.appendChild(table);
+  }
 
   const summaryWrap = document.createElement('div');
   summaryWrap.className = 'state-summary-block';
 
-  const mainThread = (state.active_threads || []).find(item => item?.kind === 'main') || (state.active_threads || [])[0] || null;
-  if (mainThread?.label) {
+  if (state.main_event) {
     const summaryLine = document.createElement('div');
     summaryLine.className = 'state-summary-line';
     summaryLine.innerHTML = '<strong>主要事件</strong>';
-    const _span1 = document.createElement('span'); _span1.textContent = mainThread.label; summaryLine.appendChild(_span1);
-    summaryWrap.appendChild(summaryLine);
-  } else if (state.main_event) {
-    const summaryLine = document.createElement('div');
-    summaryLine.className = 'state-summary-line';
-    summaryLine.innerHTML = '<strong>主要事件</strong>';
-    const _span2 = document.createElement('span'); _span2.textContent = state.main_event; summaryLine.appendChild(_span2);
+    const _span1 = document.createElement('span'); _span1.textContent = state.main_event; summaryLine.appendChild(_span1);
     summaryWrap.appendChild(summaryLine);
   }
 
-  if (state.immediate_goal) {
-    const goalLine = document.createElement('div');
-    goalLine.className = 'state-summary-line';
-    goalLine.innerHTML = '<strong>当前目标</strong>';
-    const _span3 = document.createElement('span'); _span3.textContent = state.immediate_goal; goalLine.appendChild(_span3);
-    summaryWrap.appendChild(goalLine);
+  if (state.immediate_goal && state.immediate_goal !== '待确认') {
+    const summaryLine = document.createElement('div');
+    summaryLine.className = 'state-summary-line';
+    summaryLine.innerHTML = '<strong>下一步</strong>';
+    const _span2 = document.createElement('span'); _span2.textContent = state.immediate_goal; summaryLine.appendChild(_span2);
+    summaryWrap.appendChild(summaryLine);
+  }
+
+  const signals = Array.isArray(state.carryover_signals) ? state.carryover_signals : [];
+  if (signals.length) {
+    const signalLine = document.createElement('div');
+    signalLine.className = 'state-summary-line';
+    signalLine.innerHTML = '<strong>延续信号</strong>';
+    const signalText = signals
+      .slice(0, 4)
+      .map(item => typeof item === 'string' ? item : [item?.type, item?.text].filter(Boolean).join('：'))
+      .filter(Boolean)
+      .join(' / ');
+    const signalSpan = document.createElement('span');
+    signalSpan.textContent = signalText;
+    signalLine.appendChild(signalSpan);
+    summaryWrap.appendChild(signalLine);
   }
 
   if (summaryWrap.children.length) {
@@ -1149,6 +1171,13 @@ function renderState(state) {
           span.textContent = ambiguous ? `${label}（存在多个同名实体）` : label;
           td.appendChild(span);
         }
+        const ownedObjects = Array.isArray(item?.owned_objects) ? item.owned_objects : [];
+        if (ownedObjects.length) {
+          const owned = document.createElement('div');
+          owned.className = 'object-line muted-line';
+          owned.textContent = `持有：${ownedObjects.slice(0, 3).map(obj => obj?.label || obj?.object_id).filter(Boolean).join(' / ')}`;
+          td.appendChild(owned);
+        }
         tr.appendChild(th);
         tr.appendChild(td);
         tbody.appendChild(tr);
@@ -1160,19 +1189,42 @@ function renderState(state) {
     return wrap;
   }
 
-  npcTarget.appendChild(buildNpcTable('在场 NPC', state.onstage_entities || []));
-  npcTarget.appendChild(buildNpcTable('相关 NPC', state.relevant_entities || []));
+  const npcRows = [];
+  const seenNpc = new Set();
+  for (const group of [state.onstage_entities || [], state.relevant_entities || []]) {
+    for (const item of group) {
+      const key = `${item?.entity_id || ''}|${item?.name || ''}`;
+      if (seenNpc.has(key)) continue;
+      seenNpc.add(key);
+      npcRows.push(item);
+    }
+  }
+  for (const item of state.scene_entities || []) {
+    const key = `${item?.entity_id || ''}|${item?.primary_label || ''}`;
+    if (seenNpc.has(key) || !item?.primary_label) continue;
+    seenNpc.add(key);
+    npcRows.push({
+      name: item.primary_label,
+      entity_id: item.entity_id || null,
+      role_label: item.role_label || '',
+      ambiguous: false,
+      owned_objects: item.owned_objects || [],
+    });
+  }
+  for (const item of state.important_npcs || []) {
+    const key = `important|${item?.primary_label || ''}`;
+    if (seenNpc.has(key) || !item?.primary_label) continue;
+    seenNpc.add(key);
+    npcRows.push({
+      name: item.primary_label,
+      entity_id: null,
+      role_label: item.role_label || '',
+      ambiguous: false,
+    });
+  }
+  npcTarget.appendChild(buildNpcTable('NPC 列表', npcRows));
 
-  const importantNpcs = state.important_npcs || [];
-  const importantNpcRows = importantNpcs.slice(0, 6).map(item => ({
-    name: item?.primary_label || '待确认',
-    entity_id: null,
-    role_label: item?.role_label || '',
-    ambiguous: false,
-  }));
-  npcTarget.appendChild(buildNpcTable('重要 NPC', importantNpcRows));
-
-  // --- Objects & Threads section ---
+  // --- Objects & Carryover Signals section ---
   const otTarget = objectThreadSectionEl || stateEl;
 
   const objects = state.tracked_objects || [];
@@ -1204,16 +1256,17 @@ function renderState(state) {
       const th = document.createElement('th');
       th.textContent = `${idx + 1}`;
       const td = document.createElement('td');
-      const holder = possessionById[item.object_id]?.holder || '未指明';
-      const status = possessionById[item.object_id]?.status || '未指明';
+      const holder = item.owner || item.bound_entity_label || possessionById[item.object_id]?.holder || '未指明';
+      const status = item.possession_status || possessionById[item.object_id]?.status || '未指明';
       const vis = visibilityById[item.object_id]?.visibility || '未指明';
       const kind = item?.kind || 'item';
       const lines = [
         `${item.label || item.object_id} / ${kind}`,
-        `持有：${holder}`,
+        `归属：${holder}`,
         `状态：${status}`,
         `可见：${vis}`,
       ];
+      if (item.bound_entity_id) lines.push(`绑定：${item.bound_entity_label || holder} (${item.bound_entity_id})`);
       lines.forEach(line => {
         const div = document.createElement('div');
         div.className = 'object-line';
@@ -1229,44 +1282,44 @@ function renderState(state) {
   objectWrap.appendChild(objectTable);
   otTarget.appendChild(objectWrap);
 
-  const threads = state.active_threads || [];
-  const threadWrap = document.createElement('div');
-  threadWrap.className = 'npc-block';
-  const threadHeading = document.createElement('strong');
-  threadHeading.textContent = '活跃线程';
-  threadWrap.appendChild(threadHeading);
+  const signalWrap = document.createElement('div');
+  signalWrap.className = 'npc-block';
+  const signalHeading = document.createElement('strong');
+  signalHeading.textContent = '延续信号';
+  signalWrap.appendChild(signalHeading);
 
-  const threadTable = document.createElement('table');
-  threadTable.className = 'state-table npc-table';
-  const threadBody = document.createElement('tbody');
-  if (!threads.length) {
+  const signalTable = document.createElement('table');
+  signalTable.className = 'state-table npc-table';
+  const signalBody = document.createElement('tbody');
+  if (!signals.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
     td.colSpan = 2;
     td.textContent = '暂无';
     td.className = 'empty-hint';
     tr.appendChild(td);
-    threadBody.appendChild(tr);
+    signalBody.appendChild(tr);
   } else {
-    threads.slice(0, 5).forEach((item, idx) => {
+    signals.slice(0, 6).forEach((item, idx) => {
       const tr = document.createElement('tr');
       const th = document.createElement('th');
       th.textContent = `${idx + 1}`;
       const td = document.createElement('td');
-      const parts = [
-        item.label || '待确认',
-        item.kind || 'thread',
-        item.status || 'active',
-      ].filter(Boolean);
-      td.textContent = parts.join(' / ');
+      if (typeof item === 'string') {
+        td.textContent = item;
+      } else {
+        const type = item?.type || 'mixed';
+        const text = item?.text || '待确认';
+        td.textContent = `${type} / ${text}`;
+      }
       tr.appendChild(th);
       tr.appendChild(td);
-      threadBody.appendChild(tr);
+      signalBody.appendChild(tr);
     });
   }
-  threadTable.appendChild(threadBody);
-  threadWrap.appendChild(threadTable);
-  otTarget.appendChild(threadWrap);
+  signalTable.appendChild(signalBody);
+  signalWrap.appendChild(signalTable);
+  otTarget.appendChild(signalWrap);
 }
 
 function renderDebug(debug) {
@@ -1282,6 +1335,8 @@ function renderDebug(debug) {
   }
   const lorebookInjection = debug.lorebook_injection || {};
   const promptBlocks = debug.prompt_block_stats || [];
+  const selector = debug.selector || {};
+  const eventSummaryItem = debug.event_summary_item || null;
   const lines = [];
   if (promptBlocks.length) {
     lines.push('Prompt Blocks');
@@ -1300,11 +1355,28 @@ function renderDebug(debug) {
     }
     lines.push('');
   }
+  lines.push('Event Memory');
+  lines.push(`Event Summary Count: ${debug.event_summary_count || 0}`);
+  lines.push(`Inject Summary: ${selector.inject_summary ? 'yes' : 'no'}`);
+  if (selector.event_hits?.length) {
+    lines.push('Event Hits');
+    for (const item of selector.event_hits) {
+      lines.push(`- ${item.event_id} (${item.turn_id}) score=${item.score} reason=${item.reason}`);
+    }
+  } else {
+    lines.push('Event Hits: none');
+  }
+  if (eventSummaryItem?.summary) {
+    lines.push('Latest Event Summary');
+    lines.push(`- ${eventSummaryItem.summary}`);
+  }
+  lines.push('');
   lines.push('Diagnostics');
   lines.push(JSON.stringify({
     arbiter_analysis: debug.arbiter_analysis || null,
     arbiter_results: debug.arbiter_results || [],
     state_keeper_diagnostics: debug.state_keeper_diagnostics || null,
+    selector: selector,
     retained_threads: debug.retained_threads || [],
     retained_entities: debug.retained_entities || [],
     completion_status: debug.completion_status || null,
@@ -1401,14 +1473,13 @@ async function loadState() {
 }
 
 async function selectCharacter(characterId) {
-  const data = await apiJson('/api/character/select', {
+  await apiJson('/api/character/select', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({character_id: characterId}),
   });
-  characterItems = data.characters || [];
+  await loadCharacters();
   currentSessionId = '';
-  renderCharacterCard(data.character_card || lastCharacterCard);
   renderCharacterSelect();
   await Promise.all([loadSessions(), loadCharacterProfileOverride()]);
   resetSidePanels();
@@ -1610,11 +1681,13 @@ sessionIndicator?.addEventListener('click', () => {
   toggleSessionDock();
 });
 
+sessionBackdrop?.addEventListener('click', () => toggleSessionDock(false));
+
 document.addEventListener('click', (e) => {
   const target = e.target;
   if (!(target instanceof Node)) return;
   if (sessionDockPanel?.hidden) return;
-  if (sessionDockPanel.contains(target) || sessionIndicator?.contains(target)) return;
+  if (sessionDockPanel.contains(target) || sessionIndicator?.contains(target) || sessionBackdrop?.contains(target)) return;
   toggleSessionDock(false);
 });
 

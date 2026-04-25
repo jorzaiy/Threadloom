@@ -18,9 +18,20 @@
 - `POST /api/new-game`
 - `POST /api/delete-session`
 - `POST /api/regenerate-last`
+- `GET /api/characters`
+- `POST /api/character/select`
+- `POST /api/characters/import`
+- `POST /api/chat/preview`
+- `POST /api/chat/import`
 
 当前未实现但文档中偶尔会提到的接口：
 - `POST /api/admin/adjust`
+
+当前存在但默认视为实验态关闭的接口：
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET/POST /api/users`
+- `POST /api/multi-user`
 
 ## GET /api/site-config
 
@@ -130,7 +141,6 @@ partial 相关行为：
     "time": "承和十二年，三月初七，入夜",
     "location": "密林与树下藏身处一带",
     "main_event": "安顿、休整并决定下一步去向。",
-    "scene_core": "伤势与风险压着场面、场面暂时转入安顿与恢复。",
     "scene_entities": [
       {
         "entity_id": "scene_npc_01",
@@ -222,7 +232,6 @@ partial 相关行为：
     "time": "...",
     "location": "...",
     "main_event": "...",
-    "scene_core": "...",
     "scene_entities": [],
     "onstage_entities": [],
     "relevant_entities": [],
@@ -337,7 +346,7 @@ partial 相关行为：
 ### Frontend Note
 
 - 当前前端不会再在设置页里管理 session
-- 用户通过点击顶部当前会话名展开最近会话下拉来切换、删除或开始新游戏
+- 用户通过点击底部当前会话名展开最近会话下拉来切换、删除或开始新游戏
 
 ### Response
 

@@ -8,7 +8,7 @@
 - `handler_message.py`：`POST /api/message` 主链入口
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照
 - `bootstrap_session.py`：新 session bootstrap
-- `context_builder.py`：runtime 上下文装配，当前 narrator 主链为 `recent window + keeper archive`
+- `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，不是只有 `recent window + keeper archive`
 - `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）
@@ -40,9 +40,12 @@
 - narrator 已接上真实模型调用
 - 新 session 会继承 root `canon / summary / state`
 - state / summary / persona / threads / important NPC 都已接入 session-local 写回
-- narrator 当前已经收敛为两层上下文主链：
-  - 最近 `12` 对 turn 直给 narrator
-  - 更早历史只走 keeper archive 命中
+- narrator 当前的核心不是“只有两层上下文”，而是：
+  - 强约束层：`runtime_rules / preset / character_core / player_profile / canon / 当前硬锚点 / 知情边界 / recent window / state_fragment`
+  - 连续性层：`npc_roster / active_threads / objects / keeper archive / persona / 条件注入的 npc_profiles`
+  - 候选知识层：条件注入的系统级 NPC / 世界书 NPC / 世界书正文 / 长程阶段摘要
+- 最近 `12` 对 turn 仍是 narrator 的最核心近程上下文
+- 更早历史当前主要通过 keeper archive 命中回流，而不是自由 transcript 检索
 - `state_keeper` 优先，`state_updater` 兜底
 - arbiter 已接入主链，不再只是文档占位
 - partial reply 有独立处理路径，不再继续污染事实层
@@ -53,6 +56,22 @@
 - `state_fragment` 已前移到 narrator / state_keeper 主链，并在失败分支提供 `fragment-baseline`
 - `state_keeper_candidate` 当前可作为 `skeleton keeper` sidecar 先产出最小骨架，并并入 `state_fragment` 再交给完整 keeper
 - 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补次级字段
+- opening-choice 分支现在不再“只生成正文然后直接返回”；首轮开局正文会进入 `state_fragment -> skeleton keeper -> fill keeper -> thread/important_npc` 写回链，避免正文与 state 从第一轮开始分叉。当前这条链通常能落下 `time/location/main_event/onstage/immediate_risks/carryover_clues`，但 `immediate_goal` 仍可能偏保守
+- `main_event` 与 `active_threads.main.label` 当前已改为条件同步：不再让较慢更新的 `main_event` 无条件覆盖主线程标签；只有当 `main_event` 质量明显更高，或主线程标签仍是占位值时，才允许它接管主线程标签
+- `active_threads` 当前已降为“state/debug 辅助层”的实验状态：数据结构仍保留，但不再默认进入 narrator prompt，也不再作为 selector 的主要命中依据；主导当前叙事方向的层次更偏向 `recent window / carryover_signals / event summaries`
+- `carryover_signals` 统一信号层已接入状态 schema并真实落盘：设计目标是让 keeper 优先维护“后续仍会影响局势的统一信号”，再由兼容层派生旧 `immediate_risks / carryover_clues`；当前真实回合里 keeper 仍常直接产出旧字段，但状态归一化层已会把旧字段反推回统一信号层并持久化
+- 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里存在；`thread_tracker / context_builder / state_snapshot` 等核心消费点已开始优先使用统一信号层，再兼容旧字段
+- `onstage_npcs` 当前已改为优先从 `scene_entities` 投影：对象层逐步收为 keeper 的主真相源，名字列表更多作为快照/UI 层派生字段保留；当前投影规则已在真实回合中生效
+- 当前目标分工草案：
+- `event`：中程检索层，服务于 recall / summary，不默认主导 narrator
+- `signal`：当前方向约束层，可直接进入 narrator / selector
+- `summary`：长程压缩层，只在 recent window 不足时条件回流
+- `thread`：state/debug 辅助层，当前实验中已去主导化
+
+当前 `event` 链的实现边界：
+- event 当前已改为真正读取最近 `1~3` 对 `user/assistant` 窗口，而不是只摘要当前轮 narrator prose
+- `prev_state` 当前已在调用侧修正为“本轮前状态”，避免 event 用当前态伪装上一轮状态
+- heuristic fallback 当前也按多回合窗口工作，不再优先挑天气/氛围句；当前仍可能不如 LLM 版本稳定，但 summary 已开始更像阶段事件压缩器
 - `state_updater` 已更偏保守继承，不轻易覆盖已有高信号状态
 - narrator 对“半句中止但 provider 未标 partial”的返回增加了不完整输出保护，避免坏回复继续污染事实层
 - state fallback 现在会更严格地区分“可持续追踪物件”和“短语残片 / 动作词片段”
@@ -60,7 +79,7 @@
 - state snapshot 已可直接提供前端实体展示结构
 - web 配置项中的 `default_debug / show_debug_panel / history_page_size` 已可驱动 API 与前端
 - 前端默认会话选择已改为最近更新会话优先
-- 角色卡侧栏已动态读取角色卡元数据和缩略封面图
+- 角色卡信息当前会动态读取角色卡元数据和缩略封面图；角色卡切换与导入入口现已主要收进设置面板
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间私下信息自动外溢
 - NPC 间信息隔离已升级为结构化 `knowledge_scope` 系统：state 中追踪 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，keeper 按回合提取增量，`state_bridge.py` 合并去重，`narrator_input.py` 渲染为结构化知情边界
 - 所有文件写入已改为原子写入模式（`_atomic_write_text()` / `_atomic_write_json()`）：写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
@@ -113,6 +132,8 @@
   - `skeleton keeper`（`gemma-4-31b-it`）→ 最小骨架
   - `fill keeper`（`gemma-4-31b-it`）→ 补次级字段
   - `heuristic fallback` → 最终兜底
+- `fill keeper` 当前按增量 patch 思路运行：已有 NPC / 物件默认沿用，只在明确新增或明确变化时输出，避免低质量后抽取覆盖高质量旧状态
+- NPC 与物件绑定当前由 `possession_state` 驱动：标准化层会把 holder 对齐到稳定 NPC 主名，并自动写回 `tracked_objects[].owner / bound_entity_id` 与 `scene_entities[].owned_objects`
 - turn_analyzer 可在 narrator 不变前提下评估是否跟着切本地
 
 当前 keeper 调教样本分工：
@@ -120,7 +141,6 @@
 - `维克托·奥古斯特`
   - 用于校准结构清晰场景下的：
     - `main_event`
-    - `scene_core`
     - `threads`
     - `objects`
 
@@ -225,11 +245,13 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 | ----              | ----                | ----               | ----     | ----                                  |
 | 启发式            | `state_updater.py`  | 每轮               | ~1KB     | 全字段（保守推理）                     |
 | Skeleton LLM      | `state_keeper.py`   | 每完整轮           | ~2KB     | time, location, main_event, onstage_npcs, immediate_goal |
-| Fill LLM          | `state_keeper.py`   | 每 N 轮（默认 12） | ~5KB     | scene_core, risks, clues, tracked_objects, knowledge_scope |
+| Fill LLM          | `state_keeper.py`   | 每 N 轮（默认 12） | ~5KB     | carryover_signals, tracked_objects, knowledge_scope |
 
 - 读取 `config/runtime.json` 中 `memory.consolidate_every_turns`（默认 12）
 - 非合并轮使用 skeleton + `build_state_from_fragment()` + `update_state()` 轻量更新
+- opening-choice 首轮当前是特殊链路：会先跑 skeleton + fill keeper，再接 thread/important_npc 写回，不直接复用普通非合并轮的 `update_state()` 路径
 - 诊断信息中 `provider` 标注为 `skeleton+fragment` 或 `full_fill`
+- 当前字段稳定性大致排序：`time / location / main_event` 高于 `onstage_npcs / immediate_risks / carryover_clues`，而 `immediate_goal` 仍偏保守。
 
 ### 上下文窗口与输出优化
 

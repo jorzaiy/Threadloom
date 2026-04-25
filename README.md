@@ -25,10 +25,11 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - 单用户当前可用
 - 角色卡当前可替换，但产品形态仍偏“当前激活卡”
 - 单站点是当前产品层简化：普通用户只维护一个站点，然后给 `Narrator / State Keeper` 选模型
+- 多用户相关底层代码当前保留，但产品面默认关闭，不作为当前正式能力暴露
 
 后续方向：
 - 多用户：补显式用户身份与用户切换
-- 多角色卡：补导入、枚举、切换
+- 多角色卡：继续打磨导入后的 runtime 清洗与管理体验
 - 多站点：若后续确实需要，再扩展为高级配置，而不是先把普通设置页做复杂
 
 ## 当前能力
@@ -57,17 +58,39 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 
 ## 当前 narrator 主链
 
-当前 narrator 主输入已经收敛为两层：
+当前 narrator 主输入不是单纯“两层上下文”，而是一个 runtime-first 分层装配：
 
-1. 最近 `12` 对 `user/assistant` turn 直接输入
-2. 更早历史只通过 keeper archive 命中补充
+强约束层：
+- `runtime-rules`
+- `preset`
+- `character_core`
+- `player_profile`
+- `canon`
+- 当前硬锚点（`time / location`）
+- 知情边界（`knowledge_scope` + 固定规则）
+- 最近 `12` 对 `user/assistant` turn
+- 结构化状态锚点（来自 `state_fragment`，不含 `immediate_goal`）
 
-当前明确不再作为 narrator 主输入的内容：
+连续性层：
+- `npc_roster`
+- `active_threads`
+- `tracked_objects / possession_state / object_visibility`
+- `keeper archive`
+- 条件注入的 `npc_profiles`
+- `persona`
 
-- `summary`
-- 独立 `mid digest`
-- 旧 `memory agent` recall
-- 世界书注入当前按预算控制，不再默认整块灌入
+候选知识层：
+- 条件注入的系统级 NPC
+- 条件注入的世界书 NPC 候选
+- 条件注入的世界书正文
+- 条件注入的长程阶段摘要
+
+当前明确不再作为 narrator 主输入骨架的内容：
+
+- `summary` 不是默认常驻主输入
+- 独立 `mid digest` 已降级
+- 旧 `memory agent` recall 不再主导 narrator
+- 世界书注入受 selector 和预算约束，不再默认整块灌入
 
 当前世界书预算已细化到条目类型：
 
@@ -80,7 +103,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 
 当前 Web UI 已支持当前用户范围内的角色卡管理：
 
-- 侧边栏角色卡名称位置可直接下拉切换当前用户的角色卡
+- 设置面板内可切换当前用户的角色卡
 - 设置面板内可直接导入新的角色卡文件（`.png` / `.json`）
 - 角色卡枚举范围只限于当前用户目录下的 `runtime-data/<user>/characters/`
 - 当前默认且唯一用户会显示为 `default_user`
@@ -98,13 +121,17 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
    - `onstage_npcs`
    - `immediate_goal`
 3. `gemma-4-31b-it` 作为 fill-mode keeper，在骨架上补：
-   - `scene_core`
    - `immediate_risks`
    - `carryover_clues`
    - `tracked_objects`
    - `possession_state`
    - `object_visibility`
-4. heuristic 作为最终兜底
+4. heuristic 作为普通 runtime 路径下的最终兜底
+
+说明：
+- `main_event` 目前已比早期版本稳定得多，opening 首轮也能落下有效主事件。
+- `immediate_goal` 虽然仍在骨架字段里，但当前稳定性明显低于 `time / location / main_event`，部分回合仍可能回到 `待确认`；它当前更主要影响 `threads / lore trigger / summary`，而不是直接强控 narrator 正文。
+- opening-choice 首轮当前会优先走 `skeleton keeper + fill keeper`，而不是直接依赖 heuristic 反提。
 
 当前 keeper 改进要点：
 - skeleton keeper 和 fill keeper 的 LLM prompt 已全面重写，加入字段级质量约束和好坏示例
@@ -163,10 +190,10 @@ config/runtime.json
  - `temperature` 与 `max_output_tokens` 已回收到共享默认配置：
    - `config/runtime.json -> model_defaults`
  - 高级角色（如 `turn_analyzer / arbiter / state_keeper_candidate`）当前不在普通设置页里改，但可以通过 `runtime-data/<user>/config/model-runtime.json -> advanced_models` 手动覆盖
- - 当前前端会话管理入口：
-   - 点击顶部当前会话名，弹出最近会话下拉管理
-   - 显示当前角色卡下最近更新的最多 5 个会话
-   - 下拉中可直接切换、删除、开始新游戏
+  - 当前前端会话管理入口：
+    - 点击底部当前会话名，弹出最近会话下拉管理
+    - 显示当前角色卡下最近更新的最多 5 个会话
+    - 下拉中可直接切换、删除、开始新游戏
 
 3. 准备你自己的内容层：
 
@@ -185,6 +212,16 @@ config/runtime.json
 - `examples/USER.md`
 
 如果你暂时还没有准备真实内容，可以先用 `examples/` 跑通最小链路，再逐步替换为自己的本地文件。
+
+当前主角档案建议：
+
+- 用户级基础档案：`runtime-data/<user>/profile/player-profile.base.json`
+- 角色卡特化覆盖：`runtime-data/<user>/characters/<character_id>/source/player-profile.override.json`
+- 运行时会先加载基础档案，再叠加当前角色卡覆盖
+- `USER.md` 现在不再参与 RP narrator 主链，只保留给通用协作备注
+- narrator 运行时只消费一份收短后的玩家档案摘要，完整档案仍保留在 JSON 真相源中
+- `player-profile.json` / `player-profile.md` 目前保留为兼容副本与可读导出
+- narrator prompt 当前采用“强约束层 / 连续性层 / 候选知识层”的分层权重，避免世界书候选压过最近窗口与当前 state
 
 ## 角色卡导入
 
@@ -217,13 +254,14 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 当前设计原则：
 
 - `character-data.json` 只保留角色核心
-- `lorebook.json` 只保留世界知识条目
+- `lorebook.json` 只保留 runtime 可消费的世界知识条目
 - `openings.json` 单独保存开局菜单与 bootstrap
 - `system-npcs.json` 单独保存系统级 NPC，当前分成：
   - `core`
   - `faction_named`
   - `roster`
 - 当前 runtime 默认优先只消费 `core`
+- 导入时会尽量剔除 SillyTavern 的前端模板、隐藏脚本、状态栏与关系模板条目
 - `assets/` 用于角色卡封面与缩略图
 
 4. 启动：
@@ -260,6 +298,22 @@ http://127.0.0.1:8765
 - `doc/REVIEW.md`
 - `doc/RUNTIME.md`
 
+## 常用脚本
+
+当前主用入口：
+
+- 启动后端：`backend/start.sh`
+- 停止后端：`backend/stop.sh`
+- 导入角色卡：`backend/import_character_card.py`
+- 导入 SillyTavern 聊天：`backend/import_sillytavern_chat.py`
+- 单回合精确回放：`backend/replay_turn_trace.py`
+- 从历史重建副本 session：`backend/rebuild_session_from_history.py`
+
+历史迁移 / 实验脚本：
+
+- 已统一归档到 `backend/legacy_tools/`
+- 这类脚本不属于当前日常运行入口，使用前先确认路径假设仍和现状一致
+
 配置模板：
 
 - `config/runtime.example.json`
@@ -270,3 +324,18 @@ http://127.0.0.1:8765
 - 仓库不包含真实的 `config/providers.json`
 - 发布版本默认保留配置模板，实际端点和 API key 需要本地自行填写
 - 仓库默认提交的是 `examples/` 模板内容，而不是你的真实角色卡、memory、session 或用户档案
+
+---
+
+## 📚 相关文档
+
+### 核心文档
+- **[KEEPER_SUMMARY_FIX.md](KEEPER_SUMMARY_FIX.md)** - Keeper Summary修复详情（12轮总结生成）
+- **[PERFORMANCE_OPTIMIZATION.md](PERFORMANCE_OPTIMIZATION.md)** - 性能优化总结（Skeleton Keeper优化）
+
+### 测试报告
+- **[doc/test-reports/TEST_RESULTS.md](doc/test-reports/TEST_RESULTS.md)** - 15轮完整回归测试报告
+- **[doc/test-reports/SELECTOR_TEST_REPORT.md](doc/test-reports/SELECTOR_TEST_REPORT.md)** - Selector质量和相关性测试
+
+### 文档审查
+- **[DOC_AUDIT_REPORT.md](DOC_AUDIT_REPORT.md)** - 文档一致性审查报告

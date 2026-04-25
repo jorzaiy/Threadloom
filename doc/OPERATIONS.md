@@ -4,6 +4,24 @@
 
 这个文件记录 `Threadloom` 当前原型的实际使用方式、调试习惯和边界，不是系统主配置。
 
+## 当前常用脚本
+
+日常主用：
+- `backend/start.sh`：启动后端
+- `backend/stop.sh`：停止后端
+- `backend/import_character_card.py`：导入角色卡到当前角色 source
+- `backend/import_sillytavern_chat.py`：导入 SillyTavern JSONL 聊天
+- `backend/replay_turn_trace.py`：单回合精确回放
+- `backend/rebuild_session_from_history.py`：从历史重建副本 session
+
+已归档脚本：
+- `backend/legacy_tools/`：历史迁移、审计、实验脚本归档目录
+- 当前已归档：
+  - `audit_legacy_sessions.py`
+  - `migrate_storage_layout.py`
+  - `migrate_lorebook_metadata.py`
+  - `experiment_entity_candidate_judge.py`
+
 ## 当前建议工作流
 
 继续复用现有 `rp-agent` 资产：
@@ -13,12 +31,68 @@
 - 预设：`character/presets/*.json`
 - 长期记忆：`memory/canon.md`
 - 当前状态：`memory/state.md`
-- 阶段摘要：`memory/summary.md`
+- 阶段摘要：`memory/summary.md`（当前仅作兼容/导入/调试层，不是 narrator 主输入）
 - 原始流水：`memory/history.jsonl`
 - NPC 档案：`memory/npcs/*.md`
 - root persona seed：`runtime/persona-seeds/*`
 
 `Threadloom` 不替代这些资产，而是在当前阶段把它们重新组织成 session-local runtime。
+
+当前主角档案建议：
+
+- 用户级基础档案：`runtime-data/<user>/profile/player-profile.base.json`
+- 角色卡特化覆盖：`runtime-data/<user>/characters/<character_id>/source/player-profile.override.json`
+- runtime 会先读基础档案，再叠加当前角色卡覆盖
+- `USER.md` 不再进入 RP narrator 主链，只保留给通用协作备注
+- narrator 运行时只消费一份收短后的玩家档案摘要，完整档案继续保留在 JSON 真相源中
+- `player-profile.json` / `player-profile.md` 当前保留为兼容副本与可读导出
+
+当前 narrator prompt 分层：
+
+- 强约束层：玩家档案 slim 版、当前硬锚点、知情边界、最近窗口
+- 连续性层：人物连续性表、活跃线程、重要物件、较早结构记录、相关 NPC 档案、Onstage Persona
+- 候选知识层：系统级 NPC、可调入世界书 NPC、世界书正文
+
+当前原则：
+
+- 若强约束层与候选知识层冲突，一律以强约束层为准。
+- 连续性层用于补 continuity，不可压过最近窗口与当前硬锚点。
+- 候选知识层只表示“可以调用”，不表示“已经在场”或“当前已发生”。
+- narrator 目标是维持一个会自己流转的 RP 世界：主角是参与者与观察者，不是唯一驱动器。
+- 对回屋、关门、烧水、换位、短暂观察这类过渡段，narrator 仍应写出具体环境变化、人物反应、动作后的余波或正在累积的细节变化，不要塌成一句过短摘要。
+- 只有当当前局势本来就存在追索、怀疑、风险、未决冲突或逼近感时，才继续强化压力；不要为了“有戏”而每轮硬塞危险感。
+- `immediate_goal` 已从 narrator 主链降级，不再每轮常驻塞给 narrator。
+- `main_event` 当前改为低频维护：默认只在早期 turn、周期点或明显场景切段时允许高频链重写。
+- `location` 也已从高频自由抽取中降级，当前默认依赖首轮定底与 12 轮整理，不再每轮尝试从正文里扫地点短语。
+- 若题材本身存在明确时间牌头习惯，runtime rules 已要求 narrator 优先给出稳定时间锚点再展开正文。
+- 前端状态面板当前只展示有信息量的时间/地点行，不再把 `待确认` 和 `当前目标` 当常驻主信息显示。
+- NPC 当前方向改为单列表：不再把 `在场 / 相关 / 重要 NPC` 作为 narrator 或 UI 的多套主显结构，而更偏向统一 registry / profile 入口。
+- selector 当前会生成一层轻量 `npc_roster` 供 narrator 使用；keeper 继续维护全量 NPC 结构，但 narrator 主链不再直接依赖多套 NPC 分类。
+- 当前 `npc_roster` 字段已收成：`name / role / status`，不再强求不稳定的 `tone / relation`。
+
+当前 preset 定位：
+
+- 默认 preset 已收成单一主版本：`runtime-data/default-user/presets/world-sim-core.json`
+- preset 现在主要负责：节奏、镜头重心、外部推进倾向、注入预算
+- 世界真相、主角控制权、知情边界、世界自主流转等长期规则，优先由 `prompts/runtime-rules.md` 负责
+- 旧 preset 已归档到：`runtime-data/default-user/presets/legacy/`
+
+当前 `config/runtime.json` 已收回到最小主链用途：
+
+- `sources`
+- `memory`
+- `model_defaults`
+- `entity_recovery`
+- `web`
+- `trace`
+
+旧的 `bootstrap`、大部分 `refresh_policy`、以及没有实际控制力的 `state_policy / persona_policy` 已移除；它们不再是真实控制当前主链行为的配置入口。
+`summary` 也已从 `sources` 主配置中降级；当前保留的 `summary.md` 主要用于导入兼容、trace 与历史层，不再作为 narrator 主链输入。
+
+当前 active_threads 约束：
+
+- thread continuity 主要继承 `thread_id`，不再为了延续性强行复用已经过时的 `key`。
+- 当风险/线索内容本身已经换成新阶段时，`key` 应与当前 `label` 同步更新，避免旧风险名挂在新内容上。
 
 ## 角色卡导入
 
@@ -78,6 +152,8 @@ cd /Threadloom/backend
 - 当前用户模型/站点文件：
   - `runtime-data/default-user/config/site.json`
   - `runtime-data/default-user/config/model-runtime.json`
+- 当前产品面仍以单用户 `default-user` 为正式入口；多用户底层代码保留，但默认不在前端和 API 产品面暴露
+- `/api/auth/login`、`/api/auth/logout`、`/api/users`、`/api/multi-user` 当前在产品面统一返回实验态关闭
 - 当前设置页已简化为单站点模式：
   - 用户只维护一个站点 URL / API Key / API 类型
   - 先点“获取模型”
@@ -127,14 +203,19 @@ http://127.0.0.1:8765
 - `GET /api/state`
 - `GET /api/history`
 - `GET /api/entity`
+- `GET /api/characters`
+- `POST /api/character/select`
+- `POST /api/characters/import`
+- `POST /api/chat/preview`
+- `POST /api/chat/import`
 
 当前前端支持：
-- 点击顶部当前会话名，展开最近会话下拉
+- 点击底部当前会话名，展开最近会话下拉
 - 最近会话下拉支持切换、删除、开始新游戏
 - 最近会话按最后一条消息时间从新到旧排列
 - 发送消息
 - partial 时重新生成上一条
-- 右侧状态面板和 NPC 详情查看
+- 底部浮动状态面板和 NPC 详情查看
 - 折叠调试区
 - 居中设置弹窗
 
@@ -143,6 +224,7 @@ http://127.0.0.1:8765
 当前 prototype 的重要行为：
 - 新 session 会从 root `canon / summary / state` bootstrap，不从空壳 state 起步
 - opening 已经是独立状态机，不再只是输出一段开局提示
+- 开局选择后的首轮 narrator 正文现在会直接接入首轮 keeper 写回：通常能落下时间/地点/主事件/在场人物/风险等基础状态，不再只留一个 opening 壳 state；`immediate_goal` 当前仍可能偏保守或回到 `待确认`
 - 同一 `session_id` 的 HTTP 写请求现在会串行执行，降低并发覆盖风险
 - 每个 turn 现在会额外落一份 `turn-trace/turn-XXXX.json`，用于单回合精确回放
 - `runtime.json -> trace.enabled / trace.keep_last_turns` 可控制 trace 是否启用以及最多保留多少轮
@@ -152,8 +234,30 @@ http://127.0.0.1:8765
 - `state_keeper` 优先，`state_updater` 兜底
 - `state_keeper` 现在会拒收明显低信号或相对上一轮明显退化的 state
 - `state_fragment` 现在会先作为结构化锚点进入 narrator 与 state_keeper
-- `state_keeper_candidate` 现在可以作为 `skeleton keeper` sidecar 先产出最小骨架，再并入 `state_fragment`
-- 完整 `state_keeper` 当前已切到 `fill-mode`：默认只在骨架状态上补 `scene_core / immediate_risks / carryover_clues` 这类次级字段，而不再整份重写 state
+- `state_keeper_candidate` 当前默认使用 `kimi-k2-0905-preview`
+- `state_keeper` 当前默认使用 `kimi-k2-0905-preview`
+- `state_keeper_candidate` 现在可以作为 `skeleton keeper` sidecar 先产出最小骨架，再并入 `state_fragment`；当前默认频率是每 2 轮一次
+- 首轮 bootstrap 不跑 skeleton，直接走一次完整 `state_keeper` 定底
+- opening-choice 的首轮正文当前例外：会先跑一次 skeleton keeper 定骨架，再跑 fill keeper 补风险/线索/物件，避免首轮正文写出来但 state 仍停在开局壳；这条链当前不等同于普通非合并轮的 `update_state()` 路径
+- 当前 keeper 相关模型已统一到 `Kimi`，不再维护多模型分工
+- 完整 `state_keeper` 当前已切到 `fill-mode`：默认只在骨架状态上补 `immediate_risks / carryover_clues / tracked_objects / knowledge_scope` 这类次级字段，而不再整份重写 state
+- `carryover_signals` 统一信号层现已真实落盘到 state：用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号；旧 `immediate_risks / carryover_clues` 仍保留兼容，并优先从统一信号层派生
+- 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里出现；快照层与部分消费点已开始优先使用统一信号层，再兼容旧风险/线索字段
+- `immediate_goal` 当前主要影响 `active_threads` 的 goal/主线程标签候选、世界书触发词与 summary 展示；它已不再作为 narrator 主链里的强锚点，当前稳定性仍低于 `time / location / main_event`
+- `main_event` 当前不再无条件反压主线程 `label`：只有当 `main_event` 自身质量明显更高，或主线程标签仍是低质量占位时，才会接管主线程标签；避免低频事件锚点把更快更新的 `active_threads` 主线压回旧值
+- `active_threads` 当前已做去主导化实验：线程层仍继续落盘并保留给 debug/state 观察，但 `【活跃线程】` 已退出 narrator prompt，selector 也不再把 thread 当主要触发依据；当前方向约束更偏向 `recent window + carryover_signals + event recall`
+- 当前目标分工草案：
+  - `event`：3 回合级中程检索层，默认不给 narrator 常驻输入
+  - `summary`：12 回合级长程压缩层，只在 selector 判断需要时回流
+  - `signal`：当前方向约束层，可直接进入 narrator / selector
+  - `thread`：state/debug 辅助层，不再默认承担 steering 职责
+- `event` 当前真实行为已更接近这份草案：
+  - 每 3 轮写入一次 `event_summaries`
+  - 事件总结当前已真正读取最近 `1~3` 对 turn 窗口，而不是只看当前轮 narrator prose
+  - fallback event summary 当前已不再优先抓天气/氛围句，开始更像阶段事件压缩；后续若继续打磨，主方向应是 clue/risk 的结构化质量，而不是继续扩大窗口
+- NPC / object / clue registry 当前已改为批量刷新：默认累计到至少 3 个新的对话对后才触发一次 sidecar 更新，不再每轮都检查一次 gemma
+- entity candidate judge 当前已收成单一入口：保留 `state_updater.py` 中的判定，移除 `state_bridge.py` 中的重复 judge，减少每轮额外 gemma 调用
+- 调试面板当前会优先显示 `event_summary_count / event_hits / inject_summary / latest event summary`，用于观察双层检索是否真的在工作
 - 轻量物件状态层已接入：
   - `tracked_objects`
   - `possession_state`
@@ -176,14 +280,15 @@ http://127.0.0.1:8765
 - state snapshot 现在直接给前端 `onstage_entities / relevant_entities`
 - `default_debug / show_debug_panel / history_page_size` 已从配置贯通到 API 和前端
 - 前端消息区支持通过“加载更早记录”按钮向上分页，不再只看最后一页
-- 当前侧边栏更适合作为 `v0.3` 结构状态视图：
+- 当前浮动状态面板更适合作为 `v0.3` 结构状态视图：
   - 时间 / 地点硬锚点
   - 主要事件
   - 在场 / 相关 / 重要 NPC
   - 关键物件
   - 活跃线程
+- `onstage_npcs` 当前已开始收向 `scene_entities` 的投影结果：keeper 更偏先维护 `scene_entities`，再由状态归一化层根据 `scene_entities[].onstage` 投影当前在场名字列表，减少双写漂移
 - 前端默认会话选择已切到“最近更新的活动会话优先”，不再固化到 `story-live`
-- 角色卡侧栏已改为动态读取角色卡元数据和缩略封面图
+- 角色卡管理已改到设置面板中，支持读取角色卡元数据和缩略封面图
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间自动共享私下信息
 - 所有文件写入（`runtime_store.py`、`keeper_archive.py`）已改为原子写入：先写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
 - 模型调用层（`model_client.py`、`local_model_client.py`）已加入 `_retry_on_rate_limit` 装饰器：429/503 错误自动指数退避重试（最多 3 次），尊重 `Retry-After` 头
@@ -232,19 +337,8 @@ http://127.0.0.1:8765
 
 回放脚本：
 
-```bash
-python3 scripts/replay-runtime-web.py --source-session story-live --max-user-turns 20
-```
-
-说明：
-- 这个脚本文件目前仍保留历史文件名 `replay-runtime-web.py`
-- 这是脚本名层面的历史命名残留，不代表项目目录或服务名仍是 `runtime-web`
-
-也可直接回放 root 历史：
-
-```bash
-python3 scripts/replay-runtime-web.py --root-history --start-user-turn 1 --max-user-turns 30
-```
+- 当前仓库已不再保留旧的 `scripts/replay-runtime-web.py`。
+- 单回合或副本重放，当前以 `backend/replay_turn_trace.py` 与 `backend/rebuild_session_from_history.py` 为主。
 
 单回合精确回放：
 
@@ -255,7 +349,7 @@ python3 backend/replay_turn_trace.py --source-session story-live --turn-id turn-
 
 说明：
 - 这条链不重新开局，也不重新发送整段历史
-- 它会从 `sessions/<source>/turn-trace/turn-XXXX.json` 里恢复该回合的 pre-turn 状态与人格层
+- 它会从 `runtime-data/default-user/characters/<character_id>/sessions/<source>/turn-trace/turn-XXXX.json` 里恢复该回合的 pre-turn 状态与人格层
 - 然后只重跑该回合的后半段写回链，适合快速调 `threads / important_npcs / persona / summary`
 
 SillyTavern 聊天导入：
@@ -292,7 +386,7 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
 
 当前存档分层重构进度：
 - 目标结构已经明确为：
-  - 用户层：`USER.md`、`player-profile.*`、`presets/`
+  - 用户层：`player-profile.base.json`、兼容 `player-profile.*`、`presets/`
   - 角色卡层：`character-data.json`、`lorebook.json`、`canon.md`、静态 NPC 资料
   - session 层：`history/state/summary/persona/trace/imports/meta/context`
 - `backend/paths.py` 与核心 store/lifecycle 模块已开始接入这套三层路径模型。
@@ -301,57 +395,16 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
   - `character.*`
   - `session.*`
 - 新路径模型已能描述用户层 / 角色卡层 / session 层的目标目录，而不是只靠旧的平铺 `sources` 字符串路径。
-- 当前仍处于“兼容式第一阶段”：
-  - 新路径模型已建立
-  - 旧 `/sessions` 与旧根目录资源仍可继续读取
-  - 还没有执行真实迁移，不会立刻搬动现有数据
+- 当前兼容层仍保留 legacy root 路径解析，但主工作路径已经切到 `runtime-data/<user>/characters/<character_id>/sessions/`
 - 当前结论：暂不急着上数据库记录元数据；先把目录分层、显式来源解析和迁移链做稳，再评估是否需要 SQLite 之类的元数据层。
-- 第二阶段迁移补充：
-  - `backend/migrate_storage_layout.py` 现已支持把旧 session 复制到新角色卡层下的 session 根。
-  - 新建 session 已确认可以真实落到新根：
-    - `runtime-data/default-user/characters/<character_id>/sessions/<session_id>`
-  - 当前仍属于“兼容期”：
-    - 新根已可写
-    - 旧根仍保留作回退与数据兜底
-  - 暂不建议立刻引入数据库；等新根稳定跑一段时间、用户层/角色卡层/session 层都真实使用起来后，再评估是否用 SQLite 记录元数据。
-
-旧 `sessions/` 清理前的最后安全检查：
-- 现在可用：
-  - `python3 backend/audit_legacy_sessions.py`
-- 这个脚本会把旧根目录分成几类：
-  - `safe_delete_now`
-  - `legacy_only_session_like`
-  - `legacy_only_other`
-  - `mirrored_equal`
-  - `mirrored_different`
-- 当前实测结果：
-  - 旧 `/root/Threadloom/sessions` 里只剩 `12` 个目录，而且全部是 `archive-*`
-  - 其中 `9` 个是空壳 archive，可直接删除
-  - 当前阻止整个旧根直接删除的只有 `3` 个目录：
-    - `archive-20260408-140823-story-live`
-    - `archive-20260411-130423-story-live`
-    - `archive-20260405-cleanup`
-- 当前清理建议：
-  - 先删空壳 archive
-  - 若想保留旧 archive 历史，先跑：
-    - `python3 backend/migrate_storage_layout.py --include-sessions --include-archives`
-  - 再次运行 `python3 backend/audit_legacy_sessions.py`
-  - 只有当 `blocking_items` 为空时，才删除整个旧 `sessions/` 根目录
-- 本轮实际执行结果：
-  - 旧根里的空壳 archive 已删除
-  - `archive-20260408-140823-story-live` 与 `archive-20260411-130423-story-live` 已复制到新 session 根
-  - `archive-20260405-cleanup` 不属于标准单 session，已单独移动到：
-    - `runtime-data/default-user/characters/<character_id>/legacy-archives/archive-20260405-cleanup`
-  - 旧 `/root/Threadloom/sessions` 已清空并删除
-  - 当前审计结果已变为：
-    - `legacy_count = 0`
-    - `blocking_items = []`
+- 旧 `backend/legacy_tools/audit_legacy_sessions.py` / `backend/legacy_tools/migrate_storage_layout.py` 仍保留为历史迁移工具，但当前不属于日常运维主路径。
 
 四要素现状：
 - 时间：已接近可用，优先吃场景头与显式时间推进，稳定度较高。
 - 地点：已接近可用，优先吃场景头与显式转场，稳定度较高。
 - 人物：当前最接近可用，`onstage / relevant / scene_entities / important_npcs` 已基本进入可控状态。
-- 事件：已可用，但 `main_event / scene_core / goal / risks / clues` 的文案仍偏模板化，后续更像体验优化而非结构修 bug。
+- 事件：已可用，但 `main_event / goal / risks / clues` 的文案仍偏模板化，后续更像体验优化而非结构修 bug。
+- `main_event` 当前已能在 opening 首轮和普通 live 回合中较稳定落下；`immediate_goal` 仍是这组字段里最不稳定的一项。
 - 物品：链路已通，且已在 live 回合中成功落下基础结果；当前主要剩余问题是精度、归一化和部分动作物件的稳定性。
   - 当前 keeper 侧已支持把 `player_inventory / protagonist / 主角 / 玩家 / 自己` 这类值归一化到主角名。
 
@@ -368,81 +421,18 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
   - 角色卡缩略图当前文件约 `267 KB`
   - 已给 `/character-cover` 增加缓存头，减少重复加载成本
 
-## State TODO
+## State Notes
 
-今天已经确认的结论：
-- `state_updater.py` 不能继续走“按题材/角色卡补关键词”的路线。
-- SillyTavern 导入样本已经证明：旧 heuristics 会把异题材长记录拉回旧武侠幽灵状态。
-- 当前在线 RP 仍然应该优先，离线历史重建只作为压测和回归验证手段。
+最近一轮与 state 相关的关键结论：
+- `state_updater.py` 主路径已经继续收向“previous-state-driven merge + 保守候选过滤”，不再走题材补丁路线。
+- `extract_generic_character_names()` 与 `state_bridge._looks_like_continuity_name()` 已补上通用过滤，抽象概念 / 系统机制词不会轻易进入人物池。
+- `碎影江湖` 与 `血蚀纪` 的 clean session 真实 HTTP 回归都已验证：`scene_entities / important_npcs / relevant_npcs / continuity_candidates` 当前保持干净。
+- `relevant_npcs` 当前仍采用非常保守的补回策略，优先少报，避免把弱信号人物或抽象词重新带回状态层。
+- 物件层已经进入“live 可用、继续精修”的阶段；当前主剩余问题偏向归一化与展示文案，而不是链路污染。
 
-明天继续时的主方向：
-- 重构 `backend/state_updater.py` 主路径为 `previous-state-driven merge`，而不是全文题材分类。
-- 使用 `1` 轮主更新 + `2-3` 轮连续性窗口：
-  - `time / location / main_event` 以最近一轮显式变化为主，默认继承上一轮。
-  - `onstage / relevant / scene_entities` 用 `2-3` 轮窗口做连续性稳态。
-- `main_event / scene_core / immediate_goal / immediate_risks / carryover_clues` 只允许结构化、低想象力的增量生成，不再靠题材关键词猜世界。
-- 旧武侠 heuristics 只保留在 legacy fallback，不再作为主逻辑。
-
-实体主路径的收缩原则：
-- 只允许这几类来源进入实体候选池：
-  - 已知稳定名字池：`source_name`、已有 `scene_entities`、`important_npcs`、导入时的 `character_name / user_name`
-  - 明确命名结构：`我叫X / 他叫X / 她叫X / 名叫X / 叫做X`
-  - 结构上独立出现的人名：例如独立在引号、换行、标点边界上的名字
-- 禁止从自由 prose 中裸扫任意中文片段当名字。
-- 若没有足够置信度，宁可少报实体，也不要生成伪实体。
-
-明天优先顺序：
-1. 先把实体候选来源收紧，解决 `到背后那 / 几个还没 / 声响` 这种伪实体。
-2. 再稳定 `onstage / relevant / scene_entities`。
-3. 最后再继续收口 `main_event / scene_core / goal / risks / clues`。
-
-当前阶段性结果：
-- `extract_generic_character_names()` 已收成“严格候选筛选器”。
-- 第一轮样本里，`维克托·奥古斯特 / 高崎` 已能同时保住。
-- `少年` 这类旧 fallback 泄漏的 relevant 已被清掉。
-- `active_threads` 的轻量去重已经接上，当前可稳定收成 `main / risk / clue`。
-- 正常在线 RP 风格样本验证已通过：一轮一轮的对话里，NPC 仍可被正常抓到。
-- 长窗口副本验证已通过：旧 `伤者 / 被围攻者` 幽灵不会再在异题材样本中反污染回来。
-- `relevant_npcs` 当前已从“乱抓”进入“非常有限地补回稳定离场人物”的阶段。
-- live 物件验证已通过：
-  - `纸条` 可进入 `tracked_objects`
-  - 玩家持有可映射到主角名
-  - `短刀` 也已开始进入 live state
-- 进一步的 live 物件验证已通过：
-  - `纸条 / 短刀` 可同时进入 `tracked_objects`
-  - `师兄 / 陆小环` 这类持有者已可落入 `possession_state`
-  - 物件层已进入“live 可用、精度继续优化”的阶段
-- 目前剩下的主要问题已经不是污染，而是文案仍偏模板化，以及物件层还需要继续精修精度与归一化。
-
-明天可对比的第二路线：
-- 评估是否让 `Llama-3.3-70B` 只承担“候选提取器”职责，而不是直接重写整份 state。
-- 若尝试这条线，职责应限制为：
-  - 从最近 `1-3` 轮里提取 `entity candidates`
-  - 提取显式 `time / location` 候选
-  - 提取 `goal / risks / clues` 候选
-  - 每项都带 `confidence + evidence`
-- 本地 merge 层仍负责：
-  - 默认继承上一轮 state
-  - 只接受高置信更新
-  - 对实体做 add/retain/alias merge，不让模型直接删除稳定实体
-- 明天需要比较：
-  - 继续收紧本地通用 extractor 是否已经足够
-  - 还是需要引入 `Llama-3.3-70B` 做候选提取器来提高跨题材抽取能力
-
-今天补充实验结果：
-- 已安装 `jieba`，并尝试把它接成可选的实体边界辅助层。
-- 当前结论：
-  - `jieba` 更适合做“候选边界辅助/坏候选否决器”，不适合直接当实体真相源。
-  - 对当前样本，`jieba` 尚未直接解决 `维克托·奥古斯特已 / 再 / 淡` 这类截断伪实体。
-  - 当前实现还暴露了性能问题：若每次提取都重建 tokenizer，离线重建会明显变慢。
-- 明天若继续这条线，应先做：
-  - tokenizer 缓存
-  - 只对严格候选池做 `jieba` 校验
-  - 不再让 `jieba` 参与自由文本候选生成
-
-测试约束：
-- 继续用导入的 SillyTavern 长记录做压测，但不要为了某一张卡补专用规则。
-- 需要做破坏性重建测试时，优先用副本 session，不直接污染原始导入档。
+当前建议：
+- 在线真实 HTTP 回归仍优先于离线重建样本。
+- 需要做破坏性验证时，继续优先在副本 session 上测试，不直接污染原始导入档。
 
 ## 当前已知边界
 
