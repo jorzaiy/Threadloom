@@ -328,10 +328,12 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - **嵌套条目分类**：内层 `时间线 / 阵营 / location / Dynamic Rules / 动态规则 / 异能 / 晶核` 会按标题精确分类为 `history / faction / region / rule`，避免被外层标题或正文关键词误导。
 - **runtime 噪声过滤**：`enabled: false` 或 `disable: true` 的世界书条目不再进入 runtime `lorebook.json`；`初始引导` 等玩家设定提示也会从 runtime 世界书中过滤。
 - **显式 NPC 保留**：`npc：...` / `Npc-...` 这类显式 NPC 条目即使正文包含 `{{user}}`，也不会被误判为模板并跳过。
-- **测试覆盖**：`tests/test_card_importer.py` 已补充嵌套世界书、disabled 条目过滤、显式 NPC 模板占位符等回归测试；当前导入器相关测试为 `33 passed`。
+- **管理卡片短简介**：导入器会生成 `displaySummary`，角色卡管理优先展示这份清洗后的短简介，避免把作者指令、人际模板、状态栏、YAML 人物细节直接显示在卡片下方。
+- **测试覆盖**：`tests/test_card_importer.py` 已补充嵌套世界书、disabled 条目过滤、显式 NPC 模板占位符、管理卡片短简介等回归测试；当前导入器相关测试为 `36 passed`。
 
 ### 前端交互修复（v0.4.3）
 
 - 顶部 header 改为左上角浮动胶囊，只保留 logo / `Threadloom` / 当前用户与角色卡，窄屏与移动端隐藏，减少对正文区域的占用。
-- 胶囊内 `Threadloom` 可作为设置快捷入口；当前用户/世界区域可作为当前角色卡 Session 管理快捷入口，同时保留原底部按钮，避免入口过隐蔽。
-- Session 管理弹层已移出 composer 表单，新增关闭按钮，并修复点击快捷入口后被全局点击监听立刻关闭的问题。
+- 设置面板重组为 `当前世界 / 导入资产 / 玩家设定 / 模型连接`：当前世界内直接列出角色卡管理、Session 管理和聊天记录导入；导入资产只处理角色卡导入。
+- 胶囊内 `Threadloom` 打开模型连接；当前用户/世界区域打开当前世界页签。窄屏与移动端隐藏胶囊。
+- Session 管理弹层已移出 composer 表单，新增关闭按钮，并修复点击快捷入口后被全局点击监听立刻关闭的问题；当前世界页签也内嵌会话列表，可直接切换、删除或新建会话。

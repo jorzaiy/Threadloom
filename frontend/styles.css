@@ -773,6 +773,12 @@ button:active {
   gap: 8px;
 }
 
+.settings-session-list {
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
 .session-dock-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -341,6 +341,65 @@ def _extract_character_core(card_json: dict) -> dict:
     return core
 
 
+def _compact_one_line(value: str) -> str:
+    text = _clean_text(value)
+    text = re.sub(r'```[a-zA-Z]*', '', text)
+    text = re.sub(r'[`*_#>]+', '', text)
+    text = re.sub(r'\b[A-Za-z_]{2,32}\s*:', '', text)
+    text = re.sub(r'\s+-\s+', ' ', text)
+    text = re.sub(r'\{\{[^}]+\}\}', '', text)
+    text = re.sub(r'\{%.*?%\}', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip(' -:：，,。；;')
+
+
+def _looks_like_display_summary_noise(text: str) -> bool:
+    value = str(text or '')
+    if not value.strip():
+        return True
+    noisy_tokens = (
+        '作者指令', '强制执行', '推进剧情', '状态栏', '关系模板', 'creator_notes',
+        'regex_scripts', 'findRegex', 'replaceString', 'depth_prompt', 'Name:', 'Gender:',
+        '<script', '{%', '[EVENT]', '[AN:', '请{{user}}设定', '自动生成表格化关系网',
+    )
+    return any(token in value for token in noisy_tokens)
+
+
+def _build_display_summary(core: dict, lorebook: dict) -> str:
+    name = str(core.get('name', '') or '').strip()
+    entries = lorebook.get('entries', []) if isinstance(lorebook.get('entries', []), list) else []
+
+    candidates: list[str] = []
+    core_summary = str((core.get('coreDescription', {}) if isinstance(core.get('coreDescription', {}), dict) else {}).get('summary', '') or '')
+    if not _looks_like_display_summary_noise(core_summary):
+        candidates.append(core_summary)
+
+    for entry_type in ('world', 'region', 'faction', 'history', 'rule'):
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get('entryType') != entry_type:
+                continue
+            content = str(entry.get('content', '') or '')
+            if _looks_like_display_summary_noise(content):
+                continue
+            candidates.append(content)
+            break
+
+    role = str(core.get('role', '') or '')
+    notes = str(core.get('notes', '') or '')
+    for value in (role, notes):
+        if not _looks_like_display_summary_noise(value):
+            candidates.append(value)
+
+    for candidate in candidates:
+        text = _compact_one_line(candidate)
+        if len(text) < 12:
+            continue
+        if name and text.startswith(name):
+            text = text[len(name):].strip(' ：:，,。') or text
+        return _truncate_at_boundary(text, 96, 'character display summary')
+    return f'{name} 角色卡。' if name else '未命名角色卡。'
+
+
 def _classify_lorebook_entry(title: str, content: str, keywords: list[str], always_on: bool) -> dict:
     title_text = str(title or '').strip()
     keyword_text = ' '.join(str(item or '').strip() for item in (keywords or []) if str(item or '').strip())
@@ -1539,6 +1598,7 @@ def import_card_bundle(card_json: dict, *, png_data: bytes | None = None) -> dic
     raw_lorebook = _extract_lorebook(card_json)
     system_npcs = _extract_system_npcs(raw_lorebook, card_json)
     lorebook = _filter_runtime_lorebook_entries(raw_lorebook)
+    core['displaySummary'] = _build_display_summary(core, lorebook)
     openings = _extract_openings_payload(card_json)
     backups = _write_imported_backups(card_json, png_data, raw_card_hash=raw_card_hash)
     covers = _write_cover_assets(png_data, raw_card_hash=raw_card_hash)

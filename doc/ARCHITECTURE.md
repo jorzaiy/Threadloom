@@ -126,7 +126,7 @@
 
 其中：
 
-- `character-data.json` 是角色核心
+- `character-data.json` 是角色核心；其中 `displaySummary` 是供角色卡管理 UI 使用的短简介，不参与替代运行时世界书
 - `player-profile.override.json` 是当前角色卡对主角档案的特化覆盖
 - `lorebook.json` 是世界知识
   - 导入器会把 Tavern 外层条目中嵌套的 JSON-like `entries[]` 展开成多条运行时世界书

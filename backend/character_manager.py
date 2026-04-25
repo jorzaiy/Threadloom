@@ -81,7 +81,7 @@ def list_character_cards() -> list[dict]:
             'character_id': path.name,
             'name': str(data.get('name', '') or core.get('title', '') or path.name).strip() or path.name,
             'subtitle': str(core.get('tagline', '') or data.get('role', '') or '').strip(),
-            'summary': str(core.get('summary', '') or '').strip(),
+            'summary': str(data.get('displaySummary', '') or core.get('summary', '') or '').strip(),
             'cover_url': _character_cover_url(path.name),
             'has_source': source.exists(),
             'active': path.name == active_id,

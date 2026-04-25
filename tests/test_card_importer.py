@@ -113,6 +113,49 @@ def test_summary_truncation_widened():
     assert len(summary) > 1200, f"summary should now exceed old 1200-char limit, got {len(summary)}"
 
 
+def test_display_summary_prefers_clean_lorebook_over_template_noise():
+    core = {
+        'name': '血蚀纪',
+        'coreDescription': {'summary': '作者指令：推进剧情。每次回复均有状态栏。'},
+        'role': '',
+        'notes': '',
+    }
+    lorebook = {
+        'entries': [
+            {'entryType': 'world', 'content': '4209年，血蚀病毒爆发，幸存者中少数人觉醒异能，人类在安全区与废墟之间求生。'},
+        ],
+    }
+    summary = ci._build_display_summary(core, lorebook)
+    assert '血蚀病毒' in summary
+    assert '作者指令' not in summary
+    assert len(summary) <= 96
+
+
+def test_display_summary_allows_world_lore_with_user_placeholder():
+    core = {'name': '九幽大陆', 'coreDescription': {'summary': '作者指令：推进剧情。'}, 'role': '', 'notes': ''}
+    lorebook = {
+        'entries': [
+            {'entryType': 'world', 'content': '背景：修仙世界。九幽大陆分为修仙界、人界、妖界、魔界；若{{user}}设定为上古神兽则另行裁定。'},
+        ],
+    }
+    summary = ci._build_display_summary(core, lorebook)
+    assert '修仙世界' in summary
+    assert '作者指令' not in summary
+
+
+def test_display_summary_prefers_clean_core_summary_before_lorebook():
+    core = {
+        'name': '碎影江湖',
+        'coreDescription': {'summary': '碎影江湖资料片：朝廷、江湖与玩家异人共同推动的开放武侠世界。'},
+        'role': '',
+        'notes': '',
+    }
+    lorebook = {'entries': [{'entryType': 'region', 'content': '中原·神都是大胤王朝的首都。'}]}
+    summary = ci._build_display_summary(core, lorebook)
+    assert summary.startswith('资料片')
+    assert '开放武侠世界' in summary
+
+
 # ---------- P0-2: lorebook entry field preservation -------------------------
 
 def test_lorebook_entry_preserves_full_metadata():

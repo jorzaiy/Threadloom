@@ -64,6 +64,8 @@ const characterProfileDraftInput = document.getElementById('characterProfileDraf
 const saveCharacterProfileDraftBtn = document.getElementById('saveCharacterProfileDraftBtn');
 const skipCharacterProfileDraftBtn = document.getElementById('skipCharacterProfileDraftBtn');
 const characterProfileDraftNote = document.getElementById('characterProfileDraftNote');
+const settingsSessionList = document.getElementById('settingsSessionList');
+const settingsSessionNote = document.getElementById('settingsSessionNote');
 const chatWizardStep1 = document.getElementById('chatWizardStep1');
 const chatWizardStep2 = document.getElementById('chatWizardStep2');
 const chatWizardStep3 = document.getElementById('chatWizardStep3');
@@ -251,7 +253,7 @@ function sessionId() {
   return currentSessionId.trim();
 }
 
-function topSessions(items) {
+function topSessions(items, { activeLimit = 5, archivedLimit = 10 } = {}) {
   const active = (items || [])
     .filter(item => !item.archived && !item.replay)
     .sort((a, b) => {
@@ -259,11 +261,11 @@ function topSessions(items) {
       if (messageGap !== 0) return messageGap;
       return (b.updated_at_ns || 0) - (a.updated_at_ns || 0);
     })
-    .slice(0, 5);
+    .slice(0, activeLimit);
   const archived = (items || [])
     .filter(item => item.archived && !item.replay)
     .sort((a, b) => (b.updated_at_ns || 0) - (a.updated_at_ns || 0))
-    .slice(0, 10);
+    .slice(0, archivedLimit);
   return { active, archived };
 }
 
@@ -467,10 +469,19 @@ async function loadCharacters() {
   renderCharacterSelect();
 }
 
+function renderSessionLists() {
+  renderSessionList(sessionDockList, { closeDockOnSelect: true, noteEl: null, activeLimit: 5, archivedLimit: 10 });
+  renderSessionList(settingsSessionList, { closeDockOnSelect: false, noteEl: settingsSessionNote, activeLimit: 20, archivedLimit: 20 });
+}
+
 function renderSessionDock() {
-  if (!sessionDockList) return;
-  sessionDockList.innerHTML = '';
-  const { active, archived } = topSessions(sessionItems);
+  renderSessionLists();
+}
+
+function renderSessionList(target, { closeDockOnSelect = false, noteEl = null, activeLimit = 5, archivedLimit = 10 } = {}) {
+  if (!target) return;
+  target.innerHTML = '';
+  const { active, archived } = topSessions(sessionItems, { activeLimit, archivedLimit });
 
   function createSessionRow(item, isArchived) {
     const row = document.createElement('div');
@@ -490,11 +501,19 @@ function renderSessionDock() {
         resetSidePanels();
         await loadHistory();
         await loadState();
-        renderSessionDock();
-        toggleSessionDock(false);
+        renderSessionLists();
+        if (closeDockOnSelect) toggleSessionDock(false);
+        if (noteEl) {
+          noteEl.textContent = `已切换到：${item.session_id}`;
+          noteEl.dataset.kind = 'ok';
+        }
         setStatus('已切换', 'ok');
       } catch (err) {
         setStatus(`错误：${err.message}`, 'error');
+        if (noteEl) {
+          noteEl.textContent = err.message;
+          noteEl.dataset.kind = 'error';
+        }
       }
     });
 
@@ -507,10 +526,18 @@ function renderSessionDock() {
       setStatus('删除会话中...', 'working');
       try {
         await deleteSession(item.session_id);
-        renderSessionDock();
+        renderSessionLists();
+        if (noteEl) {
+          noteEl.textContent = `已删除：${item.session_id}`;
+          noteEl.dataset.kind = 'ok';
+        }
         setStatus('会话已删除', 'ok');
       } catch (err) {
         setStatus(`错误：${err.message}`, 'error');
+        if (noteEl) {
+          noteEl.textContent = err.message;
+          noteEl.dataset.kind = 'error';
+        }
       }
     });
 
@@ -520,16 +547,16 @@ function renderSessionDock() {
   }
 
   for (const item of active) {
-    sessionDockList.appendChild(createSessionRow(item, false));
+    target.appendChild(createSessionRow(item, false));
   }
 
   if (archived.length) {
     const sep = document.createElement('div');
     sep.className = 'session-dock-separator';
     sep.textContent = '已归档';
-    sessionDockList.appendChild(sep);
+    target.appendChild(sep);
     for (const item of archived) {
-      sessionDockList.appendChild(createSessionRow(item, true));
+      target.appendChild(createSessionRow(item, true));
     }
   }
 
@@ -543,15 +570,23 @@ function renderSessionDock() {
     setStatus('新游戏初始化中...', 'working');
     try {
       await startNewGame();
-      renderSessionDock();
-      toggleSessionDock(false);
+      renderSessionLists();
+      if (closeDockOnSelect) toggleSessionDock(false);
+      if (noteEl) {
+        noteEl.textContent = '新游戏已开始';
+        noteEl.dataset.kind = 'ok';
+      }
       setStatus('新游戏已开始', 'ok');
     } catch (err) {
       setStatus(`错误：${err.message}`, 'error');
+      if (noteEl) {
+        noteEl.textContent = err.message;
+        noteEl.dataset.kind = 'error';
+      }
     }
   });
   newGameRow.appendChild(newGameAction);
-  sessionDockList.appendChild(newGameRow);
+  target.appendChild(newGameRow);
 }
 
 async function loadSiteConfig() {
@@ -754,9 +789,11 @@ function renderCharacterManageGrid() {
     const summary = document.createElement('p');
     summary.className = 'character-manage-summary';
     const rawSummary = String(item.summary || item.subtitle || '暂无简介').replace(/\s+/g, ' ').trim();
-    summary.textContent = rawSummary.length > 30 ? `${rawSummary.slice(0, 30)}...` : rawSummary;
+    summary.textContent = rawSummary.length > 64 ? `${rawSummary.slice(0, 64)}...` : rawSummary;
     body.appendChild(title);
-    body.appendChild(scope);
+    if (String(item.character_id || '').trim() !== String(item.name || '').trim()) {
+      body.appendChild(scope);
+    }
     body.appendChild(summary);
 
     const actions = document.createElement('div');
@@ -935,7 +972,7 @@ function renderMessages(items) {
     importBtn.type = 'button';
     importBtn.className = 'subtle-btn';
     importBtn.textContent = '导入聊天记录';
-    importBtn.addEventListener('click', () => openSettings('character'));
+    importBtn.addEventListener('click', () => openSettings('world'));
     actions.appendChild(newBtn);
     actions.appendChild(importBtn);
     empty.appendChild(title);
@@ -1684,25 +1721,25 @@ settingsBtn?.addEventListener('click', () => {
 brandSettingsTrigger?.addEventListener('click', (event) => {
   event.preventDefault();
   event.stopPropagation();
-  openSettings();
+  openSettings('connection');
 });
 
 brandSettingsTrigger?.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' && event.key !== ' ') return;
   event.preventDefault();
-  openSettings();
+  openSettings('connection');
 });
 
 topbarContext?.addEventListener('click', (event) => {
   event.preventDefault();
   event.stopPropagation();
-  toggleSessionDock(true);
+  openSettings('world');
 });
 
 topbarContext?.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' && event.key !== ' ') return;
   event.preventDefault();
-  toggleSessionDock(true);
+  openSettings('world');
 });
 
 sessionIndicator?.addEventListener('click', (event) => {
@@ -2101,7 +2138,7 @@ async function checkAuth() {
     // LLM 首次设置引导：检测未配置时自动弹出设置面板
     const needsSetup = !siteConfig.base_url || siteConfig.status !== 'ready';
     if (needsSetup) {
-      openSettings();
+      openSettings('connection');
       const guide = document.getElementById('llmSetupGuide');
       if (guide) guide.hidden = false;
       setStatus('请先配置 LLM 连接', 'warning');
