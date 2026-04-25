@@ -320,3 +320,18 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - **Session Dock 显示归档会话**：开始新游戏后，已归档的 session 仍会出现在 dock 底部（带📦标记和"已归档"分隔线），不再消失
 - **角色卡缩略图缓存**：移除了 `?t=${Date.now()}` cache-buster，启用浏览器缓存和 `loading="lazy"`
 - **角色卡切换**：添加了 error handling 和自动关闭设置面板
+
+### 角色卡导入修复（v0.4.3）
+
+- **嵌套 JSON 世界书展开**：部分 Tavern 卡会把真正的世界书写在外层条目的
+  `content` JSON-like blob 的 `entries[]` 里，且字符串内含未转义换行。导入器现在会宽松解析这类结构，展开为正常 `lorebook.json` 条目，并标注 `source_kind: embedded_lorebook_json`。
+- **嵌套条目分类**：内层 `时间线 / 阵营 / location / Dynamic Rules / 动态规则 / 异能 / 晶核` 会按标题精确分类为 `history / faction / region / rule`，避免被外层标题或正文关键词误导。
+- **runtime 噪声过滤**：`enabled: false` 或 `disable: true` 的世界书条目不再进入 runtime `lorebook.json`；`初始引导` 等玩家设定提示也会从 runtime 世界书中过滤。
+- **显式 NPC 保留**：`npc：...` / `Npc-...` 这类显式 NPC 条目即使正文包含 `{{user}}`，也不会被误判为模板并跳过。
+- **测试覆盖**：`tests/test_card_importer.py` 已补充嵌套世界书、disabled 条目过滤、显式 NPC 模板占位符等回归测试；当前导入器相关测试为 `33 passed`。
+
+### 前端交互修复（v0.4.3）
+
+- 顶部 header 改为左上角浮动胶囊，只保留 logo / `Threadloom` / 当前用户与角色卡，窄屏与移动端隐藏，减少对正文区域的占用。
+- 胶囊内 `Threadloom` 可作为设置快捷入口；当前用户/世界区域可作为当前角色卡 Session 管理快捷入口，同时保留原底部按钮，避免入口过隐蔽。
+- Session 管理弹层已移出 composer 表单，新增关闭按钮，并修复点击快捷入口后被全局点击监听立刻关闭的问题。

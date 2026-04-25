@@ -184,6 +184,76 @@ def test_lorebook_top_level_metadata_preserved():
     assert book['extensions'] == {'foo': 'bar'}
 
 
+def test_lorebook_expands_embedded_json_entries_with_literal_newlines():
+    raw = _make_book_entry(
+        id='0',
+        comment='世界观',
+        keys=[],
+        constant=True,
+        content='''{
+  "name": "血蚀纪",
+  "entries": [
+    {"keys": ["世界观"], "content": "第一行
+第二行"},
+    {"keys": ["Dynamic Rules"], "content": "丧尸或怪物会随机出现"}
+  ]
+}''',
+    )
+    book = ci._extract_lorebook(_wrap_v2({
+        'name': 'X',
+        'character_book': {'entries': [raw]},
+    }))
+    titles = [e['title'] for e in book['entries']]
+    assert '世界观 / 世界观' in titles
+    assert '世界观 / Dynamic Rules' in titles
+    world = next(e for e in book['entries'] if e['title'] == '世界观 / 世界观')
+    assert world['content'] == '第一行\n第二行'
+    assert world['keywords'] == ['世界观']
+    assert world['source_kind'] == 'embedded_lorebook_json'
+    assert world['alwaysOn'] is True
+    dynamic = next(e for e in book['entries'] if e['title'] == '世界观 / Dynamic Rules')
+    assert dynamic['entryType'] == 'rule'
+
+
+def test_lorebook_does_not_expand_plain_json_without_entries():
+    raw = _make_book_entry(
+        id='0',
+        comment='全洁',
+        keys=[],
+        content='{"keys":["全洁定义"],"content":"规则文本"}',
+    )
+    book = ci._extract_lorebook(_wrap_v2({
+        'name': 'X',
+        'character_book': {'entries': [raw]},
+    }))
+    assert len(book['entries']) == 1
+    assert book['entries'][0]['title'] == '全洁'
+
+
+def test_lorebook_filters_embedded_initial_guide_from_runtime_lorebook():
+    raw = _make_book_entry(
+        id='0',
+        comment='世界观',
+        keys=[],
+        constant=True,
+        content='''{
+  "name": "修仙世界设定",
+  "entries": [
+    {"keys": ["世界观"], "content": "九幽大陆背景。"},
+    {"keys": ["初始引导"], "content": "请{{user}}设定姓名。"}
+  ]
+}''',
+    )
+    book = ci._extract_lorebook(_wrap_v2({
+        'name': 'X',
+        'character_book': {'entries': [raw]},
+    }))
+    filtered = ci._filter_runtime_lorebook_entries(book)
+    titles = [e['title'] for e in filtered['entries']]
+    assert '世界观 / 世界观' in titles
+    assert all('初始引导' not in title for title in titles)
+
+
 # ---------- P0-2: openings handles v3 group_only_greetings ------------------
 
 def test_openings_includes_group_only_greetings():
@@ -391,6 +461,22 @@ def test_important_person_entry_filtered_out_of_lorebook():
     assert all('重要人物条目' not in (e.get('title') or '') for e in filtered['entries'])
 
 
+def test_disabled_lorebook_entry_filtered_out_of_runtime_lorebook():
+    raw = _make_book_entry(
+        comment='user卡示例，可以在此基础上进行改动和使用，不要开启此条世界书',
+        content='Name:\nAge: 18',
+        enabled=False,
+        constant=True,
+    )
+    book = ci._extract_lorebook(_wrap_v2({
+        'name': 'X',
+        'character_book': {'entries': [raw]},
+    }))
+    assert any(e.get('title') for e in book['entries'])
+    filtered = ci._filter_runtime_lorebook_entries(book)
+    assert filtered['entries'] == []
+
+
 # ---------- self-reference filter for relationship_template -----------------
 
 def test_relationship_template_skips_card_name():
@@ -420,6 +506,50 @@ def test_relationship_template_skips_card_name():
     assert '贺景' in names
     assert '凌烨' in names
     assert '血蚀纪' not in names, "card name should not be surfaced as NPC"
+
+
+def test_explicit_npc_with_user_template_is_not_filtered():
+    """Explicit NPC lore often contains {{user}} relationship notes; those
+    should not be treated as frontend/runtime templates and skipped."""
+    entry = {
+        'id': 'npc-1',
+        'title': 'npc：月剑离',
+        'content': '角色详情: 月剑离\n核心羁绊: {{user}}是他唯一的光和锚点。',
+        'priority': 100,
+    }
+    card = _wrap_v3({'name': '碎影江湖', 'character_book': {'entries': []}})
+    out = ci._extract_system_npcs({'entries': [entry]}, card)
+    names = {it['name'] for it in out.get('items', [])}
+    assert '月剑离' in names
+
+
+# ---------- cover thumbnail generation --------------------------------------
+
+def test_cover_small_is_actually_smaller_than_original(tmp_path, monkeypatch):
+    """cover-small.png used to be a byte-identical copy of cover-original.png.
+    With Pillow available it should now be a 320x320 center-cropped thumbnail."""
+    from io import BytesIO
+    from PIL import Image
+    import character_assets
+
+    # Build a real PNG (non-square so we exercise center crop)
+    src = Image.new('RGB', (1024, 1536), color=(123, 45, 67))
+    buf = BytesIO()
+    src.save(buf, format='PNG')
+    png_bytes = buf.getvalue()
+
+    monkeypatch.setattr(character_assets, '_CHARACTER_OVERRIDE_ROOT', tmp_path)
+    monkeypatch.setattr(ci, 'character_assets_root', lambda: tmp_path / 'assets')
+
+    result = ci._write_cover_assets(png_bytes, raw_card_hash='test')
+    assert result['cover_saved']
+    original = tmp_path / 'assets' / 'cover-original.png'
+    small = tmp_path / 'assets' / 'cover-small.png'
+    assert original.read_bytes() == png_bytes
+    assert small.read_bytes() != png_bytes, "small must not be a byte-copy of original"
+    with Image.open(small) as img:
+        assert img.size == (320, 320), f"thumbnail should be 320x320, got {img.size}"
+    assert small.stat().st_size < original.stat().st_size
 
 
 if __name__ == '__main__':

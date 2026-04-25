@@ -9,6 +9,7 @@ const input = document.getElementById('input');
 const regenerateBtn = document.getElementById('regenerateBtn');
 const statusBar = document.getElementById('statusBar');
 const topbarContext = document.getElementById('topbarContext');
+const brandSettingsTrigger = document.getElementById('brandSettingsTrigger');
 const debugFloatPanel = document.getElementById('debugFloatPanel');
 const debugBackdrop = document.getElementById('debugBackdrop');
 const sessionBackdrop = document.getElementById('sessionBackdrop');
@@ -28,6 +29,7 @@ const characterCoverEl = document.getElementById('characterCover');
 const characterCoverFallbackEl = document.getElementById('characterCoverFallback');
 const sessionDockPanel = document.getElementById('sessionDockPanel');
 const sessionDockList = document.getElementById('sessionDockList');
+const sessionDockCloseBtn = document.getElementById('sessionDockCloseBtn');
 const historyToolbar = document.getElementById('historyToolbar');
 const loadEarlierBtn = document.getElementById('loadEarlierBtn');
 const saveModelConfigBtn = document.getElementById('saveModelConfigBtn');
@@ -215,10 +217,12 @@ function switchSettingsTab(tabName) {
 
 function toggleSessionDock(forceOpen) {
   if (!sessionDockPanel) return;
-  const nextOpen = typeof forceOpen === 'boolean' ? forceOpen : sessionDockPanel.hidden;
+  const isOpen = !sessionDockPanel.hidden;
+  const nextOpen = typeof forceOpen === 'boolean' ? forceOpen : !isOpen;
   sessionDockPanel.hidden = !nextOpen;
   if (sessionBackdrop) sessionBackdrop.hidden = !nextOpen;
   sessionIndicator?.setAttribute('aria-expanded', String(nextOpen));
+  sessionDockPanel.setAttribute('aria-hidden', String(!nextOpen));
 }
 
 function updateSessionIndicator() {
@@ -1677,11 +1681,38 @@ settingsBtn?.addEventListener('click', () => {
   }
 });
 
-sessionIndicator?.addEventListener('click', () => {
+brandSettingsTrigger?.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  openSettings();
+});
+
+brandSettingsTrigger?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  openSettings();
+});
+
+topbarContext?.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleSessionDock(true);
+});
+
+topbarContext?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  toggleSessionDock(true);
+});
+
+sessionIndicator?.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
   toggleSessionDock();
 });
 
 sessionBackdrop?.addEventListener('click', () => toggleSessionDock(false));
+sessionDockCloseBtn?.addEventListener('click', () => toggleSessionDock(false));
 
 document.addEventListener('click', (e) => {
   const target = e.target;

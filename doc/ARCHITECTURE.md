@@ -129,6 +129,8 @@
 - `character-data.json` 是角色核心
 - `player-profile.override.json` 是当前角色卡对主角档案的特化覆盖
 - `lorebook.json` 是世界知识
+  - 导入器会把 Tavern 外层条目中嵌套的 JSON-like `entries[]` 展开成多条运行时世界书
+  - `enabled: false` / `disable: true` / 初始引导 / 状态栏 / 人际模板等非运行时知识会被过滤
 - `openings.json` 是开局菜单与 bootstrap
 - `system-npcs.json` 是系统级既有人物
 - 当前 `system-npcs.json` 建议分层：

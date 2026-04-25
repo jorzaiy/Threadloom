@@ -46,7 +46,7 @@ body {
 }
 
 .chat-column {
-  padding: 16px 24px;
+  padding: 12px 24px 16px;
 }
 
 .chat-column {
@@ -65,31 +65,46 @@ body {
   display: flex;
   justify-content: flex-start;
   align-items: center;
-  gap: 18px;
-  padding: 14px 0 16px;
-  border-bottom: 1px solid rgba(127, 109, 91, 0.12);
-  position: sticky;
-  top: 0;
-  background: linear-gradient(180deg, rgba(249, 246, 241, 0.98) 0%, rgba(244, 241, 234, 0.95) 100%);
-  backdrop-filter: blur(12px);
-  z-index: 20;
+  gap: 10px;
+  position: fixed;
+  top: 14px;
+  left: 18px;
+  max-width: min(36rem, calc(100vw - 36px));
+  padding: 7px 11px 7px 9px;
+  border: 1px solid rgba(127, 109, 91, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.68);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(14px);
+  z-index: 45;
 }
 
 .topbar h1 {
   margin: 0;
-  font-size: 24px;
-  line-height: 1.05;
-  letter-spacing: -0.03em;
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: -0.01em;
   color: var(--text);
   font-weight: 700;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: 999px;
+  padding: 3px 5px 3px 3px;
+  margin-left: -3px;
+}
+
+.topbar h1:hover,
+.topbar h1:focus-visible {
+  background: rgba(69, 88, 73, 0.08);
+  outline: none;
 }
 
 .brand-logo {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   flex: 0 0 auto;
 }
 
@@ -109,13 +124,27 @@ body {
 }
 
 .topbar-context {
-  margin-left: 4px;
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 1px solid rgba(127, 109, 91, 0.12);
   font-family: 'Inter', sans-serif;
-  font-size: 12px;
-  letter-spacing: 0.06em;
+  font-size: 11px;
+  letter-spacing: 0.02em;
   color: var(--text-muted);
   white-space: nowrap;
-  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  border-radius: 999px;
+  padding-top: 4px;
+  padding-right: 7px;
+  padding-bottom: 4px;
+}
+
+.topbar-context:hover,
+.topbar-context:focus-visible {
+  background: rgba(69, 88, 73, 0.08);
+  outline: none;
 }
 
 .topbar-actions {
@@ -305,7 +334,7 @@ button:active {
   display: flex;
   flex-direction: column;
   gap: 28px;
-  padding: 42px 28px 0;
+  padding: 48px 28px 0;
   min-height: 0;
   scroll-padding-bottom: 140px;
 }
@@ -707,11 +736,24 @@ button:active {
 
 .session-dock-heading {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 12px;
   padding-bottom: 12px;
   border-bottom: 1px solid rgba(127, 109, 91, 0.12);
+}
+
+.session-dock-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-dock-heading .icon-btn {
+  padding: 6px;
+  min-width: 32px;
+  height: 32px;
 }
 
 .session-dock-heading span {
@@ -1590,6 +1632,14 @@ button:active {
 
   .chat-column {
     border-right: 0;
+  }
+
+  .topbar {
+    display: none;
+  }
+
+  .messages {
+    padding-top: 10px;
   }
 
 }

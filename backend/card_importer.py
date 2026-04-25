@@ -355,9 +355,11 @@ def _classify_lorebook_entry(title: str, content: str, keywords: list[str], alwa
         '推荐bgm',
         '动态世界线',
         '开场白',
+        '初始引导',
         '开局',
         '选开',
         '导引',
+        '引导',
         'Relationship Rules',
         '人际规则',
         '人际模板',
@@ -428,6 +430,41 @@ def _classify_lorebook_entry(title: str, content: str, keywords: list[str], alwa
             'featured': False,
         }
 
+    if title_text in {'时间线', 'Timeline', 'timeline'}:
+        return {
+            'entryType': 'history',
+            'runtimeScope': 'foundation' if always_on else 'situational',
+            'featured': False,
+        }
+
+    if title_text in {'阵营', 'Factions', 'factions'}:
+        return {
+            'entryType': 'faction',
+            'runtimeScope': 'foundation' if always_on else 'situational',
+            'featured': False,
+        }
+
+    if title_text in {'Dynamic Rules', 'dynamic rules', '动态规则'}:
+        return {
+            'entryType': 'rule',
+            'runtimeScope': 'foundation',
+            'featured': False,
+        }
+
+    if title_text in {'异能', '晶核'}:
+        return {
+            'entryType': 'rule',
+            'runtimeScope': 'foundation' if always_on else 'situational',
+            'featured': False,
+        }
+
+    if title_text == 'location' or any(token in title_text for token in ('地点', '区域', '安全区')):
+        return {
+            'entryType': 'region',
+            'runtimeScope': 'foundation' if always_on else 'situational',
+            'featured': False,
+        }
+
     if has_any(('历史事件', '历史真相', '往事')):
         return {
             'entryType': 'history',
@@ -442,7 +479,7 @@ def _classify_lorebook_entry(title: str, content: str, keywords: list[str], alwa
             'featured': True,
         }
 
-    if has_any(('势力', '组织', '门派', '教派')):
+    if has_any(('势力', '组织', '门派', '教派', '阵营')):
         return {
             'entryType': 'faction',
             'runtimeScope': 'foundation' if always_on or has_any(('总览', '主要')) else 'situational',
@@ -522,6 +559,110 @@ def _convert_lorebook_entry(entry: dict) -> dict:
     }
 
 
+def _escape_json_string_controls(text: str) -> str:
+    """Make Tavern's JSON-like worldbook blobs parseable.
+
+    Some cards embed a JSON object in a lorebook entry, but leave literal
+    newlines or template backslashes inside string values. This escapes only
+    controls inside strings and preserves valid JSON escapes.
+    """
+    out: list[str] = []
+    in_string = False
+    escaping = False
+    for ch in str(text or '').replace('\u00a0', ' '):
+        if in_string:
+            if escaping:
+                if ch in '"\\/bfnrtu':
+                    out.append('\\')
+                    out.append(ch)
+                else:
+                    out.append('\\\\')
+                    out.append(ch)
+                escaping = False
+            elif ch == '\\':
+                escaping = True
+            elif ch == '"':
+                in_string = False
+                out.append(ch)
+            elif ch == '\n':
+                out.append('\\n')
+            elif ch == '\r':
+                out.append('\\r')
+            elif ch == '\t':
+                out.append('\\t')
+            else:
+                out.append(ch)
+        else:
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+    if escaping:
+        out.append('\\')
+    return ''.join(out)
+
+
+def _parse_embedded_lorebook_json(content: str) -> dict:
+    text = str(content or '').strip()
+    if not (text.startswith('{') and '"entries"' in text[:500]):
+        return {}
+    try:
+        parsed = json.loads(_escape_json_string_controls(text))
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict) or not isinstance(parsed.get('entries'), list):
+        return {}
+    return parsed
+
+
+def _expand_embedded_lorebook_entry(entry: dict, converted: dict) -> list[dict]:
+    embedded = _parse_embedded_lorebook_json(converted.get('content', ''))
+    if not embedded:
+        return [converted]
+
+    out: list[dict] = []
+    inherited_priority = converted.get('priority', 0)
+    inherited_enabled = bool(converted.get('enabled', True))
+    inherited_disable = bool(converted.get('disable', False))
+    inherited_always_on = bool(converted.get('alwaysOn', False))
+    outer_id = str(converted.get('id', '') or entry.get('id', '') or '')
+    outer_title = str(converted.get('title', '') or embedded.get('name', '') or '').strip()
+
+    for index, item in enumerate(embedded.get('entries', []), start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_keys = item.get('keys', [])
+        if isinstance(raw_keys, str):
+            keys = [raw_keys]
+        elif isinstance(raw_keys, list):
+            keys = [str(key).strip() for key in raw_keys if str(key).strip()]
+        else:
+            keys = []
+        inner_title = _clean_text(item.get('comment') or item.get('name') or (keys[0] if keys else ''))
+        title = inner_title or outer_title or f'嵌套世界书 {index}'
+        inner_entry = {
+            **item,
+            'id': f'{outer_id}.{index}' if outer_id else str(index),
+            'comment': title,
+            'keys': keys,
+            'content': item.get('content', ''),
+            'constant': bool(item.get('constant', inherited_always_on)),
+            'enabled': bool(item.get('enabled', inherited_enabled)),
+            'disable': bool(item.get('disable', inherited_disable)),
+            'insertion_order': item.get('insertion_order', item.get('order', item.get('priority', inherited_priority))),
+        }
+        expanded = _convert_lorebook_entry(inner_entry)
+        if outer_title and inner_title:
+            expanded['title'] = f'{outer_title} / {inner_title}'
+        expanded['source_entry_id'] = outer_id
+        expanded['source_kind'] = 'embedded_lorebook_json'
+        if converted.get('alwaysOn') and item.get('constant') is None:
+            expanded['alwaysOn'] = bool(converted.get('alwaysOn'))
+        if converted.get('position') not in ('', None) and not expanded.get('position'):
+            expanded['position'] = converted.get('position')
+        out.append(expanded)
+    return out or [converted]
+
+
 def _extract_lorebook(card_json: dict) -> dict:
     payload = _extract_card_payload(card_json)
     raw_book = payload.get('character_book', card_json.get('character_book', {}))
@@ -535,8 +676,9 @@ def _extract_lorebook(card_json: dict) -> dict:
         if not isinstance(item, dict):
             continue
         converted = _convert_lorebook_entry(item)
-        if converted.get('content') or converted.get('keywords') or converted.get('title'):
-            normalized.append(converted)
+        for expanded in _expand_embedded_lorebook_entry(item, converted):
+            if expanded.get('content') or expanded.get('keywords') or expanded.get('title'):
+                normalized.append(expanded)
 
     book_extensions = raw_book.get('extensions') if isinstance(raw_book.get('extensions'), dict) else {}
     return {
@@ -600,6 +742,8 @@ def _infer_faction(title: str, content: str) -> str:
 
 def _is_runtime_template_lorebook_entry(entry: dict) -> bool:
     if not isinstance(entry, dict):
+        return True
+    if entry.get('enabled') is False or entry.get('disable') is True:
         return True
     title = str(entry.get('title', '') or '').strip()
     content = str(entry.get('content', '') or '')
@@ -1074,8 +1218,11 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
         if relationship_items:
             core_items.extend(relationship_items)
             continue
+
+        is_explicit_system_npc = _looks_like_system_npc(title, content)
         if _looks_like_template_entry(title, content):
-            continue
+            if not is_explicit_system_npc:
+                continue
         table_items = _extract_markdown_table_npcs(entry)
         if table_items:
             for item in table_items:
@@ -1087,7 +1234,7 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
         if any(token in title for token in skip_embedded_entry_tokens):
             if not _looks_like_system_npc(title, content):
                 continue
-        if not _looks_like_system_npc(title, content):
+        if not is_explicit_system_npc:
             embedded = _extract_embedded_npcs(entry)
             if not embedded:
                 embedded = _extract_embedded_npcs_latin(entry)
@@ -1195,7 +1342,29 @@ def _write_cover_assets(png_data: bytes | None, *, raw_card_hash: str) -> dict:
     original_path = assets_root / 'cover-original.png'
     small_path = assets_root / 'cover-small.png'
     original_path.write_bytes(png_data)
-    small_path.write_bytes(png_data)
+
+    small_written = False
+    try:
+        from io import BytesIO
+        from PIL import Image
+        side = 320
+        with Image.open(BytesIO(png_data)) as img:
+            if img.mode not in ('RGB', 'RGBA'):
+                img = img.convert('RGBA')
+            w, h = img.size
+            short = min(w, h)
+            left = (w - short) // 2
+            top = (h - short) // 2
+            cropped = img.crop((left, top, left + short, top + short))
+            thumb = cropped.resize((side, side), Image.LANCZOS)
+            thumb.save(small_path, format='PNG', optimize=True)
+        small_written = True
+    except Exception as err:
+        logger.warning('Failed to generate cover-small thumbnail (%s); falling back to full-size copy', err)
+
+    if not small_written:
+        small_path.write_bytes(png_data)
+
     result['cover_saved'] = True
     result['cover_paths'] = [str(original_path), str(small_path)]
     return result
