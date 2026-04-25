@@ -253,20 +253,16 @@ function sessionId() {
   return currentSessionId.trim();
 }
 
-function topSessions(items, { activeLimit = 5, archivedLimit = 10 } = {}) {
+function topSessions(items, { activeLimit = 5 } = {}) {
   const active = (items || [])
-    .filter(item => !item.archived && !item.replay)
+    .filter(item => !item.replay)
     .sort((a, b) => {
       const messageGap = (b.last_message_ts || 0) - (a.last_message_ts || 0);
       if (messageGap !== 0) return messageGap;
       return (b.updated_at_ns || 0) - (a.updated_at_ns || 0);
     })
     .slice(0, activeLimit);
-  const archived = (items || [])
-    .filter(item => item.archived && !item.replay)
-    .sort((a, b) => (b.updated_at_ns || 0) - (a.updated_at_ns || 0))
-    .slice(0, archivedLimit);
-  return { active, archived };
+  return { active };
 }
 
 function setStatus(text, kind = 'info') {
@@ -470,29 +466,28 @@ async function loadCharacters() {
 }
 
 function renderSessionLists() {
-  renderSessionList(sessionDockList, { closeDockOnSelect: true, noteEl: null, activeLimit: 5, archivedLimit: 10 });
-  renderSessionList(settingsSessionList, { closeDockOnSelect: false, noteEl: settingsSessionNote, activeLimit: 20, archivedLimit: 20 });
+  renderSessionList(sessionDockList, { closeDockOnSelect: true, noteEl: null, activeLimit: 5 });
+  renderSessionList(settingsSessionList, { closeDockOnSelect: false, noteEl: settingsSessionNote, activeLimit: 20 });
 }
 
 function renderSessionDock() {
   renderSessionLists();
 }
 
-function renderSessionList(target, { closeDockOnSelect = false, noteEl = null, activeLimit = 5, archivedLimit = 10 } = {}) {
+function renderSessionList(target, { closeDockOnSelect = false, noteEl = null, activeLimit = 5 } = {}) {
   if (!target) return;
   target.innerHTML = '';
-  const { active, archived } = topSessions(sessionItems, { activeLimit, archivedLimit });
+  const { active } = topSessions(sessionItems, { activeLimit });
 
-  function createSessionRow(item, isArchived) {
+  function createSessionRow(item) {
     const row = document.createElement('div');
-    row.className = 'session-dock-item' + (isArchived ? ' session-dock-archived' : '');
+    row.className = 'session-dock-item';
     if (item.session_id === sessionId()) row.dataset.active = 'true';
 
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'session-dock-open';
-    const label = item.session_id.replace(/^archive-\d+-/, '');
-    openBtn.textContent = isArchived ? `📦 ${label}` : item.session_id;
+    openBtn.textContent = item.session_id;
     openBtn.addEventListener('click', async () => {
       currentSessionId = item.session_id;
       updateSessionIndicator();
@@ -547,17 +542,7 @@ function renderSessionList(target, { closeDockOnSelect = false, noteEl = null, a
   }
 
   for (const item of active) {
-    target.appendChild(createSessionRow(item, false));
-  }
-
-  if (archived.length) {
-    const sep = document.createElement('div');
-    sep.className = 'session-dock-separator';
-    sep.textContent = '已归档';
-    target.appendChild(sep);
-    for (const item of archived) {
-      target.appendChild(createSessionRow(item, true));
-    }
+    target.appendChild(createSessionRow(item));
   }
 
   const newGameRow = document.createElement('div');
@@ -1589,7 +1574,7 @@ async function startNewGame() {
   renderState(data.state_snapshot || {});
   await loadSessions();
   resetSidePanels();
-  renderDebug({new_game: {session_id: data.session_id || sessionId(), archived_to: data.archived_to || null}});
+  renderDebug({new_game: {session_id: data.session_id || sessionId()}});
   updateSessionIndicator();
   jumpToConversationEnd();
 }
@@ -1602,7 +1587,7 @@ async function deleteSession(targetSessionId = sessionId()) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({session_id: current})
   });
-  const next = (data.sessions || []).find(item => !item.archived && !item.replay)?.session_id || '';
+  const next = (data.sessions || []).find(item => !item.replay)?.session_id || '';
   if (current === activeBeforeDelete) {
     currentSessionId = next;
   }

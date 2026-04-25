@@ -21,6 +21,7 @@
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档
+- `event_ledger.py` / `event_status.py`：事件账本与实验性状态转移合并；`event_ledger` 产出阶段事件摘要与 `status_transitions`，`event_status` 将明确的实体状态变化合并回 runtime state
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器
 - `opening.py`：opening 菜单与开局状态机
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
@@ -52,9 +53,11 @@
 - opening 已升级为独立状态机
 - session 生命周期已覆盖：新游戏、切换、删除、partial regenerate
 - 同一 `session_id` 的写请求现会串行执行，降低并发写冲突
+- 会话归档功能已取消：新游戏只创建新 session，不再把旧 session 移动到 `archive-*`；session list 也不再返回 `archived` 字段。历史 `archive-*` 目录仅作为旧数据存在，不进入当前会话列表
 - `state_keeper` 已加入低信号拒收与回归检查
 - `state_fragment` 已前移到 narrator / state_keeper 主链，并在失败分支提供 `fragment-baseline`
 - `state_keeper_candidate` 当前可作为 `skeleton keeper` sidecar 先产出最小骨架，并并入 `state_fragment` 再交给完整 keeper
+- skeleton keeper 当前每个完整回复后都会运行，避免非合并轮长期沿用旧 `state_fragment` 造成硬锚点滞后；完整 fill keeper 仍按合并轮运行
 - 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补次级字段
 - opening-choice 分支现在不再“只生成正文然后直接返回”；首轮开局正文会进入 `state_fragment -> skeleton keeper -> fill keeper -> thread/important_npc` 写回链，避免正文与 state 从第一轮开始分叉。当前这条链通常能落下 `time/location/main_event/onstage/immediate_risks/carryover_clues`，但 `immediate_goal` 仍可能偏保守
 - `main_event` 与 `active_threads.main.label` 当前已改为条件同步：不再让较慢更新的 `main_event` 无条件覆盖主线程标签；只有当 `main_event` 质量明显更高，或主线程标签仍是占位值时，才允许它接管主线程标签
@@ -67,10 +70,13 @@
 - `signal`：当前方向约束层，可直接进入 narrator / selector
 - `summary`：长程压缩层，只在 recent window 不足时条件回流
 - `thread`：state/debug 辅助层，当前实验中已去主导化
+- `status_transition`：实验性事件事实层，用于记录“同一实体本轮发生了会影响下一轮硬锚点的状态/位置/可互动性变化”；当前仍需重新设计防污染策略，不应无限扩展成关键词脚本
 
 当前 `event` 链的实现边界：
 - event 当前已改为真正读取最近 `1~3` 对 `user/assistant` 窗口，而不是只摘要当前轮 narrator prose
 - `prev_state` 当前已在调用侧修正为“本轮前状态”，避免 event 用当前态伪装上一轮状态
+- event 当前可输出 `status_transitions`，由 `event_status.py` 合并回 `scene_entities / onstage_npcs / active_threads / main_event`，用于减少“旧动态称呼或旧位置关系”继续污染下一轮硬锚点
+- `status_transitions` 目前是临时实验接口：它比关键字兜底更数据驱动，但仍存在单轮 event 误判污染 state 的风险；后续应在 keeper 数据整理阶段决定是否保留、降级为 pending、或并入统一 signal 层
 - heuristic fallback 当前也按多回合窗口工作，不再优先挑天气/氛围句；当前仍可能不如 LLM 版本稳定，但 summary 已开始更像阶段事件压缩器
 - `state_updater` 已更偏保守继承，不轻易覆盖已有高信号状态
 - narrator 对“半句中止但 provider 未标 partial”的返回增加了不完整输出保护，避免坏回复继续污染事实层
@@ -241,6 +247,8 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 ## 当前仍不稳定的部分
 
 - `state_keeper` 仍主要从 narrator prose 反提 state
+- keeper/event/signal/thread/summary 数据边界仍偏重叠，尤其是“事件事实”和“下一轮硬锚点”的关系需要重新整理
+- `status_transitions` 当前缺少防污染闸门；若继续保留，需要明确它是 suggestion、pending 还是可直接写回 state
 - arbiter 仍主要覆盖少数高风险事件类型
 - analyzer / state keeper 虽已分模，但默认配置仍偏实验态
 - 主角 runtime 仍未独立落地
@@ -317,7 +325,7 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 
 - **设置面板** 重组为三页签：连接与模型 / 角色卡 / 用户设定；未激活页签使用绿色背景
 - **侧边栏合并至浮动面板**：原 `stateColumn` 侧边栏的 4 个分区（当前状态、NPC、物件与线程、NPC 详情）已移入调试浮动面板，并新增"调试诊断"折叠区；移除了侧边栏按钮
-- **Session Dock 显示归档会话**：开始新游戏后，已归档的 session 仍会出现在 dock 底部（带📦标记和"已归档"分隔线），不再消失
+- **Session Dock 简化**：会话归档功能已取消，Dock 只显示当前可用会话；开始新游戏不再移动旧 session，也不再展示归档分隔线
 - **角色卡缩略图缓存**：移除了 `?t=${Date.now()}` cache-buster，启用浏览器缓存和 `loading="lazy"`
 - **角色卡切换**：添加了 error handling 和自动关闭设置面板
 

@@ -270,12 +270,6 @@ def iter_session_dirs() -> list[Path]:
     return out
 
 
-def session_archive_target(session_dir: Path, session_id: str) -> Path:
-    stamp = __import__('time').strftime('%Y%m%d-%H%M%S')
-    safe_session_id = normalize_session_id(session_id)
-    return session_dir.parent / f'archive-{stamp}-{safe_session_id}'
-
-
 def resolve_legacy_source(path_str: str) -> Path:
     return SHARED_ROOT / path_str
 

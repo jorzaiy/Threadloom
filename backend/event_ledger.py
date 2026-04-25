@@ -254,11 +254,12 @@ def build_event_ledger(*, user_text: str, narrator_reply: str, prev_state: dict,
         'main_event_candidates': ranked_candidates[:3],
         'risk_candidates': risk_candidates[:2],
         'clue_candidates': (clue_candidates[:2] or [_compress_signal_text(text, limit=28) for text in state_signals[:2] if _compress_signal_text(text, limit=28)]),
+        'status_transitions': [],
         'discarded_fragments': discarded_fragments[:6],
     }
 
 
-EVENT_LEDGER_SYSTEM = """你是事件账本整理器。\n\n你的职责不是挑要点，也不是改写成高度抽象的摘要，而是把最近 1~3 轮里真实发生的关键经过如实整理成一条事件总结。\n\n要求：\n1. summary_text 必须像“阶段总结”，不是单句对白，也不是一句局部动作。\n2. summary_text 应尽量覆盖最近 1~3 轮里真正推进局势的经过，长度控制在 80~150 个中文字符。\n3. main_event_candidate 必须比 summary_text 更短，是一条可作为 state 主锚点的局势句。\n4. risk_candidates / clue_candidates 只保留真正会影响后续的 0~2 条。\n5. scene_shift.changed 只有在地点、在场人物群或互动模式明显切段时才为 true。\n6. 不要输出解释，只输出 JSON。"""
+EVENT_LEDGER_SYSTEM = """你是事件账本整理器。\n\n你的职责不是挑要点，也不是改写成高度抽象的摘要，而是把最近 1~3 轮里真实发生的关键经过如实整理成一条事件总结。\n\n要求：\n1. summary_text 必须像“阶段总结”，不是单句对白，也不是一句局部动作。\n2. summary_text 应尽量覆盖最近 1~3 轮里真正推进局势的经过，长度控制在 80~150 个中文字符。\n3. main_event_candidate 必须比 summary_text 更短，是一条可作为 state 主锚点的局势句。\n4. risk_candidates / clue_candidates 只保留真正会影响后续的 0~2 条。\n5. scene_shift.changed 只有在地点、在场人物群或互动模式明显切段时才为 true。\n6. status_transitions 只记录本轮正文明确发生的、会改变下一轮硬锚点的人物/群体状态变化；没有则输出 []。\n   格式：[{\"entity_ref\":\"旧称呼或别名\",\"primary_label\":\"下一轮应使用的当前称呼\",\"onstage\":true,\"status_note\":\"短句事实\"}]\n   - entity_ref 必须能在 previous/current onstage、scene entity 或正文中对应到同一对象。\n   - primary_label 不是新名字，而是当前状态下更准确的称呼；不确定则省略或沿用原称呼。\n   - onstage 表示下一轮是否仍可被主角直接看见/互动；不确定则省略。\n   - 不要为了同义改写而输出，只在状态、位置、控制关系、可互动性发生明确变化时输出。\n7. 不要输出解释，只输出 JSON。"""
 
 
 def _ledger_prompt(*, user_text: str, narrator_reply: str, prev_state: dict, onstage_names: list[str], location: str, recent_pairs: list[tuple[str, str]] | None = None, current_state: dict | None = None) -> str:
@@ -293,6 +294,26 @@ def _ledger_prompt(*, user_text: str, narrator_reply: str, prev_state: dict, ons
 
 def _coerce_ledger_payload(payload: dict) -> dict:
     scene_shift = payload.get('scene_shift', {}) if isinstance(payload.get('scene_shift', {}), dict) else {}
+    status_transitions = []
+    raw_transitions = payload.get('status_transitions', []) if isinstance(payload.get('status_transitions', []), list) else []
+    for item in raw_transitions:
+        if not isinstance(item, dict):
+            continue
+        entity_ref = str(item.get('entity_ref', '') or '').strip()
+        primary_label = str(item.get('primary_label', '') or '').strip()
+        status_note = str(item.get('status_note', '') or '').strip()
+        if not entity_ref or (not primary_label and 'onstage' not in item and not status_note):
+            continue
+        transition = {
+            'entity_ref': entity_ref,
+            'primary_label': primary_label,
+            'status_note': status_note,
+        }
+        if 'onstage' in item:
+            transition['onstage'] = bool(item.get('onstage'))
+        status_transitions.append(transition)
+        if len(status_transitions) >= 4:
+            break
     return {
         'ledger_version': 2,
         'provider': 'llm',
@@ -304,6 +325,7 @@ def _coerce_ledger_payload(payload: dict) -> dict:
         'main_event_candidates': [{'text': str(payload.get('main_event_candidate', '') or '').strip(), 'fragment_score': 0, 'scene_score': 5}] if str(payload.get('main_event_candidate', '') or '').strip() else [],
         'risk_candidates': [str(x).strip() for x in (payload.get('risk_candidates', []) or []) if str(x).strip()][:2],
         'clue_candidates': [str(x).strip() for x in (payload.get('clue_candidates', []) or []) if str(x).strip()][:2],
+        'status_transitions': status_transitions,
         'discarded_fragments': [],
     }
 

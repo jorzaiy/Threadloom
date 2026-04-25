@@ -3,6 +3,7 @@ import unittest
 
 from backend.state_fragment import merge_state_skeleton
 from backend.state_bridge import normalize_state_dict
+from backend.event_status import apply_event_status_transitions
 
 
 class StateFragmentTest(unittest.TestCase):
@@ -165,6 +166,60 @@ class StateFragmentTest(unittest.TestCase):
                 },
             ],
         )
+
+    def test_event_status_transition_relabels_dynamic_descriptor(self):
+        state = {
+            'time': '亥时初',
+            'location': '乌衣巷口',
+            'main_event': "陆小环一句'巡夜的差人'搅散皂衣人包围，被围男子借机脱困转向巷口。",
+            'onstage_npcs': ['被围男子', '皂衣人'],
+            'scene_entities': [
+                {
+                    'entity_id': 'scene_npc_01',
+                    'primary_label': '被围男子',
+                    'aliases': [],
+                    'role_label': '当前互动核心人物',
+                    'onstage': True,
+                },
+                {
+                    'entity_id': 'scene_npc_02',
+                    'primary_label': '皂衣人',
+                    'aliases': [],
+                    'role_label': '当前互动核心人物',
+                    'onstage': True,
+                },
+            ],
+            'active_threads': [
+                {
+                    'key': 'main:被围男子皂衣人包围',
+                    'label': '被围男子 / 皂衣人包围被搅散',
+                    'kind': 'main',
+                    'goal': '趁乱决定下一步行动',
+                    'obstacle': '待确认',
+                    'actors': ['被围男子', '皂衣人'],
+                },
+            ],
+        }
+
+        normalized = apply_event_status_transitions(state, {
+            'status_transitions': [
+                {
+                    'entity_ref': '被围男子',
+                    'primary_label': '脱困男子',
+                    'onstage': True,
+                    'status_note': '脱困男子已脱出原本包围，不再被困在巷心。',
+                },
+            ],
+        })
+
+        self.assertIn('脱困男子', normalized['onstage_npcs'])
+        self.assertNotIn('被围男子', normalized['onstage_npcs'])
+        entity = normalized['scene_entities'][0]
+        self.assertEqual(entity['primary_label'], '脱困男子')
+        self.assertIn('被围男子', entity['aliases'])
+        self.assertIn('脱困男子', normalized['main_event'])
+        self.assertNotIn('被围男子', normalized['main_event'])
+        self.assertEqual(normalized['active_threads'][0]['actors'][0], '脱困男子')
 
 
 if __name__ == '__main__':

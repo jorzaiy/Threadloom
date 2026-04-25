@@ -12,6 +12,7 @@ try:
     from .thread_tracker import apply_thread_tracker
     from .runtime_store import append_event_summary, append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
     from .event_ledger import build_event_ledger_with_llm, build_event_summary_item
+    from .event_status import apply_event_status_transitions
     from .summary_updater import update_summary
     from .context_builder import build_runtime_context
     from .bootstrap_session import bootstrap_session
@@ -35,6 +36,7 @@ except ImportError:
     from thread_tracker import apply_thread_tracker
     from runtime_store import append_event_summary, append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
     from event_ledger import build_event_ledger_with_llm, build_event_summary_item
+    from event_status import apply_event_status_transitions
     from summary_updater import update_summary
     from context_builder import build_runtime_context
     from bootstrap_session import bootstrap_session
@@ -545,8 +547,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     current_turn_num = meta['last_turn_id'] + 1
     is_first_turn = current_turn_num == 1
     needs_keeper_bootstrap = bool(state.get('opening_resolved')) and bool(state.get('opening_started')) and not bool(state.get('state_keeper_bootstrapped'))
-    skeleton_every = 2
-    should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and (not is_first_turn) and (not needs_keeper_bootstrap) and current_turn_num % skeleton_every == 1
+    skeleton_every = 1
+    should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and (not is_first_turn) and (not needs_keeper_bootstrap)
     if should_run_skeleton:
         try:
             skeleton_fragment, skeleton_usage, skeleton_keeper_trace = call_skeleton_keeper(state, state_fragment, reply, return_trace=True)
@@ -750,6 +752,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         recent_pairs=recent_pairs,
         current_state=state,
     )
+    state = apply_event_status_transitions(state, summary_ledger)
+    save_state(session_id, state)
     should_generate_event_summary = current_turn_num <= 2 or current_turn_num % 3 == 0
     event_summary_item = None
     if should_generate_event_summary:
