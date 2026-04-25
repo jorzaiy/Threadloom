@@ -164,23 +164,37 @@
 当前推荐的角色卡导入产物已经改成分层结构，而不是把 Tavern 原字段直接散落到运行时文件：
 
 - `character-data.json`
-  - 只保留角色核心、简介、来源信息、精简系统摘要
+  - 角色核心、简介、来源信息、精简系统摘要
+  - 从 v0.4.2 起完整保留以下 v2/v3 字段：`nickname`、`mes_example`、
+    `post_history_instructions`、`tags`、`character_version`、
+    `talkativeness`、`creator_notes_multilingual`、`extensions`
+  - `source` 子字段记录 `creator`、`creation_date`、`modification_date`
+  - 长字段使用边界感知截断（`_truncate_at_boundary`）：
+    `personality` 1500 / summary 2400 / system_prompt 4000 / creator_notes 2000
 - `lorebook.json`
-  - 只保留规范化世界书条目
-  - 导入器会为条目补 `entryType / runtimeScope / featured`
-  - 当前主要用于区分：
-    - foundation 底板规则 / 世界观条目
-    - situational 场景相关 lore
-    - NPC / cast / faction 等可调入层
+  - 规范化世界书条目，导入器为每条补 `entryType / runtimeScope / featured`
+  - 区分：foundation（底板规则/世界观）、situational（场景相关）、
+    NPC / cast / faction 可调入层
+  - 从 v0.4.2 起完整保留 SillyTavern 字段：`selective`、`selectiveLogic`、
+    `position`、`depth`、`probability`、`useProbability`、
+    `caseSensitive`、`matchWholeWords`、`group`、`groupOverride`、
+    `groupWeight`、`vectorized`、`disable`、`extensions`、`secondary_keywords`
+  - lorebook 顶层保留 `description`、`scan_depth`、`token_budget`、
+    `recursive_scanning`、`extensions`
+  - 仅触发用的 keyword-only 条目（content 为空但 keywords 非空）也会保留
   - 历史上曾提供过 metadata 回填脚本；这类一次性迁移工具现已归档到 `backend/legacy_tools/`
 - `openings.json`
   - 开局菜单、开局 bootstrap、开局选项
+  - 每个 option 带 `kind`：`first_mes` / `alternate_greeting` / `group_only_greeting`（v3）
 - `system-npcs.json`
   - 从导入卡中明确提取出的系统级 NPC
   - 当前分成：
     - `core`：最明确、最值得直接进入运行时的人物
     - `faction_named`：势力条目中的命名人物
-    - `roster`：更边缘的命名人物，只做存档
+    - `roster`：更边缘的命名人物
+    - `items`：上述三个桶的合并（**包含 roster**，从 v0.4.2 起修复，
+      之前 roster 被静默丢弃）
+  - 英文/拉丁文角色卡的内嵌 NPC 由 `_extract_embedded_npcs_latin` 兜底识别
 - `import-manifest.json`
   - 导入来源、产物路径、统计信息
 - `assets/`
@@ -205,9 +219,12 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 当前运行时的消费方式：
 
 - `opening.py` 优先读取 `openings.json`
-- `context_builder.py` 优先读取 `system-npcs.json`，再补世界书 NPC 候选
-- 当前 narrator 默认优先只吃 `system-npcs.core`
-- `faction_named / roster` 当前主要用于存档和后续导入器调优，不默认高频注入
+- `context_builder.extract_system_npc_candidates` 按 `core → faction_named → roster`
+  分级 fallback，直到达到 limit；每个候选带 `source` 字段（`system_npc` /
+  `system_npc_faction` / `system_npc_roster`）
+- `state_bridge.infer_role_label` 通过 `system-npcs.items` 查 role label
+  （`items` 现在包含全部三个桶）
+- `persona_updater._infer_candidate_identity` 接受任何 `system_npc*` 来源
 - `runtime_store.py` / `server.py` 优先读取 `assets/` 下的角色卡封面
 - 导入器当前会额外过滤 SillyTavern 前端模板、隐藏脚本、状态栏、人际模板等 runtime 噪声，避免它们进入最终 `lorebook.json`
 
@@ -281,6 +298,20 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 | 线索候选发送数量                          | 8 个    | 12 个   | `clue_bootstrap_agent.py`    |
 
 另在 `card_importer.py` 中新增 `_truncate()` 辅助函数，当字段被截断时自动输出 WARNING 日志，便于排查导入精度问题。
+
+### 角色卡导入审查与修复（v0.4.2）
+
+详见 `doc/audit/CARD-IMPORT-AUDIT.md`。本次修复主要解决三类问题：
+
+1. **数据丢失**：`system_npcs.items` 漏放 `roster`、SillyTavern v2/v3 大量字段未读、
+   `personality` 截到 240 字符。
+2. **误伤**：`'小美'`/`'血蚀纪'` 等具体作品人名被写死成黑名单、faction 推断硬编码、
+   主角名长度限制把英文名全拒绝。
+3. **覆盖面**：`_extract_embedded_npcs` 只识别中文条目，英文卡的内嵌 NPC 兜底由新加的
+   `_extract_embedded_npcs_latin` 处理。
+
+修复点对应单测 `tests/test_card_importer.py`（21 个）+ 端到端测试
+`tests/test_card_importer_e2e.py`（3 个）。
 
 ### 前端 UI 重构
 
