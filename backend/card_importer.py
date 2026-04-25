@@ -383,6 +383,7 @@ def _classify_lorebook_entry(title: str, content: str, keywords: list[str], alwa
         'TavernDB-' in title_text
         or title_text.startswith('总结条目')
         or title_text.startswith('重要人物表-')
+        or title_text.startswith('重要人物条目')
         or 'WrapperStart' in title_text
         or '重要对话' in content
         or 'AM000' in combined
@@ -662,6 +663,11 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
     template_title_tokens = ('[event]', '[system]', '[meta]', '状态栏', '人际', 'number', 'favor', 'meet', 'wrapper', 'memory')
     runtime_dump_title_tokens = ('总结条目', '重要人物条目', 'TavernDB-', 'ReadableDataTable', 'OutlineTable', 'ImportantPersonsIndex', 'PersonsHeader')
 
+    _card_payload = _extract_card_payload(card_json or {})
+    card_name = _clean_text(_card_payload.get('name') or (card_json or {}).get('name'))
+    book_name = _clean_text(lorebook.get('name', '')) if isinstance(lorebook, dict) else ''
+    self_reference_names = {n for n in (card_name, book_name) if n}
+
     def _is_non_character_system_item(name: str, role_label: str = '', summary: str = '') -> bool:
         text = f'{name} {role_label} {summary}'.strip()
         if any(token in name for token in ('设定', '状态栏', '规则', '世界观', '世界基石')):
@@ -741,6 +747,8 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             if not clean_name:
                 continue
             if _looks_like_template_token(clean_name):
+                continue
+            if clean_name in self_reference_names:
                 continue
             if len(clean_name) > 32:
                 continue

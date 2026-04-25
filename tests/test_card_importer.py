@@ -349,6 +349,79 @@ def test_extract_system_npc_candidates_falls_back_through_buckets(monkeypatch):
     assert sources['Townsperson'] == 'system_npc_roster'
 
 
+# ---------- ACU runtime cache: 重要人物条目X / 重要人物表-N ---------------
+
+def test_important_person_entry_classified_as_archive_only():
+    """SillyTavern Cyborg (TavernDB-ACU) writes runtime NPC dump back to
+    character_book.entries as '重要人物条目1', '重要人物条目2', etc. — the
+    importer must classify these as archive_only, same as '重要人物表-N'
+    and '总结条目-N', so they don't pollute lorebook.json."""
+    meta = ci._classify_lorebook_entry(
+        title='重要人物条目1',
+        content='| 维克托·奥古斯特 | 男/38岁 | … | 教官身份牌项链 | 否 | 20:45 暴力破门 |',
+        keywords=[],
+        always_on=False,
+    )
+    assert meta['runtimeScope'] == 'archive_only'
+    assert meta['entryType'] in {'runtime_aux', 'runtime_dump'}
+
+    meta_table = ci._classify_lorebook_entry(
+        title='重要人物表-7',
+        content='| 萧云铮 | 男/约20岁 | 一身锦袍 | 储物袋 | 否 | 暂离 |',
+        keywords=[],
+        always_on=False,
+    )
+    assert meta_table['runtimeScope'] == 'archive_only'
+
+
+def test_important_person_entry_filtered_out_of_lorebook():
+    raw = _make_book_entry(
+        comment='重要人物条目1',
+        content='| 阿牛 | 男 | 樵夫 | 柴刀 | 是 | 出场 |',
+    )
+    book = ci._extract_lorebook(_wrap_v2({
+        'name': 'X',
+        'character_book': {'entries': [raw]},
+    }))
+    titles_in_lorebook = [e['title'] for e in book['entries']]
+    # entry is normalized into raw_lorebook with archive_only scope...
+    assert any('重要人物条目1' == t for t in titles_in_lorebook)
+    # ...but _filter_runtime_lorebook_entries removes it before write
+    filtered = ci._filter_runtime_lorebook_entries(book)
+    assert all('重要人物条目' not in (e.get('title') or '') for e in filtered['entries'])
+
+
+# ---------- self-reference filter for relationship_template -----------------
+
+def test_relationship_template_skips_card_name():
+    """When a card embeds 'name': '<card_name>' in a Jinja template entry
+    (very common with [EVENT]meet and 人际 templates), the relationship
+    extractor used to surface the card name itself as an NPC."""
+    # Each NPC dict is its own block so the non-greedy regex in
+    # _extract_template_relationship_npcs picks each up independently.
+    content = """
+{"name": "贺景", "type": "执政官", "personality": "稳重"}
+{"name": "凌烨", "type": "指挥官", "personality": "冷峻"}
+{"name": "血蚀纪", "type": "卡名", "personality": "should not surface"}
+"""
+    entry = {
+        'id': 'meet-1',
+        'title': 'meet',
+        'content': content,
+        'priority': 10,
+    }
+    card = _wrap_v3({
+        'name': '血蚀纪',
+        'description': '末世异能',
+        'character_book': {'entries': []},
+    })
+    out = ci._extract_system_npcs({'entries': [entry]}, card)
+    names = {it['name'] for it in out.get('items', [])}
+    assert '贺景' in names
+    assert '凌烨' in names
+    assert '血蚀纪' not in names, "card name should not be surfaced as NPC"
+
+
 if __name__ == '__main__':
     import pytest
     raise SystemExit(pytest.main([__file__, '-v']))

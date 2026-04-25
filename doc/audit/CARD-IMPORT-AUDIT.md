@@ -91,6 +91,8 @@ were silently skipped.
 | P1-8 | `_extract_embedded_npcs_latin` added: markdown headings, `**Bold**:` blocks, `Name\nRole: …` blocks. Skipped when content is CJK-dominant. |
 | P2-9 | `_extract_lorebook` now keeps entries with empty content but valid keywords (link-trigger only). |
 | Downstream | `context_builder.extract_system_npc_candidates` now falls back through `core → faction_named → roster`. `persona_updater._infer_candidate_identity` accepts any `system_npc*` source. |
+| Bug A | `_classify_lorebook_entry` now treats `'重要人物条目X'` titles the same as `'重要人物表-N'` and `'总结条目-N'` — i.e. ACU runtime cache, classified `archive_only` and filtered out of the runtime lorebook.json. Caught when re-importing 维克托·奥古斯特.png: SillyTavern Cyborg framework writes its in-session NPC dump back to `character_book.entries`, polluting the imported lorebook with 12 stale entries. |
+| Bug D | `_extract_template_relationship_npcs` now skips names equal to the card name or the lorebook name. Caught when re-importing 血蚀纪.png: the card name `血蚀纪` was being surfaced as an NPC because `[EVENT]meet`-style templates reference the card name in their wrapping JSON. |
 
 ## Deferred (P2)
 
@@ -105,9 +107,17 @@ The following were noted but **not** fixed in this pass:
 ## Verification
 
 ```
-$ python3 -m pytest tests/test_card_importer.py tests/test_card_importer_e2e.py -v
-======================= 24 passed in 0.13s =======================
+$ python3 -m pytest tests/test_card_importer.py tests/test_card_importer_e2e.py
+======================= 27 passed in 0.09s =======================
 ```
+
+### Real-card sanity check (re-imported from tmp/*.png)
+
+| Card                | raw lorebook | kept | system NPCs | NPC source |
+|---------------------|--------------|------|-------------|------------|
+| 九幽大陆            | 548          | 2    | 0           | (correct: pure world card, no character roster) |
+| 维克托·奥古斯特     | 309          | 2    | 1           | card_core (just 教官 himself; the 12 `重要人物条目X` entries are ACU runtime cache, correctly filtered) |
+| 血蚀纪              | 7            | 1    | 6           | relationship_template (贺景 / 闻钰 / 凌烨 / 沐霖 / 沐许 / 舒行 — card name `血蚀纪` correctly excluded) |
 
 The single-unit suite covers each fix point individually; the E2E suite
 imports a synthetic v3 card with all v2/v3 fields populated, asserts every
