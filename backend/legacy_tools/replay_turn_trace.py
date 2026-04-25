@@ -7,6 +7,10 @@ import shutil
 import sys
 from pathlib import Path
 
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
 from paths import normalize_session_id, normalize_turn_id, resolve_session_dir
 from continuity_hints import normalized_hint_entries
 from continuity_resolver import resolve_important_npc_continuity
@@ -34,7 +38,7 @@ from thread_tracker import apply_thread_tracker
 from arbiter_state import merge_arbiter_state
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _copy_optional_file(src: Path, dst: Path) -> None:

@@ -8,6 +8,11 @@ import re
 import shutil
 import time
 from pathlib import Path
+import sys
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 from paths import clear_active_character_override, normalize_session_id, resolve_session_dir, set_active_character_override
 from arbiter_runtime import run_arbiter
@@ -41,7 +46,7 @@ from summary_updater import update_summary
 from thread_tracker import apply_thread_tracker
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 REBUILD_KEEPER_MIN_INTERVAL_SECONDS = 24.0
 
 
