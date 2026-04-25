@@ -71,7 +71,6 @@ def build_state_fragment(prev_state: dict, scene_facts: dict, user_text: str = '
         'time': str(scene.get('time', '') or prev.get('time', '待确认') or '待确认').strip(),
         'location': str(scene.get('location', '') or prev.get('location', '待确认') or '待确认').strip(),
         'main_event': str(scene.get('main_event', '') or prev.get('main_event', '待确认') or '待确认').strip(),
-        'scene_core': str(scene.get('scene_core', '') or prev.get('scene_core', '待确认') or '待确认').strip(),
         'onstage_npcs': _dedupe_names(scene.get('onstage_npcs', []) or prev.get('onstage_npcs', []), limit=6),
         'relevant_npcs': _dedupe_names(scene.get('relevant_npcs', []) or prev.get('relevant_npcs', []), limit=6),
         'immediate_goal': _goal(scene, prev),
@@ -88,7 +87,6 @@ def build_state_fragment(prev_state: dict, scene_facts: dict, user_text: str = '
         'time': merged.get('time', '待确认'),
         'location': merged.get('location', '待确认'),
         'main_event': merged.get('main_event', '待确认'),
-        'scene_core': merged.get('scene_core', '待确认'),
         'onstage_npcs': merged.get('onstage_npcs', []),
         'relevant_npcs': merged.get('relevant_npcs', []),
         'immediate_goal': merged.get('immediate_goal', '待确认'),
@@ -118,7 +116,7 @@ def build_state_from_fragment(prev_state: dict, state_fragment: dict, session_id
     fragment = deepcopy(state_fragment or {})
     next_state = dict(prev)
 
-    for field in ('time', 'location', 'main_event', 'scene_core', 'immediate_goal'):
+    for field in ('time', 'location', 'main_event', 'immediate_goal'):
         value = str(fragment.get(field, '') or '').strip()
         if value and value != '待确认':
             next_state[field] = value
@@ -143,5 +141,13 @@ def merge_state_skeleton(state_fragment: dict, skeleton_fragment: dict) -> dict:
     onstage = _dedupe_names(skeleton.get('onstage_npcs', []), limit=6)
     if onstage:
         fragment['onstage_npcs'] = onstage
+        scene_entities = fragment.get('scene_entities')
+        if isinstance(scene_entities, list):
+            onstage_names = set(onstage)
+            for entity in scene_entities:
+                if not isinstance(entity, dict):
+                    continue
+                primary = str(entity.get('primary_label', '') or '').strip()
+                entity['onstage'] = bool(primary and primary in onstage_names)
 
     return fragment

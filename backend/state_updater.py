@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 import re
 
-try:
-    import jieba  # type: ignore
-    import jieba.posseg as pseg  # type: ignore
-except Exception:
-    jieba = None
-    pseg = None
-
 from runtime_store import load_context, load_history, load_state, save_state, seed_default_state
 from runtime_store import load_meta
-from name_sanitizer import sanitize_runtime_name
+from name_sanitizer import sanitize_runtime_name, looks_like_modifier_fragment, looks_like_bad_entity_fragment
+from event_ledger import build_event_ledger_with_llm, core_value_quality
 from entity_candidate_judge import judge_entity_candidates
 from state_bridge import infer_role_label, normalize_state_dict
+
+try:
+    from keeper_archive import load_keeper_record_archive
+except Exception:
+    load_keeper_record_archive = None
 
 
 SCENE_HEADER_RE = re.compile(r'^\s*(?:<[Tt]ime>\s*)?『(?P<header>[^』]+)』(?:\s*</[Tt]ime>)?')
@@ -24,7 +23,8 @@ GENERIC_NON_NAME_PREFIXES = ('他', '她', '你', '我', '这', '那', '其')
 GENERIC_GRAMMAR_PARTICLES = ('的', '了', '着', '从', '在', '把', '被', '向', '和', '与', '并', '将')
 GENERIC_INTRO_NAME_RE = re.compile(r'(?:我叫|他叫|她叫|名叫|叫做|自称|名字是|在下|我名|吾名)(?P<name>[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?)')
 GENERIC_STANDALONE_NAME_RE = re.compile(r'(?:^|[\n“"‘「『《（(—-])(?P<name>[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?)(?=$|[\n”"’」』》）).,，。！？!?])')
-GENERIC_APPELLATION_NAMES = {'少年', '男人', '女人', '男生', '女生', '学员', '教官', '老师', '同学', '对方', '那人', '青年', '师兄', '师姐', '师弟', '师妹', '小女孩', '小男孩', '老板娘', '掌柜', '老伯', '大叔', '大婶'}
+GENERIC_APPELLATION_NAMES = {'少年', '男人', '女人', '男生', '女生', '学员', '教官', '老师', '同学', '对方', '那人', '青年', '师兄', '师姐', '师弟', '师妹', '小女孩', '小男孩', '老板娘', '掌柜', '老伯', '大叔', '大婶', '老汉', '学徒', '官差'}
+CONCRETE_APPELLATION_NAMES = {'掌柜', '老板娘', '老伯', '大叔', '大婶', '师兄', '师姐', '师弟', '师妹', '老汉', '学徒', '官差'}
 GENERIC_HONORIFIC_SUFFIXES = ('姑娘', '公子', '小姐', '先生', '夫人', '少爷', '少侠', '道友', '前辈')
 GENERIC_NON_NAME_TOKENS = {
     '今天', '明天', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日',
@@ -53,8 +53,23 @@ GENERIC_NON_NAME_TOKENS = {
     # More false positive names from test data
     '话別', '炉鼎', '哎哟', '嘴上', '别跟我', '嘿嘿', '冷冷地', '小女孩', '气得',
     '昨天', '昨晚', '技术性', '嘲讽地', '不要', '明明', '当九婴', '管理员', '师兄',
-    '老板娘', '以下',
+    '老板娘', '以下', '也没', '谁知', '真正', '反倒', '不爱', '至少', '随口', '真要',
+    '若真要', '换句话', '解毒', '只肯', '有人只肯', '旁边有人', '忙嘿嘿一', '老人冷',
+    '像随口一', '嘴里含糊', '却要分开', '至少知',
 }
+GENERIC_ABSTRACT_NAME_TOKENS = {
+    '物理接触', '肢体接触', '身体接触', '接触', '互动', '机制', '系统', '面板', '提示', '规则', '判定', '反馈',
+    '设定', '限制', '条件', '代价', '状态', '异常', '效果', '能力', '技能', '天赋', '特性', '权限', '接口',
+    '流程', '步骤', '进度', '事件', '剧情', '关系', '概念', '逻辑', '认知', '现象', '目标', '问题', '风险',
+    '线索', '情报', '消息', '痕迹', '记忆', '意识', '情绪', '欲望', '冲动', '杀意', '敌意', '压力',
+}
+GENERIC_ABSTRACT_NAME_PARTS = (
+    '接触', '互动', '机制', '系统', '规则', '判定', '反馈', '设定', '限制', '条件', '状态', '效果', '能力',
+    '技能', '天赋', '特性', '流程', '步骤', '进度', '事件', '剧情', '关系', '概念', '逻辑', '认知', '现象',
+    '目标', '问题', '风险', '线索', '情报', '记忆', '意识', '情绪', '欲望', '冲动', '杀意', '敌意',
+)
+GENERIC_ABSTRACT_NAME_PREFIXES = ('物理', '精神', '心理', '自动', '被动', '主动', '外部', '内部', '当前', '后续', '持续')
+GENERIC_ABSTRACT_NAME_SUFFIXES = ('机制', '系统', '规则', '判定', '反馈', '设定', '限制', '条件', '状态', '效果', '能力', '技能', '关系', '概念', '逻辑', '现象', '问题', '风险', '线索', '情报')
 GENERIC_INFO_PHRASE_RE = re.compile(r'^[一二三四五六七八九十两几半多整\d]+(?:处|条|座|份|项|处私盐|路|线|页|封|张|本|箱|匣|人)?[\u4e00-\u9fff]{0,6}$')
 GENERIC_TIME_PERIODS = ('清晨', '早晨', '上午', '近午', '午后', '下午', '黄昏', '入夜', '夜晚', '深夜', '凌晨', '傍晚')
 GENERIC_LOCATION_CANDIDATE_RE = re.compile(r'([\u4e00-\u9fffA-Za-z0-9·\-]{2,24}(?:场|区|室|楼|廊|台|门前|门口|门|路|馆|堂|院|厅|阁|府|宫|殿|街|巷|亭|轩))')
@@ -62,6 +77,7 @@ GENERIC_LOCATION_MIN_QUALITY_LEN = 3  # candidate must be ≥ 3 chars to be usef
 GENERIC_BAD_LOCATION_PREFIXES = ('这句', '那句', '已经', '仍在', '正在', '随后', '然后', '如果', '因为', '所以', '只是', '开篇', '就在', '那个', '这个', '一个', '属于')
 GENERIC_BAD_LOCATION_CONTAINS = ('里', '了', '说', '问', '觉得', '已经', '仍在', '正在', '掀起', '推进', '互动', '局势', '给读者', '明确的', '要给', '即将', '构筑')
 GENERIC_LOCATION_LEADING_WORDS = ('在', '于', '从', '向', '到')
+NAME_TRAILING_ACTION_RE = re.compile(r'^(?P<base>[\u4e00-\u9fff]{2,8}?)(?P<trail>先赔|赔笑|嗤笑|嗤|冷笑|笑了笑|笑道|笑着|低声道|低声|抬眼|抬起头|开口|回道|答道|说道|没有说话|先开口|先应声|应声|喝道|厉喝|骂道)$')
 
 
 def _short_plain(text: str, limit: int = 24) -> str:
@@ -212,7 +228,7 @@ def _prune_generic_appellations(names: list[str], prev_state: dict, context: dic
         text = sanitize_runtime_name(name)
         if not text or text in filtered:
             continue
-        if text in GENERIC_APPELLATION_NAMES and text not in stable_pool:
+        if text in GENERIC_APPELLATION_NAMES and text not in stable_pool and text not in CONCRETE_APPELLATION_NAMES:
             continue
         filtered.append(text)
     return filtered
@@ -222,13 +238,27 @@ def _looks_like_character_name(candidate: str, excluded: set[str]) -> bool:
     text = sanitize_runtime_name(candidate)
     if not text or text in excluded:
         return False
+    if looks_like_bad_entity_fragment(text):
+        return False
+    if text in CONCRETE_APPELLATION_NAMES:
+        return True
+    if not _has_character_label_shape(text):
+        return False
     if text in GENERIC_NON_NAME_TOKENS:
+        return False
+    if _looks_like_function_fragment(text):
+        return False
+    if _looks_like_abstract_entity_name(text):
         return False
     if GENERIC_INFO_PHRASE_RE.match(text):
         return False
     if any(text.endswith(token) for token in GENERIC_HONORIFIC_SUFFIXES):
         return False
     if any(token in text for token in ('那个', '这样', '这种', '什么', '哪里', '怎么', '为什么')):
+        return False
+    if any(token in text for token in ('那桌', '这桌', '桌上', '桌边', '茶摊', '摊前', '摊边')):
+        return False
+    if text.endswith(('桌', '摊', '铺', '店', '柜台', '路口', '街口')):
         return False
     if text.startswith(GENERIC_NON_NAME_PREFIXES):
         return False
@@ -242,28 +272,56 @@ def _looks_like_character_name(candidate: str, excluded: set[str]) -> bool:
         return False
     if text.endswith(GENERIC_NON_PERSON_SUFFIXES):
         return False
-    if pseg is not None:
-        try:
-            tags = list(pseg.cut(text))
-            if tags:
-                tag = tags[0].flag
-                if tag in {'d', 'v', 'vd', 'vn', 'a', 'm', 's', 'r', 'p', 'c', 'u', 'f'}:
-                    return False
-                # If the whole string is a single token and tagged as common noun/adverb,
-                # it's likely not a character name
-                if len(tags) == 1 and tag in {'n', 'ns', 'nt', 'nz', 'b', 'z', 'l', 'i', 'ad'}:
-                    # Only reject if it's a very common word (not a proper name)
-                    if tag != 'nr' and tag != 'nz':
-                        # 'n' alone is ambiguous — check length: short common nouns are suspicious
-                        if tag == 'n' and len(text) <= 2:
-                            return False
-                        if tag in {'ns', 'nt', 'b', 'l', 'i', 'ad'}:
-                            return False
-        except Exception:
-            pass
     if len(text) < 2 or len(text) > 16:
         return False
     return True
+
+
+def _has_character_label_shape(candidate: str) -> bool:
+    text = sanitize_runtime_name(candidate)
+    if not text:
+        return False
+    if '·' in text:
+        return True
+    if text in GENERIC_APPELLATION_NAMES:
+        return True
+    if text.endswith(('人', '者', '客', '汉', '夫', '妇', '翁', '婆', '伯', '叔', '婶', '姨', '童', '士', '兵', '差', '役', '吏', '商', '贩', '主', '老板', '掌柜', '摊主', '伙计', '小二', '客人', '老人', '老头', '男子', '女子', '男人', '女人', '青年', '少年', '姑娘', '公子')):
+        return True
+    if text.startswith(('老', '小', '阿')) and 2 <= len(text) <= 4:
+        return True
+    return False
+
+
+def _looks_like_function_fragment(candidate: str) -> bool:
+    text = sanitize_runtime_name(candidate)
+    if not text:
+        return True
+    if len(text) <= 2 and text not in CONCRETE_APPELLATION_NAMES:
+        return True
+    fragment_tokens = (
+        '也', '没', '不', '要', '真', '正', '反', '倒', '至少', '随口', '若', '却', '只', '肯', '知',
+        '句话', '有人', '旁边', '忙', '嘿嘿', '含糊', '分开', '解毒', '真正', '反倒', '谁知',
+    )
+    if any(token in text for token in fragment_tokens):
+        return True
+    if text.endswith(('地', '得', '了', '着', '过', '一')):
+        return True
+    return False
+
+
+def _looks_like_abstract_entity_name(candidate: str) -> bool:
+    text = sanitize_runtime_name(candidate)
+    if not text:
+        return False
+    if text in GENERIC_ABSTRACT_NAME_TOKENS:
+        return True
+    if text.endswith(GENERIC_ABSTRACT_NAME_SUFFIXES):
+        return True
+    if any(text.startswith(prefix) and any(part in text[len(prefix):] for part in GENERIC_ABSTRACT_NAME_PARTS) for prefix in GENERIC_ABSTRACT_NAME_PREFIXES):
+        return True
+    if sum(1 for part in GENERIC_ABSTRACT_NAME_PARTS if part in text) >= 2:
+        return True
+    return False
 
 
 def _score_name_candidate(name: str, text: str, seeded: list[str]) -> int:
@@ -302,44 +360,50 @@ def _looks_like_character_context(body: str, name: str) -> bool:
         return False
     patterns = [
         rf'{re.escape(name)}(?:没有说话|开口|低声|轻声|笑道|说道|问道|答道|回道|说|问|笑|道|看向|转过头|抬起头|抬眼)',
+        rf'{re.escape(name)}(?:朝|向|对|把|将|伸手|伸了手|递给|接过|拦住|站起|坐下|退后|走近|靠近)',
         rf'(?:看向|望向|听见|听到|对上){re.escape(name)}',
         rf'{re.escape(name)}(?:先生|公子|姑娘|少爷|小姐)',
     ]
     return any(re.search(pattern, body) for pattern in patterns)
 
 
-_jieba_tokenizer = None
+def _strip_name_trailing_action(name: str) -> str:
+    text = sanitize_runtime_name(name)
+    if not text:
+        return ''
+    match = NAME_TRAILING_ACTION_RE.match(text)
+    if not match:
+        return text
+    base = sanitize_runtime_name(match.group('base'))
+    return base if len(base) >= 2 else text
 
 
-def _get_jieba_tokenizer():
-    global _jieba_tokenizer
-    if _jieba_tokenizer is None and jieba is not None:
-        _jieba_tokenizer = jieba.Tokenizer()
-    return _jieba_tokenizer
+def _is_action_anchored_appellation(body: str, name: str) -> bool:
+    text = sanitize_runtime_name(name)
+    if text not in CONCRETE_APPELLATION_NAMES:
+        return False
+    patterns = [
+        rf'{re.escape(text)}(?:抬眼|低声|开口|回道|答道|说道|没有说话|赔笑|应声|嗤笑|喝道|厉喝|递给|拦住|盘问|追问|点头|摇头|招呼|提醒)',
+        rf'{re.escape(text)}(?:看了她一眼|看了他一眼|看向|望向)',
+    ]
+    return any(re.search(pattern, body) for pattern in patterns)
 
 
-def _jieba_token_set(body: str, seeded: list[str]) -> set[str]:
-    tokenizer = _get_jieba_tokenizer()
-    if tokenizer is None:
-        return set()
-    for name in seeded:
-        if name:
-            try:
-                tokenizer.add_word(name, freq=1000000)
-            except Exception:
-                pass
-    try:
-        return {token.strip() for token in tokenizer.lcut(body) if token.strip()}
-    except Exception:
-        return set()
-
-
-def _jieba_accepts_name(name: str, tokens: set[str]) -> bool:
+def _has_strong_character_anchor(body: str, name: str, seeded: list[str]) -> bool:
     if not name:
         return False
-    if jieba is None:
+    if name in seeded and _contains_seed_name_exactly(body, name):
         return True
-    return name in tokens
+    if _is_action_anchored_appellation(body, name):
+        return True
+    if _is_explicit_intro_name(body, name):
+        return True
+    occurrence_count = _name_occurrence_count(body, name)
+    if _looks_like_character_context(body, name):
+        return True
+    if occurrence_count >= 2:
+        return True
+    return False
 
 
 def _is_explicit_intro_name(body: str, name: str) -> bool:
@@ -358,16 +422,26 @@ def _extract_structured_name_candidates(body: str, seeded: list[str], excluded: 
 
     for pattern in (GENERIC_INTRO_NAME_RE,):
         for match in pattern.finditer(body):
-            name = sanitize_runtime_name(match.group('name'))
+            name = _strip_name_trailing_action(match.group('name'))
             if not _looks_like_character_name(name, excluded):
                 continue
             if name not in candidates:
                 candidates.append(name)
             explicit_names.add(name)
 
+    for name in sorted(CONCRETE_APPELLATION_NAMES, key=len, reverse=True):
+        if name in excluded:
+            continue
+        if not _is_action_anchored_appellation(body, name):
+            continue
+        if _looks_like_character_name(name, excluded) and name not in candidates:
+            candidates.append(name)
+
     for match in GENERIC_STANDALONE_NAME_RE.finditer(body):
-        name = sanitize_runtime_name(match.group('name'))
+        name = _strip_name_trailing_action(match.group('name'))
         if not _looks_like_character_name(name, excluded):
+            continue
+        if not _has_strong_character_anchor(body, name, seeded):
             continue
         if name not in candidates:
             candidates.append(name)
@@ -383,11 +457,14 @@ def _extract_structured_name_candidates(body: str, seeded: list[str], excluded: 
         r'(?:^|[\n。！？“"‘「『（(，, ])(?P<name>[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?)抬起头',
         r'(?:^|[\n。！？“"‘「『（(，, ])(?P<name>[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?)没有说话',
         r'(?:^|[\n。！？“"‘「『（(，, ])(?P<name>[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?)的回答',
+        r'(?:^|[\n。！？“"‘「『（(，, ])(?P<name>[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?)(?:朝|向|对|把|将|递给|接过|拦住|站起|坐下|退后|走近|靠近)',
     ]
     for pattern in inline_patterns:
         for match in re.finditer(pattern, body):
-            name = sanitize_runtime_name(match.group('name'))
+            name = _strip_name_trailing_action(match.group('name'))
             if not _looks_like_character_name(name, excluded):
+                continue
+            if not _has_strong_character_anchor(body, name, seeded):
                 continue
             if name not in candidates:
                 candidates.append(name)
@@ -396,13 +473,13 @@ def _extract_structured_name_candidates(body: str, seeded: list[str], excluded: 
     for name in candidates:
         if name in filtered:
             continue
-        if name in explicit_names:
+        if name in explicit_names and _has_strong_character_anchor(body, name, seeded):
             filtered.append(name)
             continue
         if name in seeded and _contains_seed_name_exactly(body, name):
             filtered.append(name)
             continue
-        if _looks_like_character_context(body, name):
+        if _has_strong_character_anchor(body, name, seeded):
             filtered.append(name)
             continue
     return filtered
@@ -444,7 +521,6 @@ def extract_generic_character_names(text: str, prev_state: dict, context: dict, 
     body = _strip_scene_header(text)
     seeded = _seed_character_names(prev_state, context, history)
     excluded = _protagonist_name_hints(context, history)
-    token_set = _jieba_token_set(body, seeded)
     scored: list[tuple[int, str]] = []
     seen: set[str] = set()
 
@@ -455,17 +531,23 @@ def extract_generic_character_names(text: str, prev_state: dict, context: dict, 
             pass
         elif _is_explicit_intro_name(body, name):
             pass
-        elif not _jieba_accepts_name(name, token_set):
+        elif name in CONCRETE_APPELLATION_NAMES and _is_action_anchored_appellation(body, name):
+            pass
+        elif not _has_strong_character_anchor(body, name, seeded):
             continue
         seen.add(name)
         scored.append((_score_name_candidate(name, body, seeded), name))
 
     scored.sort(key=lambda item: (-item[0], body.find(item[1]) if item[1] in body else 10**9))
     heuristic_candidates = [name for _score, name in scored[: max(limit * 2, 8)]]
+    anchored_concrete = [
+        name for _score, name in scored
+        if name in CONCRETE_APPELLATION_NAMES and _has_strong_character_anchor(body, name, seeded)
+    ]
     judged = judge_entity_candidates(heuristic_candidates, body, _stable_name_pool(prev_state, history))
     if judged is not None:
         accepted = []
-        for name in judged:
+        for name in anchored_concrete:
             if name in excluded:
                 continue
             if not _looks_like_character_name(name, excluded):
@@ -473,9 +555,30 @@ def extract_generic_character_names(text: str, prev_state: dict, context: dict, 
             if name not in accepted:
                 accepted.append(name)
             if len(accepted) >= limit:
+                return accepted
+        for name in judged:
+            if name in excluded:
+                continue
+            if not _looks_like_character_name(name, excluded):
+                continue
+            if not _has_strong_character_anchor(body, name, seeded):
+                continue
+            if name not in accepted:
+                accepted.append(name)
+            if len(accepted) >= limit:
                 break
         return accepted
-    return [name for _score, name in scored[:limit]]
+    accepted = []
+    for _score, name in scored:
+        if not _looks_like_character_name(name, excluded):
+            continue
+        if not _has_strong_character_anchor(body, name, seeded):
+            continue
+        if name not in accepted:
+            accepted.append(name)
+        if len(accepted) >= limit:
+            break
+    return accepted
 
 
 def _extract_date_portion(time_str: str) -> str:
@@ -619,6 +722,12 @@ _EVENT_MARKERS = (
     '话音刚落', '不料', '谁知', '终于', '转而', '随即',
 )
 
+_GOAL_DECISION_PREFIXES = (
+    '判断是否', '决定是否', '先判断', '先看看', '先看清', '先确认', '找机会', '设法', '尽量',
+)
+
+_GOAL_SPLIT_MARKERS = ('，或', '或者', '还是', '再决定', '然后', '再看')
+
 
 def _split_into_sentences(text: str) -> list[str]:
     """Split text into sentences, filtering empty/too-short ones."""
@@ -634,7 +743,7 @@ def _split_into_sentences(text: str) -> list[str]:
 def _score_sentence(s: str, purpose: str = 'event') -> float:
     """Score a sentence for relevance to a given purpose.
 
-    purpose: 'event' (main_event/scene_core), 'goal' (immediate_goal),
+    purpose: 'event' (main_event), 'goal' (immediate_goal),
              'risk' (immediate_risks), 'clue' (carryover_clues)
     """
     score = 0.0
@@ -716,6 +825,65 @@ def _extract_key_sentence(text: str, max_len: int = 40) -> str:
     return results[0] if results else ''
 
 
+def _normalize_goal_phrase(text: str) -> str:
+    value = ' '.join(str(text or '').split()).strip()
+    if not value:
+        return ''
+    value = re.sub(r'^(?:我|她|他|主角|陆小环)?(?:没有|并未|没)?(?:立刻|马上|直接)?(?:出手|行动|过去|上前)[，,、 ]*', '', value)
+    value = re.sub(r'^(?:只|只是|仍|还)?(?:在|先)?(?:檐下|暗处|原地)?(?:继续)?(?:看着?|观察着?|打量着?)?[，,、 ]*', '', value)
+    value = re.sub(r'^(?:想|准备|打算)(?:着)?', '', value)
+    for marker in _GOAL_SPLIT_MARKERS:
+        idx = value.find(marker)
+        if idx > 0:
+            value = value[:idx].strip(' ，、；:：')
+            break
+    value = value.strip(' ，、；:：。！？!?,')
+    if len(value) > 28:
+        for brk in ('，', '；', ',', '——', '……'):
+            idx = value.find(brk, 10)
+            if 0 < idx < 28:
+                value = value[:idx].strip()
+                break
+        else:
+            value = value[:28].rstrip('，、；:：')
+    return value
+
+
+def _looks_like_goal_phrase(text: str) -> bool:
+    value = _normalize_goal_phrase(text)
+    if not value:
+        return False
+    if len(value) < 5:
+        return False
+    if _looks_like_core_fragment(value):
+        return False
+    goalish_tokens = ('判断', '决定', '确认', '试探', '观察', '藏身', '介入', '脱身', '避开', '救人', '离开', '靠近', '跟上', '稳住', '拖住')
+    if any(value.startswith(prefix) for prefix in _GOAL_DECISION_PREFIXES):
+        return True
+    if any(token in value for token in goalish_tokens):
+        return True
+    return False
+
+
+def _looks_like_core_fragment(text: str) -> bool:
+    value = ' '.join(str(text or '').split()).strip()
+    if not value:
+        return True
+    if '→' in value:
+        return True
+    if len(value) < 4:
+        return True
+    if value.count('：') + value.count(':') >= 1:
+        return True
+    if len(value) <= 18 and value[:1] in {'我', '你', '他', '她'}:
+        return True
+    if len(value) <= 24 and '，' in value:
+        return True
+    if value.startswith(('靠着', '贴着', '撇撇嘴', '皱着眉', '仰着头', '低头', '吃了一半', '喝了几口', '满足的')):
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Main event inference
 # ---------------------------------------------------------------------------
@@ -735,6 +903,8 @@ def _summarize_event(user_text: str, assistant_text: str, onstage_names: list[st
     # Get user action (shorter, focused on intent)
     user_best = _extract_top_sentences(clean_user, purpose='goal', max_count=1, max_len=20)
 
+    if user_best and _looks_like_core_fragment(user_best[0]):
+        user_best = []
     if user_best and asst_best:
         return f'{user_best[0]}→{asst_best[0]}'
     if asst_best:
@@ -758,7 +928,7 @@ def _is_generic_main_event(value: str) -> bool:
 
 def infer_main_event_generic(user_text: str, assistant_text: str, location: str, prev_location: str) -> str:
     summary = _summarize_event(user_text, assistant_text)
-    if summary:
+    if summary and not _looks_like_core_fragment(summary):
         return summary
 
     # Fallback: try to describe using location change
@@ -767,52 +937,48 @@ def infer_main_event_generic(user_text: str, assistant_text: str, location: str,
         return f'场景转至{location}'
     if location:
         key = _extract_key_sentence(assistant_text, max_len=30)
-        return key if key else f'{location}中的互动'
+        return key if key and not _looks_like_core_fragment(key) else f'{location}中的互动'
     return '剧情推进中'
 
 
-def _should_refresh_main_event(session_id: str, prev_state: dict, inferred_location: str, assistant_text: str) -> bool:
+def _refine_main_event(summary_text: str, fallback: str, location: str) -> str:
+    candidate = ' '.join(str(summary_text or '').split()).strip()
+    if candidate and len(candidate) >= 8 and len(candidate) <= 72 and not _is_generic_main_event(candidate):
+        return candidate
+    fallback_text = ' '.join(str(fallback or '').split()).strip()
+    if fallback_text and not _is_generic_main_event(fallback_text):
+        return fallback_text
+    if location:
+        return f'{location}中的局势持续推进'
+    return fallback_text or candidate or '剧情推进中'
+
+
+def _should_replace_stale_main_event(current_main_event: str, ledger_summary: str, *, current_onstage: list[str]) -> bool:
+    current_text = ' '.join(str(current_main_event or '').split()).strip()
+    summary_text = ' '.join(str(ledger_summary or '').split()).strip()
+    if not summary_text:
+        return False
+    if _is_generic_main_event(current_text):
+        return True
+    if current_text and len(current_text) <= 24 and ('“' in current_text or '：' in current_text):
+        return True
+    overlap = sum(1 for name in (current_onstage or []) if name and name in current_text and name in summary_text)
+    if overlap == 0 and current_text and summary_text and current_text != summary_text:
+        return True
+    return False
+
+
+def _should_refresh_main_event(session_id: str, prev_state: dict, inferred_location: str, assistant_text: str, inferred_onstage: list[str]) -> bool:
     meta = load_meta(session_id)
     next_turn_id = int(meta.get('last_turn_id', 0) or 0) + 1
     prev_location = str(prev_state.get('location', '') or '').strip()
     if inferred_location and inferred_location != prev_location and has_signal(prev_location):
         return True
-    if any(token in (assistant_text or '') for token in ('转而', '改为', '终于', '随后', '局势转到', '事情变成')):
+    prev_onstage = [sanitize_runtime_name(name) for name in (prev_state.get('onstage_npcs', []) or []) if sanitize_runtime_name(name)]
+    overlap = len(set(prev_onstage) & set(inferred_onstage))
+    if prev_onstage and inferred_onstage and overlap <= max(0, min(len(prev_onstage), len(inferred_onstage)) - 2):
         return True
-    return next_turn_id <= 2 or next_turn_id % 6 == 0
-
-
-# ---------------------------------------------------------------------------
-# Scene core inference
-# ---------------------------------------------------------------------------
-def infer_scene_core_generic(user_text: str, assistant_text: str, location: str, prev_location: str, onstage_count: int = 0) -> str:
-    """Generate a one-line scene description capturing the current dynamics."""
-    prev_effective = prev_location if has_signal(prev_location) and prev_location != '待确认' else ''
-
-    # Extract the most descriptive scene sentence
-    scene_sentence = _extract_key_sentence(assistant_text, max_len=40)
-
-    # Build scene description
-    if scene_sentence:
-        # Add location context if location changed
-        if location and prev_effective and prev_effective != location:
-            return f'{scene_sentence}（{location}）'
-        return scene_sentence
-
-    # Fallback: describe based on location + NPC count
-    parts = []
-    if location:
-        if prev_effective and prev_effective != location:
-            parts.append(f'转至{location}')
-        else:
-            parts.append(location)
-    if onstage_count >= 3:
-        parts.append('多方在场互动')
-    elif onstage_count == 2:
-        parts.append('双方互动中')
-    if parts:
-        return '，'.join(parts)
-    return '场景延续中'
+    return next_turn_id <= 2 or next_turn_id % 12 == 0
 
 
 # ---------------------------------------------------------------------------
@@ -825,23 +991,30 @@ def infer_immediate_goal_generic(user_text: str, assistant_text: str, location: 
     """
     clean_user = _strip_prompt_wrappers(user_text)
 
-    # If the user text is short enough already (< 20 chars), use it directly
-    if clean_user and len(clean_user) <= 20 and not _is_meta_line(clean_user):
-        return clean_user
+    normalized_user_goal = _normalize_goal_phrase(clean_user)
+    if _looks_like_goal_phrase(normalized_user_goal):
+        return normalized_user_goal
 
-    # Try to extract a clear goal/intent sentence from user text
-    goal_sentences = _extract_top_sentences(clean_user, purpose='goal', max_count=1, max_len=25)
-    if goal_sentences:
-        raw = goal_sentences[0]
-        # Trim conversational filler at the start: 说：/问：/道：
+    # If the user text contains an explicit decision/intent phrase anywhere,
+    # prefer that over narrator-derived continuation text.
+    user_goal_candidates = _extract_top_sentences(clean_user, purpose='goal', max_count=3, max_len=28)
+    for candidate in user_goal_candidates:
+        raw = _normalize_goal_phrase(candidate)
         raw = re.sub(r'^(?:小声|低声|嘟囔着|呜咽着|咕哝着|笑着|皱着眉头)?(?:说|问|道|喊|叫|答|喃喃|嘟囔)\s*[：:]\s*', '', raw)
-        if raw:
+        if _looks_like_goal_phrase(raw):
             return raw
 
-    # Try from assistant's narrative (what the protagonist is doing)
+    # If the user text is short enough already (< 20 chars), use it directly
+    if clean_user and len(clean_user) <= 20 and not _is_meta_line(clean_user) and not _looks_like_core_fragment(clean_user):
+        return clean_user
+
+    # Try from assistant's narrative only when the user text is too weak to
+    # produce a stable next-beat goal.
     asst_goal = _extract_top_sentences(assistant_text, purpose='goal', max_count=1, max_len=25)
     if asst_goal:
-        return asst_goal[0]
+        raw = _normalize_goal_phrase(asst_goal[0])
+        if _looks_like_goal_phrase(raw):
+            return raw
 
     # Fallback based on context
     prev_effective = prev_location if has_signal(prev_location) and prev_location != '待确认' else ''
@@ -858,8 +1031,7 @@ def infer_immediate_risks_generic(user_text: str, assistant_text: str, location:
     # Only extract risks from assistant text — user text is player intent, not narrative threats
     risk_sentences = _extract_top_sentences(assistant_text, purpose='risk', max_count=3, max_len=30)
     risks = [s for s in risk_sentences if _score_sentence(s, 'risk') >= 2.0]
-
-    return risks[:3]
+    return _clean_signal_list(risks, limit=3)
 
 
 # ---------------------------------------------------------------------------
@@ -870,8 +1042,24 @@ def infer_carryover_clues_generic(user_text: str, assistant_text: str, location:
     # Extract clue-relevant sentences from assistant text (primary source)
     clue_sentences = _extract_top_sentences(assistant_text, purpose='clue', max_count=3, max_len=30)
     clues = [s for s in clue_sentences if _score_sentence(s, 'clue') >= 2.0]
+    return _clean_signal_list(clues, limit=3)
 
-    return clues[:3]
+
+def _build_carryover_signals(risks: list[str], clues: list[str], limit: int = 6) -> list[dict]:
+    signals = []
+    seen = set()
+    risk_set = {str(item).strip() for item in (risks or []) if str(item).strip()}
+    clue_set = {str(item).strip() for item in (clues or []) if str(item).strip()}
+    for text in list(risk_set) + list(clue_set):
+        signal_type = 'mixed' if (text in risk_set and text in clue_set) else ('risk' if text in risk_set else 'clue')
+        key = (signal_type, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        signals.append({'type': signal_type, 'text': text})
+        if len(signals) >= limit:
+            break
+    return signals
 
 
 
@@ -1009,6 +1197,31 @@ def retain_strong_lists(prev_state: dict, next_state: dict) -> dict:
     return next_state
 
 
+def _looks_weak_entity_name(name: str) -> bool:
+    text = sanitize_runtime_name(name)
+    if not text:
+        return True
+    if text in CONCRETE_APPELLATION_NAMES:
+        return False
+    if len(text) <= 2:
+        return True
+    if text in GENERIC_NON_NAME_TOKENS:
+        return True
+    return False
+
+
+def _guard_entity_collapse(prev_state: dict, next_state: dict) -> dict:
+    prev_entities = [item for item in (prev_state.get('scene_entities', []) or []) if isinstance(item, dict)]
+    next_entities = [item for item in (next_state.get('scene_entities', []) or []) if isinstance(item, dict)]
+    prev_names = [sanitize_runtime_name(item.get('primary_label', '')) for item in prev_entities if sanitize_runtime_name(item.get('primary_label', ''))]
+    next_names = [sanitize_runtime_name(item.get('primary_label', '')) for item in next_entities if sanitize_runtime_name(item.get('primary_label', ''))]
+    if len(prev_names) >= 2 and len(next_names) == 1 and _looks_weak_entity_name(next_names[0]):
+        next_state['scene_entities'] = prev_entities
+        next_state['onstage_npcs'] = [sanitize_runtime_name(name) for name in (prev_state.get('onstage_npcs', []) or []) if sanitize_runtime_name(name)][:6]
+        next_state['relevant_npcs'] = [sanitize_runtime_name(name) for name in (prev_state.get('relevant_npcs', []) or []) if sanitize_runtime_name(name)][:6]
+    return next_state
+
+
 def recent_role_text(items, role: str, limit: int = 4) -> str:
     selected = [i.get('content', '') for i in items if i.get('role') == role]
     return '\n'.join(selected[-limit:])
@@ -1027,10 +1240,6 @@ def infer_location(text: str) -> str:
 
 
 def infer_main_event(text: str) -> str:
-    return ''
-
-
-def infer_scene_core(text: str) -> str:
     return ''
 
 
@@ -1133,6 +1342,10 @@ def infer_onstage_npcs(text: str) -> list[str]:
 
 OBJECT_MEASURE_PREFIX = re.compile(r'^(那|这|一|几|数)(?:个|件|封|卷|包|把|枚|只|本|张|份|块|柄)?')
 OBJECT_LABEL_HINT_RE = re.compile(r'(帆布包|记录板|信封|纸条|名单|档案|本子|笔记|腰牌|令牌|钥匙|门闩|短刀|药瓶|药包|作训服|束胸带|水壶|水杯|台灯|油灯|铜牌|瓷瓶|热水|药布|布巾|餐盘|筷子|信|包)')
+ENTITY_COUNT_PREFIX_RE = re.compile(r'^(?P<count>一|二|两|三|四|五|六|七|八|九|十|几|数)(?:个|名|位)?(?P<body>.+)$')
+ENTITY_LEADING_VERB_RE = re.compile(r'^(穿着?|戴着?|披着?|背着?|提着?|拎着?|握着?|拿着?|持着?)')
+ENTITY_DESCRIPTOR_SUFFIXES = ('中年人', '年轻人', '老年人', '灰衣人', '白衣人', '黑衣人', '皂衣人', '汉子', '老者', '青年', '女子', '男人', '女人', '人')
+ENTITY_SLOT_MARKERS = ('高个', '矮个', '左侧', '右侧', '前头', '后侧', '靠门', '靠窗', '斗笠', '佩刀', '长衫', '灰衣', '黑衣', '白衣', '皂衣')
 
 
 def _known_holder_names(prev_state: dict) -> list[str]:
@@ -1402,6 +1615,209 @@ def prioritize_scene_targets(text: str, onstage: list[str]) -> list[str]:
     return list(onstage)[:6]
 
 
+def _count_hint_from_prefix(token: str) -> int | None:
+    mapping = {
+        '一': 1,
+        '二': 2,
+        '两': 2,
+        '三': 3,
+        '四': 4,
+        '五': 5,
+        '六': 6,
+        '七': 7,
+        '八': 8,
+        '九': 9,
+        '十': 10,
+    }
+    text = str(token or '').strip()
+    if text == '几':
+        return 3
+    if text == '数':
+        return 4
+    return mapping.get(text)
+
+
+def _normalize_entity_label(name: str) -> tuple[str, list[str], bool, int | None]:
+    original = sanitize_runtime_name(name)
+    if not original:
+        return '', [], False, None
+
+    count_hint = None
+    collective = False
+    body = original
+    count_match = ENTITY_COUNT_PREFIX_RE.match(body)
+    if count_match:
+        parsed = _count_hint_from_prefix(count_match.group('count'))
+        if parsed:
+            count_hint = parsed
+            collective = parsed > 1
+            body = sanitize_runtime_name(count_match.group('body')) or body
+
+    primary = body
+    if '的' in body:
+        parts = [sanitize_runtime_name(part) for part in body.split('的') if sanitize_runtime_name(part)]
+        if len(parts) >= 2:
+            base = parts[-1]
+            modifier = ENTITY_LEADING_VERB_RE.sub('', parts[-2]).strip()
+            if any(base.endswith(suffix) for suffix in ENTITY_DESCRIPTOR_SUFFIXES):
+                primary = base
+
+    primary = sanitize_runtime_name(primary)
+    aliases = []
+    for candidate in (original, body):
+        text = sanitize_runtime_name(candidate)
+        if text and text != primary and text not in aliases:
+            aliases.append(text)
+    return primary or original, aliases, collective, count_hint
+
+
+def _entity_labels_compatible(left: str, right: str) -> bool:
+    left_text = sanitize_runtime_name(left)
+    right_text = sanitize_runtime_name(right)
+    if not left_text or not right_text:
+        return False
+    if left_text == right_text:
+        return True
+    for shadow in {'暗影', '黑影', '影子', '人影'}:
+        if left_text == shadow or right_text == shadow:
+            return False
+    left_primary, left_aliases, _, _ = _normalize_entity_label(left_text)
+    right_primary, right_aliases, _, _ = _normalize_entity_label(right_text)
+    return bool(left_primary and right_primary and left_primary == right_primary)
+
+
+def _align_name_to_scene_entities(name: str, scene_entities: list[dict]) -> str:
+    target = sanitize_runtime_name(name)
+    if not target:
+        return ''
+    for item in scene_entities or []:
+        if not isinstance(item, dict):
+            continue
+        primary = sanitize_runtime_name(item.get('primary_label', ''))
+        aliases = [sanitize_runtime_name(alias) for alias in (item.get('aliases', []) or []) if sanitize_runtime_name(alias)]
+        if any(label for label in [primary] + aliases if label == target or _entity_labels_compatible(label, target)):
+            return primary or target
+    return target
+
+
+def _align_names_to_scene_entities(names: list[str], scene_entities: list[dict], *, limit: int = 6) -> list[str]:
+    aligned = []
+    for name in names or []:
+        primary = _align_name_to_scene_entities(name, scene_entities)
+        if primary and primary not in aligned:
+            aligned.append(primary)
+        if len(aligned) >= limit:
+            break
+    return aligned
+
+
+def _compress_signal_phrase(text: str, *, limit: int = 24) -> str:
+    value = ' '.join(str(text or '').split()).strip().strip('“”"\'')
+    if not value:
+        return ''
+    value = re.sub(r'^(?:忽然|突然|只见|只听|只道|便见|便听|这时|此时|随即|旋即|紧接着)', '', value).strip('，。；：、 ')
+    value = re.sub(r'^(?:他|她|那人|对方|其中一人|另一人|其中一个|另一个)(?:又|便|就|只|仍)?', '', value).strip('，。；：、 ')
+    if '：“' in value:
+        value = value.split('：“', 1)[0].strip()
+    if '，' in value:
+        value = value.split('，', 1)[0].strip()
+    if '。' in value:
+        value = value.split('。', 1)[0].strip()
+    if len(value) > limit:
+        value = value[:limit].rstrip('，。；：、 ')
+    return value
+
+
+def _clean_signal_list(items: list[str], *, limit: int = 3) -> list[str]:
+    cleaned = []
+    for item in items or []:
+        text = _state_like_signal(item)
+        if not text or len(text) < 4:
+            continue
+        if text not in cleaned:
+            cleaned.append(text)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
+def _entity_slot_hint(primary: str, aliases: list[str]) -> str:
+    haystack = ' '.join([sanitize_runtime_name(primary)] + [sanitize_runtime_name(alias) for alias in aliases or []])
+    for marker in ENTITY_SLOT_MARKERS:
+        if marker and marker in haystack:
+            return marker
+    return ''
+
+
+def _dedupe_scene_entities_by_slot(entities: list[dict]) -> list[dict]:
+    grouped: dict[tuple[str, str], dict] = {}
+    ordered: list[dict] = []
+    for item in entities or []:
+        if not isinstance(item, dict):
+            continue
+        primary = sanitize_runtime_name(item.get('primary_label', ''))
+        aliases = [sanitize_runtime_name(alias) for alias in (item.get('aliases', []) or []) if sanitize_runtime_name(alias)]
+        slot_hint = _entity_slot_hint(primary, aliases)
+        key = (primary, slot_hint)
+        current = grouped.get(key)
+        if current is None:
+            current = dict(item)
+            current['aliases'] = aliases
+            grouped[key] = current
+            ordered.append(current)
+            continue
+        merged_aliases = list(current.get('aliases', []) or [])
+        for alias in aliases:
+            if alias and alias not in merged_aliases:
+                merged_aliases.append(alias)
+        current['aliases'] = merged_aliases
+        current['onstage'] = bool(current.get('onstage')) or bool(item.get('onstage'))
+        current['collective'] = bool(current.get('collective')) or bool(item.get('collective'))
+        if not current.get('count_hint') and item.get('count_hint'):
+            current['count_hint'] = item.get('count_hint')
+    return ordered
+
+
+def _state_like_signal(text: str) -> str:
+    value = _compress_signal_phrase(text, limit=28)
+    if not value:
+        return ''
+    if _looks_like_prose_signal_fragment(value):
+        return ''
+    replacements = (
+        ('画像画得潦草', '画像只能辨认轮廓'),
+        ('顺势侧过了身', '已借位遮挡身形'),
+        ('没有立刻接话', '暂未正面回应'),
+        ('低声道', '压低声音表态'),
+        ('抬眼看了她一眼', '正观察主角反应'),
+    )
+    for source, target in replacements:
+        if source in value:
+            value = target if value == source else value.replace(source, target)
+    return value
+
+
+def _looks_like_prose_signal_fragment(text: str) -> bool:
+    value = ' '.join(str(text or '').split()).strip()
+    if not value:
+        return True
+    if any(mark in value for mark in ('“', '”', '「', '」', '：', ':')):
+        return True
+    if value.startswith(('他', '她', '它', '那人', '对方', '其中一人', '另一个', '另一人')) and len(value) <= 24:
+        return True
+    if value.startswith(('声音', '目光', '手上', '脚下', '嘴上', '眼角', '眉头')):
+        return True
+    if value.endswith(('了声', '一眼', '一下', '半分', '些', '着', '了')) and len(value) <= 24:
+        return True
+    if any(token in value for token in ('压低了声', '笑着打断', '抬眼', '低声道', '嘴上这么说', '手里捏着', '把壶放下')):
+        return True
+    meaningful_tokens = (
+        '追', '查', '搜', '封', '锁', '伤', '毒', '死', '杀', '失踪', '暴露', '怀疑', '身份', '来历',
+        '证据', '线索', '传闻', '情报', '口供', '文件', '名单', '账册', '钥匙', '信', '地图', '标记',
+    )
+    return not any(token in value for token in meaningful_tokens)
+
+
 def build_scene_entities(onstage: list[str], text: str = '', focal_entity: dict | None = None) -> list[dict]:
     def _descriptor_signature(name: str) -> str:
         text_value = sanitize_runtime_name(name)
@@ -1423,15 +1839,16 @@ def build_scene_entities(onstage: list[str], text: str = '', focal_entity: dict 
 
     entities = []
     for idx, name in enumerate(onstage, start=1):
+        primary, aliases, collective, count_hint = _normalize_entity_label(name)
         entity = {
             'entity_id': f'scene_npc_{idx:02d}',
-            'primary_label': name,
-            'aliases': [name],
-            'role_label': infer_role_label(name),
+            'primary_label': primary,
+            'aliases': aliases,
+            'role_label': infer_role_label(primary),
             'onstage': True,
             'possible_link': None,
-            'collective': False,
-            'count_hint': None,
+            'collective': collective,
+            'count_hint': count_hint,
         }
         entities.append(entity)
     if focal_entity and focal_entity.get('primary_label'):
@@ -1493,27 +1910,30 @@ def build_scene_entities_generic(onstage: list[str], prev_state: dict, context: 
                 pass
     next_id = max_prev_idx + 1 if max_prev_idx else 1
     for idx, name in enumerate(onstage, start=1):
+        primary, aliases, collective, count_hint = _normalize_entity_label(name)
         prev_role_label = ''
         for item in (prev_state.get('scene_entities', []) or []):
             if not isinstance(item, dict):
                 continue
-            if sanitize_runtime_name(item.get('primary_label', '')) == name:
+            existing_primary = sanitize_runtime_name(item.get('primary_label', ''))
+            existing_aliases = [sanitize_runtime_name(alias) for alias in (item.get('aliases', []) or []) if sanitize_runtime_name(alias)]
+            if any(label for label in [existing_primary] + existing_aliases if _labels_compatible(label, primary) or label == primary):
                 prev_role_label = str(item.get('role_label', '') or '').strip()
                 break
-        entity_id = _find_prev_entity_id(name, prev_entities, used_ids)
+        entity_id = _find_prev_entity_id(primary, prev_entities, used_ids)
         if not entity_id:
             entity_id = f'scene_npc_{next_id:02d}'
             next_id += 1
         used_ids.add(entity_id)
         entity = {
             'entity_id': entity_id,
-            'primary_label': name,
-            'aliases': [name],
+            'primary_label': primary,
+            'aliases': aliases,
             'role_label': prev_role_label or '待确认',
             'onstage': True,
             'possible_link': None,
-            'collective': False,
-            'count_hint': None,
+            'collective': collective,
+            'count_hint': count_hint,
         }
         entities.append(entity)
 
@@ -1531,7 +1951,7 @@ def build_scene_entities_generic(onstage: list[str], prev_state: dict, context: 
             used_ids.add(focal['entity_id'])
             entities.insert(0, focal)
 
-    return entities
+    return _dedupe_scene_entities_by_slot(entities)
 
 
 def infer_immediate_goal(text: str) -> str:
@@ -1558,7 +1978,7 @@ def update_state(session_id: str) -> dict:
 
     base_text = assistant_focus or focus_text
     generic_time = infer_time_generic(assistant_focus, state)
-    generic_location = infer_location_generic(assistant_focus)
+    generic_location = ''
     focal_entity = infer_focal_entity_generic(base_text, state, context, history)
     inferred_onstage = [sanitize_runtime_name(name) for name in infer_onstage_npcs_generic(base_text, state, context, history) if sanitize_runtime_name(name)]
     recent_assistant_window = recent_role_text(history, 'assistant', limit=4)
@@ -1604,9 +2024,35 @@ def update_state(session_id: str) -> dict:
     prev_location = str(state.get('location', '') or '').strip()
     inferred_time = generic_time
     inferred_location = generic_location
-    inferred_main_event = infer_main_event_generic(user_focus, assistant_focus, inferred_location, prev_location)
+    recent_pairs = []
+    current_user = None
+    for item in history:
+        if item.get('role') == 'user':
+            current_user = item
+        elif item.get('role') == 'assistant' and current_user is not None:
+            recent_pairs.append((str(current_user.get('content', '') or ''), str(item.get('content', '') or '')))
+            current_user = None
+    recent_pairs = recent_pairs[-3:]
+
+    ledger = build_event_ledger_with_llm(
+        user_text=user_focus,
+        narrator_reply=assistant_focus,
+        prev_state=state,
+        onstage_names=inferred_onstage,
+        location=inferred_location or prev_location,
+        recent_pairs=recent_pairs,
+        current_state=state,
+    )
+    ledger_main = next((item.get('text', '') for item in ledger.get('main_event_candidates', []) if isinstance(item, dict)), '')
+    inferred_main_event = ledger_main or infer_main_event_generic(user_focus, assistant_focus, inferred_location, prev_location)
     current_main_event = str(state.get('main_event', '') or '').strip()
-    if not _should_refresh_main_event(session_id, state, inferred_location, assistant_focus):
+    skeleton_main_event = str(state.get('main_event', '') or '').strip()
+    should_refresh_main = _should_refresh_main_event(session_id, state, inferred_location, assistant_focus, inferred_onstage)
+    if bool(ledger.get('scene_shift', {}).get('changed')):
+        should_refresh_main = True
+    if not should_refresh_main and core_value_quality(skeleton_main_event, inferred_onstage) >= core_value_quality(inferred_main_event, inferred_onstage):
+        inferred_main_event = skeleton_main_event or inferred_main_event
+    if not should_refresh_main:
         if not (
             _is_generic_main_event(current_main_event)
             and inferred_main_event
@@ -1615,30 +2061,44 @@ def update_state(session_id: str) -> dict:
             inferred_main_event = current_main_event or inferred_main_event
     elif _is_generic_main_event(inferred_main_event) and current_main_event and not _is_generic_main_event(current_main_event):
         inferred_main_event = current_main_event
-    inferred_scene_core = infer_scene_core_generic(user_focus, assistant_focus, inferred_location, prev_location, onstage_count=len(inferred_onstage))
-    inferred_goal = infer_immediate_goal_generic(user_focus, assistant_focus, inferred_location, prev_location)
+    inferred_goal = str(state.get('immediate_goal', '') or '').strip() or '待确认'
     inferred_risks = infer_immediate_risks_generic(user_focus, assistant_focus, inferred_location, prev_location, onstage_count=len(inferred_onstage))
     inferred_clues = infer_carryover_clues_generic(user_focus, assistant_focus, inferred_location, prev_location)
+    carryover_signals = _build_carryover_signals(inferred_risks, inferred_clues)
     tracked_objects, possession_state, object_visibility = infer_tracked_objects(broad_text, state)
     scene_entities = build_scene_entities_generic(inferred_onstage, state, context, history, text=base_text, focal_entity=focal_entity)
     if not scene_entities:
         scene_entities = build_scene_entities(inferred_onstage, base_text, focal_entity)
+    inferred_onstage = _align_names_to_scene_entities(inferred_onstage, scene_entities, limit=6)
+    inferred_relevant = [
+        name for name in _align_names_to_scene_entities(inferred_relevant, scene_entities, limit=6)
+        if name not in inferred_onstage
+    ]
+    inferred_main_event = _refine_main_event(
+        str(ledger.get('summary_text', '') or '').strip(),
+        inferred_main_event,
+        inferred_location or prev_location,
+    )
+    if _should_replace_stale_main_event(current_main_event, str(ledger.get('summary_text', '') or '').strip(), current_onstage=inferred_onstage):
+        current_main_event = ''
 
     next_state = {
         'time': state.get('time') if opening_locked and state.get('time') not in {'', None, '待确认'} else prefer_existing(state.get('time'), inferred_time),
-        'location': state.get('location') if opening_locked and state.get('location') not in {'', None, '待确认'} else prefer_existing(state.get('location'), inferred_location),
-        'main_event': state.get('main_event') if opening_locked and state.get('main_event') else prefer_existing(state.get('main_event'), inferred_main_event),
-        'scene_core': state.get('scene_core') if opening_locked and state.get('scene_core') else prefer_existing(state.get('scene_core'), inferred_scene_core),
+        'location': state.get('location') if state.get('location') not in {'', None, '待确认'} else prefer_existing(state.get('location'), inferred_location),
+        'main_event': state.get('main_event') if opening_locked and state.get('main_event') else prefer_existing(current_main_event, inferred_main_event),
         'onstage_npcs': inferred_onstage,
         'scene_entities': scene_entities,
         'relevant_npcs': [sanitize_runtime_name(name) for name in inferred_relevant if sanitize_runtime_name(name)],
         'immediate_goal': state.get('immediate_goal') if opening_locked and state.get('immediate_goal') else prefer_existing(state.get('immediate_goal'), inferred_goal),
         'immediate_risks': inferred_risks,
         'carryover_clues': inferred_clues,
+        'carryover_signals': carryover_signals,
         'tracked_objects': tracked_objects,
         'possession_state': possession_state,
         'object_visibility': object_visibility,
+        'event_ledger': ledger,
     }
+    next_state = _guard_entity_collapse(state, next_state)
     next_state = retain_strong_lists(state, next_state)
     next_state = retain_relevant_window(state, next_state, history, window_pairs=3)
     prev_for_normalize = dict(state)

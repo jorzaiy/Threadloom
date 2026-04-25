@@ -104,7 +104,6 @@ def _current_query(scene_facts: dict) -> dict:
     topic_parts = [
         str(scene.get('location', '') or ''),
         str(scene.get('main_event', '') or ''),
-        str(scene.get('scene_core', '') or ''),
         ' '.join(str(item or '') for item in (scene.get('immediate_risks', []) or [])),
         ' '.join(str(item or '') for item in (scene.get('carryover_clues', []) or [])),
     ]
@@ -183,11 +182,17 @@ def retrieve_keeper_records(
     current_pair_count: int = 0,
     recent_window_pairs: int = 10,
     limit: int = 4,
+    refresh_skip_bootstrap: bool = True,
+    refresh_use_llm: bool = False,
 ) -> dict:
-    archive = load_keeper_record_archive(session_id)
+    archive = load_keeper_record_archive(session_id, skip_bootstrap=refresh_skip_bootstrap, use_llm=refresh_use_llm)
     records = archive.get('records', []) if isinstance(archive.get('records', []), list) else []
     if _archive_needs_refresh(archive, records, current_pair_count=current_pair_count, recent_window_pairs=recent_window_pairs):
-        archive = build_keeper_record_archive(session_id)
+        archive = build_keeper_record_archive(
+            session_id,
+            skip_bootstrap=refresh_skip_bootstrap,
+            use_llm=refresh_use_llm,
+        )
         save_keeper_record_archive(session_id, archive)
         records = archive.get('records', []) if isinstance(archive.get('records', []), list) else []
 

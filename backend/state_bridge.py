@@ -9,15 +9,15 @@ from typing import Iterable
 try:
     from .continuity_hints import match_continuity_hint
     from .character_assets import load_system_npcs
-    from .entity_candidate_judge import judge_entity_candidates
-    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names
+    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment
     from .card_hints import get_known_npc_role
+    from .thread_tracker import _should_override_main_label_with_event
 except ImportError:
     from continuity_hints import match_continuity_hint
     from character_assets import load_system_npcs
-    from entity_candidate_judge import judge_entity_candidates
-    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names
+    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment
     from card_hints import get_known_npc_role
+    from thread_tracker import _should_override_main_label_with_event
 
 
 STRUCTURED_NAME_RE = re.compile(r'[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?')
@@ -27,6 +27,19 @@ NON_PERSON_TOKENS = {
     '轻功', '自保', '一声', '规则', '结论', '现象', '世界', '逻辑', '认知', '交互', '概念', '目标', '问题', '决定',
     '对话', '关系', '后续', '物理', '错误', '能力', '剧情', '局势', '线索', '风险', '客厅',
 }
+ABSTRACT_CONTINUITY_TOKENS = {
+    '物理接触', '肢体接触', '身体接触', '接触', '互动', '机制', '系统', '面板', '提示', '规则', '判定', '反馈',
+    '设定', '限制', '条件', '代价', '状态', '异常', '效果', '能力', '技能', '天赋', '特性', '权限', '接口',
+    '流程', '步骤', '进度', '事件', '剧情', '关系', '概念', '逻辑', '认知', '现象', '目标', '问题', '风险',
+    '线索', '情报', '消息', '痕迹', '记忆', '意识', '情绪', '欲望', '冲动', '杀意', '敌意', '压力',
+}
+ABSTRACT_CONTINUITY_PARTS = (
+    '接触', '互动', '机制', '系统', '规则', '判定', '反馈', '设定', '限制', '条件', '状态', '效果', '能力',
+    '技能', '天赋', '特性', '流程', '步骤', '进度', '事件', '剧情', '关系', '概念', '逻辑', '认知', '现象',
+    '目标', '问题', '风险', '线索', '情报', '记忆', '意识', '情绪', '欲望', '冲动', '杀意', '敌意',
+)
+ABSTRACT_CONTINUITY_PREFIXES = ('物理', '精神', '心理', '自动', '被动', '主动', '外部', '内部', '当前', '后续', '持续')
+ABSTRACT_CONTINUITY_SUFFIXES = ('机制', '系统', '规则', '判定', '反馈', '设定', '限制', '条件', '状态', '效果', '能力', '技能', '关系', '概念', '逻辑', '现象', '问题', '风险', '线索', '情报')
 ENTITY_DESCRIPTOR_SUFFIXES = (
     '身影', '背影', '影子', '影', '之人', '那人', '此人', '来人',
     '男人', '女人', '女子', '青年', '少年', '老者', '壮汉',
@@ -147,7 +160,7 @@ def infer_role_label(name: str) -> str:
     return '待确认'
 
 
-def infer_runtime_role_label(name: str, *, main_event: str = '', scene_core: str = '', active_threads: list[dict] | None = None, onstage: bool = False, relevant: bool = False) -> str:
+def infer_runtime_role_label(name: str, *, main_event: str = '', active_threads: list[dict] | None = None, onstage: bool = False, relevant: bool = False) -> str:
     explicit = infer_role_label(name)
     if explicit and explicit != '待确认':
         return explicit
@@ -159,7 +172,7 @@ def infer_runtime_role_label(name: str, *, main_event: str = '', scene_core: str
             actor_name = sanitize_runtime_name(actor)
             if actor_name:
                 thread_actors.add(actor_name)
-    text_parts = [str(main_event or ''), str(scene_core or '')]
+    text_parts = [str(main_event or '')]
     for item in active_threads or []:
         if not isinstance(item, dict):
             continue
@@ -176,21 +189,21 @@ def infer_runtime_role_label(name: str, *, main_event: str = '', scene_core: str
     return '待确认'
 
 
-def _choose_role_label(name: str, explicit_role: str = '', previous_role: str = '', *, main_event: str = '', scene_core: str = '', active_threads: list[dict] | None = None, onstage: bool = False, relevant: bool = False) -> str:
+def _choose_role_label(name: str, explicit_role: str = '', previous_role: str = '', *, main_event: str = '', active_threads: list[dict] | None = None, onstage: bool = False, relevant: bool = False) -> str:
     explicit = str(explicit_role or '').strip()
     if explicit and explicit != '待确认':
         return explicit
     previous = str(previous_role or '').strip()
     if previous and previous != '待确认':
         return previous
-    return infer_runtime_role_label(name, main_event=main_event, scene_core=scene_core, active_threads=active_threads, onstage=onstage, relevant=relevant)
+    return infer_runtime_role_label(name, main_event=main_event, active_threads=active_threads, onstage=onstage, relevant=relevant)
 
 
 def dedupe_names(items: Iterable[str], limit: int | None = None) -> list[str]:
     out: list[str] = []
     for item in items:
         name = sanitize_runtime_name(item)
-        if not name or is_protagonist_name(name) or name in out:
+        if not name or is_protagonist_name(name) or looks_like_bad_entity_fragment(name) or name in out:
             continue
         out.append(name)
         if limit is not None and len(out) >= limit:
@@ -481,7 +494,33 @@ def _prefer_stable_primary_label(item: dict, prev: dict | None) -> str:
     prev_primary = str((prev or {}).get('primary_label', '') or '').strip()
     if prev_primary and (_is_degraded_entity_label(primary) or primary == '待确认') and not _is_degraded_entity_label(prev_primary):
         return prev_primary
+    if prev_primary and primary and prev_primary != primary and primary in prev_primary:
+        return prev_primary
     return primary
+
+
+def _meaningful_text(value) -> str:
+    text = str(value or '').strip()
+    return '' if not text or text == '待确认' else text
+
+
+def _merge_scene_entity_details(prev: dict | None, item: dict, *, entity_id: str, primary: str, aliases: list[str], role_label: str, onstage: bool) -> dict:
+    """Keep stable entity identity and only let new extraction fill useful details."""
+    merged = dict(prev or {})
+    for key, value in (item or {}).items():
+        if key in {'entity_id', 'primary_label', 'aliases', 'role_label', 'onstage', 'possible_link'}:
+            continue
+        if key not in merged or merged.get(key) in (None, '', [], {}, '待确认'):
+            merged[key] = value
+    merged['entity_id'] = entity_id
+    merged['primary_label'] = primary
+    merged['aliases'] = aliases
+    merged['role_label'] = role_label
+    merged['onstage'] = onstage
+    candidate_link = _meaningful_text((item or {}).get('possible_link'))
+    prev_link = (prev or {}).get('possible_link') if prev else None
+    merged['possible_link'] = candidate_link or prev_link
+    return merged
 
 
 def _extract_descriptive_entity_names_from_history(prev_state: dict) -> list[str]:
@@ -494,12 +533,7 @@ def _extract_descriptive_entity_names_from_history(prev_state: dict) -> list[str
     if not text:
         return []
     patterns = [
-        r'(高个皂衣人)',
-        r'(靠后的皂衣人)',
-        r'(前头一名皂衣人)',
-        r'(后侧那名皂衣人)',
-        r'(高个男人)',
-        r'(深衣青年)',
+        r'((?:高个|矮个|靠后|前头|后侧|左侧|右侧|靠门|靠窗)[\u4e00-\u9fff]{1,5}(?:人|者|男人|女人|青年|少年|女子|老者))',
     ]
     names: list[str] = []
     for pattern in patterns:
@@ -521,19 +555,7 @@ def _extract_descriptive_pairs_from_history(prev_state: dict) -> list[tuple[str,
     )
     if not text:
         return []
-    pairs: list[tuple[str, str]] = []
-    mapping_patterns = [
-        (r'高个皂衣人', r'皂衣人1'),
-        (r'靠后的皂衣人', r'皂衣人2'),
-        (r'后侧那名皂衣人', r'皂衣人2'),
-        (r'前头一名皂衣人', r'皂衣人1'),
-    ]
-    for concrete, degraded in mapping_patterns:
-        if re.search(concrete, text):
-            pairs.append((degraded, concrete))
-    if re.search(r'深衣青年', text):
-        pairs.append(('深衣青年', '深衣青年'))
-    return pairs
+    return []
 
 
 def _promote_named_groups(candidate_pool: list[dict], prev_state: dict) -> list[dict]:
@@ -589,9 +611,26 @@ def _recent_assistant_text(prev_state: dict, limit: int = 4) -> str:
     return '\n'.join(texts)
 
 
+def _looks_like_abstract_continuity_name(name: str) -> bool:
+    candidate = sanitize_runtime_name(name)
+    if not candidate:
+        return False
+    if candidate in ABSTRACT_CONTINUITY_TOKENS:
+        return True
+    if candidate.endswith(ABSTRACT_CONTINUITY_SUFFIXES):
+        return True
+    if any(candidate.startswith(prefix) and any(part in candidate[len(prefix):] for part in ABSTRACT_CONTINUITY_PARTS) for prefix in ABSTRACT_CONTINUITY_PREFIXES):
+        return True
+    if sum(1 for part in ABSTRACT_CONTINUITY_PARTS if part in candidate) >= 2:
+        return True
+    return False
+
+
 def _looks_like_continuity_name(name: str, text: str) -> bool:
     candidate = sanitize_runtime_name(name)
     if not candidate or is_protagonist_name(candidate):
+        return False
+    if looks_like_modifier_fragment(candidate):
         return False
     if len(candidate) < 2 or len(candidate) > 8:
         return False
@@ -601,6 +640,8 @@ def _looks_like_continuity_name(name: str, text: str) -> bool:
         return False
     if candidate in NON_PERSON_TOKENS:
         return False
+    if _looks_like_abstract_continuity_name(candidate):
+        return False
     if candidate.startswith(('我', '你', '他', '她', '先', '再', '又', '仍', '还', '继续', '低声', '忽然', '终于')):
         return False
     if candidate.endswith(NON_PERSON_SUFFIXES):
@@ -609,7 +650,7 @@ def _looks_like_continuity_name(name: str, text: str) -> bool:
         return False
     if '的' in candidate:
         return False
-    if any(token in candidate for token in ('私盐', '军仓', '账本', '账册', '木匣', '匣子', '西巷', '巷口', '暗记', '线索', '情报')):
+    if any(token in candidate for token in ('账本', '账册', '木匣', '匣子', '线索', '情报')):
         return False
     patterns = [
         rf'{re.escape(candidate)}(?:说|问|笑|道|看|想|将|把|对|向|已|正|仍|又|判定|认为|解释|反驳)',
@@ -664,7 +705,7 @@ def _extract_recovery_candidates(text: str, prev: dict, *, limit: int = 12) -> l
 
 
 def _judge_recovery_candidates(candidates: list[str], text: str, prev: dict) -> list[str] | None:
-    return judge_entity_candidates(candidates, text, _stable_name_pool(prev))
+    return None
 
 
 def _recover_names_from_structure(current: dict, prev: dict) -> list[str]:
@@ -751,6 +792,209 @@ def _should_decay_tracked_object(item: dict, possession_ids: set[str], visibilit
     if recent_text and label in recent_text:
         return False
     return True
+
+
+def _looks_like_bad_object_label(label: str) -> bool:
+    text = str(label or '').strip()
+    if not text:
+        return True
+    if len(text) > 14:
+        return True
+    if any(token in text for token in ('——', '……', '，', '。', '？', '?', '！', '!', '：', ':', '"', '“', '”', '‘', '’')):
+        return True
+    if any(token in text for token in ('准确地说', '停了一瞬', '似乎', '像是', '仿佛', '大概', '忽然', '随后')):
+        return True
+    if any(token in text for token in ('了一', '了个', '一下', '起来', '过去', '下来', '进去', '出来')):
+        return True
+    if '的' in text and (len(text) > 4 or text in {'的包', '的手', '的眼', '的门'}):
+        return True
+    return False
+
+
+def _object_signature(label: str) -> str:
+    text = str(label or '').strip()
+    if not text:
+        return ''
+    return re.sub(r'^(?:一[个把只张本份封]|这[个把只张本份封]|那[个把只张本份封])', '', text).strip()
+
+
+def _object_labels_compatible(left: str, right: str) -> bool:
+    left_sig = _object_signature(left)
+    right_sig = _object_signature(right)
+    if not left_sig or not right_sig:
+        return False
+    if left_sig == right_sig:
+        return True
+    return len(left_sig) >= 2 and len(right_sig) >= 2 and (left_sig in right_sig or right_sig in left_sig)
+
+
+def _prefer_stable_object_label(candidate: str, previous: str) -> str:
+    current = str(candidate or '').strip()
+    prev_label = str(previous or '').strip()
+    if prev_label and (_looks_like_bad_object_label(current) or len(current) < len(prev_label)):
+        return prev_label
+    return current or prev_label
+
+
+def _prefer_stable_object_kind(candidate: str, previous: str) -> str:
+    current = _meaningful_text(candidate) or 'item'
+    prev_kind = _meaningful_text(previous)
+    if prev_kind and prev_kind != 'item' and current == 'item':
+        return prev_kind
+    return current
+
+
+def _merge_tracked_objects(prev_objects: list[dict], candidate_objects: list[dict]) -> list[dict]:
+    prev_items = [item for item in (prev_objects or []) if isinstance(item, dict)]
+    candidate_items = [item for item in (candidate_objects or []) if isinstance(item, dict)]
+    max_id = 0
+    for item in prev_items + candidate_items:
+        object_id = str(item.get('object_id', '') or '')
+        try:
+            max_id = max(max_id, int(object_id.rsplit('_', 1)[1]))
+        except Exception:
+            continue
+
+    merged: list[dict] = []
+    used_prev: set[int] = set()
+    for candidate in candidate_items:
+        label = str(candidate.get('label', '') or '').strip()
+        object_id = str(candidate.get('object_id', '') or '').strip()
+        if not label or _looks_like_bad_object_label(label):
+            continue
+        matched_idx = None
+        for idx, prev in enumerate(prev_items):
+            if idx in used_prev:
+                continue
+            prev_id = str(prev.get('object_id', '') or '').strip()
+            prev_label = str(prev.get('label', '') or '').strip()
+            if (object_id and prev_id and object_id == prev_id) or _object_labels_compatible(label, prev_label):
+                matched_idx = idx
+                break
+        prev = prev_items[matched_idx] if matched_idx is not None else None
+        if matched_idx is not None:
+            used_prev.add(matched_idx)
+        if prev:
+            stable_id = str(prev.get('object_id', '') or '').strip() or object_id
+            stable_label = _prefer_stable_object_label(label, str(prev.get('label', '') or ''))
+            merged_item = dict(prev)
+            merged_item['object_id'] = stable_id
+            merged_item['label'] = stable_label
+            merged_item['kind'] = _prefer_stable_object_kind(candidate.get('kind'), prev.get('kind'))
+            merged_item['story_relevant'] = bool(candidate.get('story_relevant', prev.get('story_relevant', True)))
+            merged.append(merged_item)
+            continue
+        if not object_id:
+            max_id += 1
+            object_id = f'obj_{max_id:02d}'
+        merged.append({
+            **candidate,
+            'object_id': object_id,
+            'label': label,
+            'kind': _meaningful_text(candidate.get('kind')) or 'item',
+            'story_relevant': bool(candidate.get('story_relevant', True)),
+        })
+
+    for idx, prev in enumerate(prev_items):
+        if idx in used_prev:
+            continue
+        label = str(prev.get('label', '') or '').strip()
+        object_id = str(prev.get('object_id', '') or '').strip()
+        if not label or not object_id or _looks_like_bad_object_label(label):
+            continue
+        merged.append(dict(prev))
+    return merged
+
+
+def _entity_lookup_by_name(entities: list[dict]) -> dict[str, dict]:
+    lookup: dict[str, dict] = {}
+    for entity in entities or []:
+        if not isinstance(entity, dict):
+            continue
+        primary = sanitize_runtime_name(entity.get('primary_label', ''))
+        if not primary:
+            continue
+        lookup[primary] = entity
+        for alias in entity.get('aliases', []) or []:
+            alias_text = sanitize_runtime_name(alias)
+            if alias_text and alias_text not in lookup:
+                lookup[alias_text] = entity
+    return lookup
+
+
+def _apply_object_entity_bindings(state: dict) -> dict:
+    entities = [dict(item) for item in (state.get('scene_entities', []) or []) if isinstance(item, dict)]
+    objects = [dict(item) for item in (state.get('tracked_objects', []) or []) if isinstance(item, dict)]
+    possession = [dict(item) for item in (state.get('possession_state', []) or []) if isinstance(item, dict)]
+    visibility_by_id = {
+        str(item.get('object_id', '') or '').strip(): item
+        for item in (state.get('object_visibility', []) or [])
+        if isinstance(item, dict) and str(item.get('object_id', '') or '').strip()
+    }
+    entity_lookup = _entity_lookup_by_name(entities)
+    entity_by_primary = {
+        sanitize_runtime_name(item.get('primary_label', '')): item
+        for item in entities
+        if sanitize_runtime_name(item.get('primary_label', ''))
+    }
+    object_by_id = {
+        str(item.get('object_id', '') or '').strip(): item
+        for item in objects
+        if str(item.get('object_id', '') or '').strip()
+    }
+    owned_by_entity: dict[str, list[dict]] = {}
+    normalized_possession: list[dict] = []
+
+    for item in possession:
+        object_id = str(item.get('object_id', '') or '').strip()
+        holder = sanitize_runtime_name(item.get('holder', ''))
+        if not object_id or not holder or object_id not in object_by_id:
+            continue
+        entity = entity_lookup.get(holder)
+        if entity:
+            holder = sanitize_runtime_name(entity.get('primary_label', '')) or holder
+        next_item = dict(item)
+        next_item['holder'] = holder
+        normalized_possession.append(next_item)
+
+        obj = object_by_id[object_id]
+        obj['owner'] = holder
+        obj['owner_type'] = 'npc' if entity else ('protagonist' if is_protagonist_name(holder) else 'unknown')
+        if entity:
+            entity_id = str(entity.get('entity_id', '') or '').strip()
+            if entity_id:
+                obj['bound_entity_id'] = entity_id
+            obj['bound_entity_label'] = holder
+        status = str(item.get('status', '') or '').strip()
+        if status:
+            obj['possession_status'] = status
+        if entity:
+            owned_by_entity.setdefault(holder, []).append({
+                'object_id': object_id,
+                'label': str(obj.get('label', '') or '').strip(),
+                'status': status or 'carried',
+                'visibility': str((visibility_by_id.get(object_id) or {}).get('visibility', '') or '').strip(),
+            })
+
+    for primary, entity in entity_by_primary.items():
+        owned = owned_by_entity.get(primary, [])
+        if owned:
+            seen_ids = set()
+            clean_owned = []
+            for owned_item in owned:
+                object_id = owned_item.get('object_id')
+                if not object_id or object_id in seen_ids:
+                    continue
+                seen_ids.add(object_id)
+                clean_owned.append(owned_item)
+            entity['owned_objects'] = clean_owned[:6]
+        elif 'owned_objects' in entity:
+            entity['owned_objects'] = []
+
+    state['tracked_objects'] = list(object_by_id.values())
+    state['possession_state'] = normalized_possession
+    state['scene_entities'] = entities
+    return state
 
 
 def _promote_degraded_candidates(candidate_pool: list[dict], prev_entities: list[dict], prev_state: dict) -> list[dict]:
@@ -851,6 +1095,8 @@ def merge_scene_entities(prev_entities: list[dict], candidate_entities: list[dic
         primary = (item.get('primary_label') or '').strip()
         if not primary:
             continue
+        if looks_like_modifier_fragment(primary):
+            continue
         prev = prev_by_name.get(primary)
         if prev is None:
             prev = _find_important_entity(item, important_npcs or [], prev_entities, used_prev_ids)
@@ -867,20 +1113,22 @@ def merge_scene_entities(prev_entities: list[dict], candidate_entities: list[dic
         else:
             max_id += 1
             entity_id = f'scene_npc_{max_id:02d}'
-        merged.append({
-            'entity_id': entity_id,
-            'primary_label': primary,
-            'aliases': aliases,
-            'role_label': _choose_role_label(
-                primary,
-                item.get('role_label', ''),
-                prev.get('role_label', '') if prev else '',
-                onstage=primary in onstage_names,
-                relevant=primary not in onstage_names,
-            ).strip() or '待确认',
-            'onstage': primary in onstage_names,
-            'possible_link': item.get('possible_link') if item.get('possible_link') is not None else (prev.get('possible_link') if prev else None),
-        })
+        role_label = _choose_role_label(
+            primary,
+            item.get('role_label', ''),
+            prev.get('role_label', '') if prev else '',
+            onstage=primary in onstage_names,
+            relevant=primary not in onstage_names,
+        ).strip() or '待确认'
+        merged.append(_merge_scene_entity_details(
+            prev,
+            item,
+            entity_id=entity_id,
+            primary=primary,
+            aliases=aliases,
+            role_label=role_label,
+            onstage=primary in onstage_names,
+        ))
 
     for prev in prev_entities or []:
         prev_id = str((prev or {}).get('entity_id', '') or '')
@@ -959,39 +1207,131 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     prev = prev_state or {}
     current = dict(state or {})
 
-    def _looks_like_bad_object_label(label: str) -> bool:
-        text = str(label or '').strip()
+    def _derive_names_from_scene_entities(items: list[dict], *, onstage_only: bool = False) -> list[str]:
+        out: list[str] = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            if onstage_only and not bool(item.get('onstage')):
+                continue
+            name = sanitize_runtime_name(item.get('primary_label', ''))
+            if not name or is_protagonist_name(name) or name in out or looks_like_bad_entity_fragment(name):
+                continue
+            out.append(name)
+            if len(out) >= 6:
+                break
+        return out
+
+    def _normalize_carryover_signals(items) -> list[dict]:
+        out = []
+        seen = set()
+        for item in items or []:
+            if isinstance(item, str):
+                signal_type = 'mixed'
+                text = str(item or '').strip()
+            elif isinstance(item, dict):
+                signal_type = str(item.get('type', '') or 'mixed').strip() or 'mixed'
+                text = str(item.get('text', '') or '').strip()
+            else:
+                continue
+            if not text:
+                continue
+            key = (signal_type, text)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({'type': signal_type, 'text': text})
+            if len(out) >= 6:
+                break
+        return out
+
+    def _derive_risks_clues_from_signals(items: list[dict]) -> tuple[list[str], list[str]]:
+        risks = []
+        clues = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            signal_type = str(item.get('type', '') or 'mixed').strip() or 'mixed'
+            text = str(item.get('text', '') or '').strip()
+            if not text:
+                continue
+            if signal_type in {'risk', 'mixed'} and text not in risks:
+                risks.append(text)
+            if signal_type in {'clue', 'mixed'} and text not in clues:
+                clues.append(text)
+        return risks[:4], clues[:4]
+
+    def _looks_like_fragmentary_core_value(value: str, field: str) -> bool:
+        text = str(value or '').strip()
         if not text:
             return True
-        if len(text) > 14:
+        actor_names = set(current.get('onstage_npcs', []) or []) | set(current.get('relevant_npcs', []) or [])
+        actor_names |= {str(item.get('primary_label', '') or '').strip() for item in (current.get('scene_entities', []) or []) if isinstance(item, dict)}
+        actor_names = {name for name in actor_names if name}
+        if len(text) < 4:
             return True
-        if any(token in text for token in ('——', '……', '，', '。', '？', '?', '！', '!', '：', ':', '"', '“', '”', '‘', '’')):
+        if field != 'main_event' and field != 'immediate_goal' and len(text) > 42:
             return True
-        if any(token in text for token in ('准确地说', '停了一瞬', '似乎', '像是', '仿佛', '大概', '忽然', '随后')):
+        if '→' in text:
             return True
-        if any(token in text for token in ('了一', '了个', '一下', '起来', '过去', '下来', '进去', '出来')):
+        if text.count('：') + text.count(':') >= 1 and len(text) <= 20:
             return True
-        if '的' in text and len(text) > 4:
+        if text.startswith(('说：', '问：', '答：', '看着', '盯着', '靠着', '贴着', '撇撇嘴', '皱着眉', '抿着嘴', '仰着头', '缩在')):
+            return True
+        if text.startswith(('我', '你', '她', '他')) and len(text) <= 18:
+            return True
+        if text.endswith(('了', '着', '呢', '呀', '吧', '吗')) and len(text) <= 18:
+            return True
+        if field == 'immediate_goal' and len(text) <= 4:
+            return True
+        if field != 'immediate_goal' and actor_names and not any(name in text for name in actor_names) and '，' in text:
             return True
         return False
 
-    for key in ['time', 'location', 'main_event', 'scene_core', 'immediate_goal']:
+    for key in ['time', 'location', 'main_event', 'immediate_goal']:
         value = current.get(key)
         if not isinstance(value, str) or not value.strip():
             current[key] = prev.get(key, '待确认')
         else:
             current[key] = value.strip()
 
-    current['onstage_npcs'] = dedupe_names(current.get('onstage_npcs', prev.get('onstage_npcs', [])), limit=6)
+    for key in ['main_event', 'immediate_goal']:
+        if _looks_like_fragmentary_core_value(current.get(key, ''), key):
+            previous_value = str(prev.get(key, '') or '').strip()
+            if previous_value and not _looks_like_fragmentary_core_value(previous_value, key):
+                current[key] = previous_value
+                continue
+            active_main = next((str(item.get('label', '') or '').strip() for item in (current.get('active_threads', []) or []) if isinstance(item, dict) and str(item.get('kind', '') or '') == 'main'), '')
+            if active_main and not _looks_like_fragmentary_core_value(active_main, key):
+                current[key] = active_main
+            elif key == 'immediate_goal':
+                current[key] = '待确认'
+
+    entity_onstage_names = _derive_names_from_scene_entities(current.get('scene_entities', []), onstage_only=True)
+    if entity_onstage_names:
+        current['onstage_npcs'] = entity_onstage_names
+    else:
+        current['onstage_npcs'] = dedupe_names(current.get('onstage_npcs', prev.get('onstage_npcs', [])), limit=6)
+    current['onstage_npcs'] = [name for name in current['onstage_npcs'] if not looks_like_bad_entity_fragment(name)]
     current['relevant_npcs'] = dedupe_names(
         [name for name in current.get('relevant_npcs', prev.get('relevant_npcs', [])) if name not in current['onstage_npcs']],
         limit=6,
     )
-    current['immediate_risks'] = normalize_text_list(current.get('immediate_risks', prev.get('immediate_risks', [])), limit=4)
-    current['carryover_clues'] = normalize_text_list(current.get('carryover_clues', prev.get('carryover_clues', [])), limit=4)
+    current['relevant_npcs'] = [name for name in current['relevant_npcs'] if not looks_like_bad_entity_fragment(name)]
+
+    current['carryover_signals'] = _normalize_carryover_signals(current.get('carryover_signals', prev.get('carryover_signals', [])))
+    if current['carryover_signals']:
+        derived_risks, derived_clues = _derive_risks_clues_from_signals(current['carryover_signals'])
+        current['immediate_risks'] = normalize_text_list(derived_risks, limit=4)
+        current['carryover_clues'] = normalize_text_list(derived_clues, limit=4)
+    else:
+        current['immediate_risks'] = normalize_text_list(current.get('immediate_risks', prev.get('immediate_risks', [])), limit=4)
+        current['carryover_clues'] = normalize_text_list(current.get('carryover_clues', prev.get('carryover_clues', [])), limit=4)
     tracked_objects = current.get('tracked_objects', prev.get('tracked_objects', []))
     if not isinstance(tracked_objects, list):
         tracked_objects = prev.get('tracked_objects', []) if isinstance(prev.get('tracked_objects', []), list) else []
+    prev_tracked_objects = prev.get('tracked_objects', []) if isinstance(prev.get('tracked_objects', []), list) else []
+    tracked_objects = _merge_tracked_objects(prev_tracked_objects, tracked_objects)
     normalized_objects = []
     seen_object_ids: set[str] = set()
     for idx, item in enumerate(tracked_objects):
@@ -1019,12 +1359,19 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         possession_state = prev.get('possession_state', []) if isinstance(prev.get('possession_state', []), list) else []
     normalized_possession = []
     seen_possession: set[str] = set()
-    valid_holders = set(current['onstage_npcs']) | set(current['relevant_npcs']) | protagonist_names()
+    early_holder_lookup = _entity_lookup_by_name(
+        (current.get('scene_entities', []) if isinstance(current.get('scene_entities', []), list) else [])
+        + (prev.get('scene_entities', []) if isinstance(prev.get('scene_entities', []), list) else [])
+    )
+    valid_holders = set(current['onstage_npcs']) | set(current['relevant_npcs']) | protagonist_names() | set(early_holder_lookup.keys())
     for item in possession_state:
         if not isinstance(item, dict):
             continue
         object_id = str(item.get('object_id', '') or '').strip()
         holder = sanitize_runtime_name(item.get('holder', ''))
+        holder_entity = early_holder_lookup.get(holder)
+        if holder_entity:
+            holder = sanitize_runtime_name(holder_entity.get('primary_label', '')) or holder
         if not object_id or not holder or object_id in seen_possession:
             continue
         if valid_holders and holder not in valid_holders:
@@ -1138,7 +1485,6 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             item.get('role_label', ''),
             '',
             main_event=current.get('main_event', ''),
-            scene_core=current.get('scene_core', ''),
             active_threads=current.get('active_threads', []),
             onstage=primary in set(current.get('onstage_npcs', []) or []),
             relevant=primary in set(current.get('relevant_npcs', []) or []),
@@ -1150,8 +1496,10 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
                 continue
             if str(item.get('kind', '') or '') != 'main':
                 continue
-            item['label'] = current_main_event
-            item['key'] = _thread_key_from_label('main', current_main_event)
+            current_label = str(item.get('label', '') or '')
+            if _should_override_main_label_with_event(current_label, current_main_event):
+                item['label'] = current_main_event
+                item['key'] = _thread_key_from_label('main', current_main_event)
             break
     important_npcs = current.get('important_npcs', prev.get('important_npcs', []))
     if not isinstance(important_npcs, list):
@@ -1193,7 +1541,6 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
                 item.get('role_label', ''),
                 '',
                 main_event=current_main_event,
-                scene_core=current.get('scene_core', ''),
                 active_threads=current.get('active_threads', []),
                 onstage=label in set(current.get('onstage_npcs', []) or []),
                 relevant=label in set(current.get('relevant_npcs', []) or []),
@@ -1206,6 +1553,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     current['opening_choice'] = current.get('opening_choice', prev.get('opening_choice'))
     current['opening_resolved'] = bool(current.get('opening_resolved', prev.get('opening_resolved', False)))
     current['opening_started'] = bool(current.get('opening_started', prev.get('opening_started', False)))
+    current['state_keeper_bootstrapped'] = bool(current.get('state_keeper_bootstrapped', prev.get('state_keeper_bootstrapped', False)))
 
     if session_id:
         current['session_id'] = session_id
@@ -1218,12 +1566,15 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         current.get('knowledge_scope', {}),
     )
 
+    current = _apply_object_entity_bindings(current)
+
     return current
 
 
 def fallback_scene_entities(names: Iterable[str]) -> list[dict]:
     out: list[dict] = []
-    for idx, name in enumerate(names, start=1):
+    clean_names = dedupe_names(names)
+    for idx, name in enumerate(clean_names, start=1):
         out.append({
             'entity_id': f'scene_npc_{idx:02d}',
             'primary_label': name,
@@ -1255,7 +1606,6 @@ def parse_root_state_markdown(text: str, session_id: str) -> dict:
         'time': extract_prefixed_value(text, '- 当前时间：'),
         'location': extract_prefixed_value(text, '- 当前地点：'),
         'main_event': extract_prefixed_value(text, '- 当前主事件：'),
-        'scene_core': extract_prefixed_value(text, '- 当前局势核心：'),
         'scene_entities': entities,
         'onstage_npcs': onstage,
         'relevant_npcs': relevant,

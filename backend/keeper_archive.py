@@ -17,24 +17,30 @@ except ImportError:
     from runtime_store import load_history, load_state, session_paths
 
 
-def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overlap_recent_pairs: int = 3) -> dict:
+def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overlap_recent_pairs: int = 3, skip_bootstrap: bool = False, use_llm: bool = True) -> dict:
     import logging
     _logger = logging.getLogger(__name__)
     history = load_history(session_id)
     state = load_state(session_id)
-    try:
-        registry = ensure_npc_registry(session_id, history)
-    except Exception as e:
-        _logger.warning('NPC bootstrap 异常，使用空 registry: %s', e)
+    
+    # 可选：跳过可能阻塞的 bootstrap agents
+    if not skip_bootstrap:
+        try:
+            registry = ensure_npc_registry(session_id, history)
+        except Exception as e:
+            _logger.warning('NPC bootstrap 异常，使用空 registry: %s', e)
+            registry = {'entities': []}
+        try:
+            ensure_object_registry(session_id, history)
+        except Exception as e:
+            _logger.warning('物品 bootstrap 异常: %s', e)
+        try:
+            ensure_clue_registry(session_id, history)
+        except Exception as e:
+            _logger.warning('情报 bootstrap 异常: %s', e)
+    else:
+        _logger.info('跳过 bootstrap agents（skip_bootstrap=True）')
         registry = {'entities': []}
-    try:
-        ensure_object_registry(session_id, history)
-    except Exception as e:
-        _logger.warning('物品 bootstrap 异常: %s', e)
-    try:
-        ensure_clue_registry(session_id, history)
-    except Exception as e:
-        _logger.warning('情报 bootstrap 异常: %s', e)
 
     pairs = []
     current_user = None
@@ -67,15 +73,19 @@ def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overl
                 'tracked_objects': state.get('tracked_objects', []),
             },
             max_pairs=window_size,
+            use_llm=use_llm,
+            exclude_recent_pairs=0,
         )
         if not digest:
             continue
         digest['window']['from_turn'] = f"turn-{start + 1:04d}"
         digest['window']['to_turn'] = f"turn-{start + len(window_pairs):04d}"
         digest['window']['end_pair_index'] = start + len(window_pairs)
-        if len(digest.get('stable_entities', []) or []) < 2:
-            continue
-        if not (digest.get('ongoing_events') or digest.get('open_loops')):
+        # 放宽过滤条件：只需要有实体或有事件/线索即可
+        has_entities = len(digest.get('stable_entities', []) or []) >= 1
+        has_content = (digest.get('ongoing_events') or digest.get('open_loops') or 
+                      digest.get('tracked_objects') or digest.get('history_digest'))
+        if not (has_entities or has_content):
             continue
         records.append(digest)
 
@@ -100,15 +110,15 @@ def save_keeper_record_archive(session_id: str, archive: dict) -> None:
     _atomic_write_json(path, archive)
 
 
-def load_keeper_record_archive(session_id: str) -> dict:
+def load_keeper_record_archive(session_id: str, *, skip_bootstrap: bool = False, use_llm: bool = True) -> dict:
     path = session_paths(session_id)['keeper_archive']
     if not path.exists():
-        archive = build_keeper_record_archive(session_id)
+        archive = build_keeper_record_archive(session_id, skip_bootstrap=skip_bootstrap, use_llm=use_llm)
         save_keeper_record_archive(session_id, archive)
         return archive
     try:
         return json.loads(path.read_text(encoding='utf-8'))
     except Exception:
-        archive = build_keeper_record_archive(session_id)
+        archive = build_keeper_record_archive(session_id, skip_bootstrap=skip_bootstrap, use_llm=use_llm)
         save_keeper_record_archive(session_id, archive)
         return archive
