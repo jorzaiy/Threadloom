@@ -283,13 +283,17 @@ def load_user_model_store() -> dict:
     current = read_json(USER_MODEL_RUNTIME_CONFIG) if USER_MODEL_RUNTIME_CONFIG.exists() else {}
     if isinstance(current.get('narrator'), dict) and isinstance(current.get('state_keeper'), dict):
         available = _available_site_models(site)
+        narrator_current = str(current.get('narrator', {}).get('model', '') or '').strip()
+        keeper_current = str(current.get('state_keeper', {}).get('model', '') or '').strip()
+        narrator_available = available + ([narrator_current] if narrator_current and narrator_current not in available else [])
+        keeper_available = available + ([keeper_current] if keeper_current and keeper_current not in available else [])
         slim = {
             'version': 1,
             'narrator': {
-                'model': _pick_model_with_fallback([current.get('narrator', {}).get('model')], available),
+                'model': _pick_model_with_fallback([narrator_current], narrator_available),
             },
             'state_keeper': {
-                'model': _pick_model_with_fallback([current.get('state_keeper', {}).get('model')], available),
+                'model': _pick_model_with_fallback([keeper_current], keeper_available),
             },
         }
         if isinstance(current.get('advanced_models'), dict):
@@ -543,6 +547,14 @@ def resolve_provider_model(role: str = 'narrator') -> dict:
     preferred_model = override_model or role_cfg.get('model') or ''
     models = _normalize_models(provider.get('models', []), provider.get('api', 'openai-completions'))
     model = next((item for item in models if item.get('id') == preferred_model), None)
+    if model is None and preferred_model:
+        model = {
+            'id': preferred_model,
+            'name': preferred_model,
+            'api': provider.get('api', 'openai-completions'),
+            'reasoning': False,
+            'input': ['text'],
+        }
     if model is None and models:
         model = models[0]
     if model is None:

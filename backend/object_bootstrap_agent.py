@@ -269,6 +269,9 @@ def ensure_object_registry(session_id: str, history: list[dict], *, window_size:
     processed_pairs = 0 if force else int(registry.get('processed_pairs', 0) or 0)
     if not force and processed_pairs >= len(pairs):
         return registry
+    pending_pairs = len(pairs) - processed_pairs
+    if not force and pending_pairs < 3:
+        return registry
 
     objects = list(registry.get('objects', []) or []) if not force else []
     for start in range(processed_pairs, len(pairs), window_size):

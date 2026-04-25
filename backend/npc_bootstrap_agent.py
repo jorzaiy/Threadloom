@@ -192,36 +192,7 @@ def _merge_registry_entities(existing: list[dict], incoming: list[dict]) -> list
 
 
 def _heuristic_registry(registry: dict, window_pairs: list[tuple[dict, dict]]) -> list[dict]:
-    entities = list(registry.get('entities', []) or [])
-    existing = {sanitize_runtime_name(item.get('canonical_name', '')) for item in entities if isinstance(item, dict)}
-    text = '\n'.join(
-        str(assistant_item.get('content', '') or '')
-        for _user_item, assistant_item in window_pairs
-    )
-    patterns = [
-        (r'瘦掌柜', '掌柜', '客栈掌柜'),
-        (r'掌柜', '掌柜', '客栈掌柜'),
-        (r'小二', '小二', '跑堂小二'),
-        (r'借宿者', '借宿者', '待确认'),
-        (r'深衣青年', '深衣青年', '待确认'),
-        (r'高个皂衣人', '高个皂衣人', '镇北司皂衣人'),
-        (r'皂衣人', '皂衣人', '镇北司皂衣人'),
-    ]
-    for pattern, canonical, role_label in patterns:
-        if not re.search(pattern, text):
-            continue
-        if canonical in existing:
-            continue
-        entities.append({
-            'canonical_name': canonical,
-            'aliases': [canonical],
-            'role_label': role_label,
-            'faction': '待确认',
-            'stability': 'low',
-            'notes': 'heuristic bootstrap',
-        })
-        existing.add(canonical)
-    return entities
+    return list(registry.get('entities', []) or [])
 
 
 def ensure_npc_registry(session_id: str, history: list[dict], *, window_size: int = 10, force: bool = False) -> dict:
@@ -229,6 +200,9 @@ def ensure_npc_registry(session_id: str, history: list[dict], *, window_size: in
     registry = load_npc_registry(session_id)
     processed_pairs = 0 if force else int(registry.get('processed_pairs', 0) or 0)
     if not force and processed_pairs >= len(pairs):
+        return registry
+    pending_pairs = len(pairs) - processed_pairs
+    if not force and pending_pairs < 3:
         return registry
 
     entities = list(registry.get('entities', []) or []) if not force else []

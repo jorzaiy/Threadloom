@@ -229,6 +229,9 @@ def ensure_clue_registry(session_id: str, history: list[dict], *, window_size: i
     processed_pairs = 0 if force else int(registry.get('processed_pairs', 0) or 0)
     if not force and processed_pairs >= len(pairs):
         return registry
+    pending_pairs = len(pairs) - processed_pairs
+    if not force and pending_pairs < 3:
+        return registry
 
     clues = list(registry.get('clues', []) or []) if not force else []
     for start in range(processed_pairs, len(pairs), window_size):

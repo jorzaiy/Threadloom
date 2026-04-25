@@ -37,7 +37,7 @@ def _slug(text: str, fallback: str) -> str:
     if not value:
         return fallback
     value = re.sub(r'[\\/:\s]+', '-', value)
-    value = re.sub(r'[^0-9A-Za-z_\-\u4e00-\u9fff]+', '', value)
+    value = re.sub(r'[^0-9A-Za-z_\-\u4e00-\u9fff·]+', '', value)
     value = value.strip('-')
     return value or fallback
 
@@ -282,11 +282,12 @@ def resolve_legacy_source(path_str: str) -> Path:
 
 def layered_source_map() -> dict[str, Path]:
     return {
-        'user.user_md': user_profile_root() / 'USER.md',
+        'user.player_profile_base_json': user_profile_root() / 'player-profile.base.json',
         'user.player_profile_json': user_profile_root() / 'player-profile.json',
         'user.player_profile_md': user_profile_root() / 'player-profile.md',
         'user.presets_dir': user_presets_root(),
         'character.character_data': character_source_root() / 'character-data.json',
+        'character.player_profile_override_json': character_source_root() / 'player-profile.override.json',
         'character.lorebook': character_source_root() / 'lorebook.json',
         'character.canon': character_source_root() / 'canon.md',
         'character.state': character_source_root() / 'state.md',
@@ -309,9 +310,10 @@ def resolve_layered_source(path_str: str) -> Path:
         return SHARED_ROOT
 
     mappings = {
-        'USER.md': resolve_source_key('user.user_md'),
+        'player-profile.base.json': resolve_source_key('user.player_profile_base_json'),
         'player-profile.json': resolve_source_key('user.player_profile_json'),
         'player-profile.md': resolve_source_key('user.player_profile_md'),
+        'character/player-profile.override.json': resolve_source_key('character.player_profile_override_json'),
         'character/character-data.json': resolve_source_key('character.character_data'),
         'character/lorebook.json': resolve_source_key('character.lorebook'),
         'memory/canon.md': resolve_source_key('character.canon'),

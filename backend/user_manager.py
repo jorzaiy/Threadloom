@@ -230,8 +230,12 @@ def validate_token(token: str) -> str | None:
     return entry['user_id']
 
 
-def resolve_user_from_request(headers: dict) -> str:
-    """从请求头提取当前用户。多用户关闭时返回 default-user。"""
+def resolve_user_from_request(headers: dict) -> str | None:
+    """从请求头提取当前用户。
+
+    - 多用户关闭时：返回 default-user（单用户产品面兼容）
+    - 多用户开启时：仅在令牌有效时返回对应 user_id；否则返回 None
+    """
     if not is_multi_user_enabled():
         return DEFAULT_USER_ID
     token = ''
@@ -245,5 +249,4 @@ def resolve_user_from_request(headers: dict) -> str:
             if part.startswith('session_token='):
                 token = part[len('session_token='):]
                 break
-    uid = validate_token(token)
-    return uid or DEFAULT_USER_ID
+    return validate_token(token)

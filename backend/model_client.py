@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import logging
+import os
 import re
 import time
 import urllib.request
@@ -14,6 +15,13 @@ log = logging.getLogger(__name__)
 _RETRY_STATUS_CODES = (429, 503)
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 2.0
+
+
+def _request_timeout() -> int:
+    try:
+        return max(5, int(os.environ.get('THREADLOOM_MODEL_TIMEOUT', '45') or 45))
+    except Exception:
+        return 45
 
 
 def _retry_on_rate_limit(func):
@@ -48,7 +56,7 @@ def _post_json(url: str, payload: dict, headers: dict) -> dict:
         headers=headers,
         method='POST',
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=_request_timeout()) as resp:
         return json.loads(resp.read().decode('utf-8'))
 
 
@@ -63,7 +71,7 @@ def _post_stream_chat(url: str, payload: dict, headers: dict) -> tuple[str, dict
     content_parts = []
     usage = {'prompt_tokens': 0, 'completion_tokens': 0}
     finish_reason = None
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=_request_timeout()) as resp:
         for raw in resp:
             line = raw.decode('utf-8', errors='ignore').strip()
             if not line or not line.startswith('data:'):
