@@ -28,7 +28,7 @@ def _slug(text: str) -> str:
     if not value:
         return 'imported-chat'
     value = re.sub(r'[\\/:\s]+', '-', value)
-    value = re.sub(r'[^0-9A-Za-z_\-\u4e00-\u9fff]+', '', value)
+    value = re.sub(r'[^0-9A-Za-z_\-\u4e00-\u9fff·]+', '', value)
     return value.strip('-') or 'imported-chat'
 
 
@@ -250,8 +250,6 @@ def _bootstrap_import_session(session_id: str, *, source_path: Path, metadata: d
     state = parse_root_state_markdown(base_state_text, session_id) if base_state_text.strip() else seed_default_state(session_id)
     if not state.get('main_event') or state.get('main_event') == '待确认':
         state['main_event'] = '从导入聊天记录继续推进剧情。'
-    if not state.get('scene_core') or state.get('scene_core') == '待确认':
-        state['scene_core'] = '当前会话由 SillyTavern 聊天记录导入，等待后续重建当前局势。'
     save_state(session_id, state)
 
     context = {

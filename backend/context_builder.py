@@ -4,10 +4,12 @@ from pathlib import Path
 
 from character_assets import load_system_npcs
 from keeper_record_retriever import retrieve_keeper_records
-from npc_bootstrap_agent import ensure_npc_registry
-from object_bootstrap_agent import ensure_object_registry
-from clue_bootstrap_agent import ensure_clue_registry
-from runtime_store import is_complete_assistant_item, load_canon, load_context, load_history, load_persona_index, load_state
+from npc_bootstrap_agent import load_npc_registry
+from object_bootstrap_agent import load_object_registry
+from clue_bootstrap_agent import load_clue_registry
+from player_profile import load_effective_player_profile, render_runtime_player_profile_markdown
+from selector import build_selector_decision
+from runtime_store import is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history, load_persona_index, load_state, load_summary
 from paths import APP_ROOT, SHARED_ROOT, resolve_layered_source
 
 ROOT = SHARED_ROOT
@@ -555,11 +557,12 @@ def build_runtime_context(session_id: str) -> dict:
     runtime_rules = read_text(resolve_source(sources['runtime_rules']))
     state_json = load_state(session_id)
     canon_text = load_canon(session_id)
+    summary_text = load_summary(session_id)
+    event_summaries = load_event_summaries(session_id).get('items', [])
     session_context = load_context(session_id)
     character_core = read_json(resolve_source(sources['character_core']))
-    user_text = read_text(resolve_source(sources.get('user', 'USER.md')))
-    player_profile_md = read_text(resolve_source(sources.get('player_profile_md', 'player-profile.md')))
-    player_profile_json = read_json(resolve_source(sources.get('player_profile_json', 'player-profile.json')))
+    player_profile_json = load_effective_player_profile()
+    player_profile_md = render_runtime_player_profile_markdown(player_profile_json)
 
     preset_dir = resolve_source(sources['preset_dir'])
     active_preset_name = sources.get('active_preset', 'world-sim-balanced')
@@ -571,18 +574,16 @@ def build_runtime_context(session_id: str) -> dict:
             f"- 当前时间：{state_json.get('time', '待确认')}。",
             f"- 当前地点：{state_json.get('location', '待确认')}。",
             f"- 当前主事件：{state_json.get('main_event', '待确认')}。",
-            f"- 当前局势核心：{state_json.get('scene_core', '待确认')}。",
         ])
     onstage = state_json.get('onstage_npcs', [])
     relevant = state_json.get('relevant_npcs', [])
 
     persona = load_persona_summaries(onstage + relevant, session_id=session_id)
-    npc_profiles = load_npc_profiles(resolve_source(sources['npc_profiles_dir']), onstage + relevant)
     recent_history_all = load_history(session_id)
     current_pair_count = count_complete_turn_pairs(recent_history_all)
-    npc_registry = ensure_npc_registry(session_id, recent_history_all)
-    object_registry = ensure_object_registry(session_id, recent_history_all)
-    clue_registry = ensure_clue_registry(session_id, recent_history_all)
+    npc_registry = load_npc_registry(session_id)
+    object_registry = load_object_registry(session_id)
+    clue_registry = load_clue_registry(session_id)
     recent_history_pairs = int(
         memory_cfg.get(
             'recent_history_turns',
@@ -610,10 +611,14 @@ def build_runtime_context(session_id: str) -> dict:
     # 关键词触发源优先围绕当前 state / scene entities，再辅以少量 recent history
     trigger_parts = []
     trigger_parts.append(state_json.get('main_event', ''))
-    trigger_parts.append(state_json.get('scene_core', ''))
     trigger_parts.append(state_json.get('time', ''))
     trigger_parts.append(state_json.get('location', ''))
     trigger_parts.append(state_json.get('immediate_goal', ''))
+    for item in state_json.get('carryover_signals', []) or []:
+        if not isinstance(item, dict):
+            continue
+        trigger_parts.append(str(item.get('type', '') or ''))
+        trigger_parts.append(str(item.get('text', '') or ''))
     trigger_parts.extend(state_json.get('immediate_risks', []) or [])
     trigger_parts.extend(state_json.get('carryover_clues', []) or [])
     for item in arbiter_signals.get('events', []) if isinstance(arbiter_signals.get('events', []), list) else []:
@@ -707,6 +712,30 @@ def build_runtime_context(session_id: str) -> dict:
         continuity_candidates.append(item)
         seen_candidate_names.add(item['name'])
 
+    selector_decision = build_selector_decision(
+        state_json=state_json,
+        recent_history=recent_history,
+        keeper_records=keeper_records,
+        active_threads=active_threads,
+        important_npcs=important_npcs,
+        onstage=onstage,
+        relevant=relevant,
+        lorebook_entries=lorebook_entries,
+        system_npc_candidates=system_npc_candidates,
+        lorebook_npc_candidates=merged_lorebook_candidates,
+        event_summaries=event_summaries,
+        summary_text=summary_text,
+    )
+    inject_lorebook_text = bool(selector_decision.get('inject_lorebook_text'))
+    inject_npc_candidates = bool(selector_decision.get('inject_npc_candidates'))
+    npc_profile_targets = selector_decision.get('npc_profile_targets', []) or []
+    npc_profiles = load_npc_profiles(resolve_source(sources['npc_profiles_dir']), npc_profile_targets) if npc_profile_targets else []
+    if not inject_npc_candidates:
+        system_npc_candidates = []
+        merged_lorebook_candidates = []
+    if not inject_lorebook_text:
+        lorebook_text = ''
+
     # --- Preset 内容提取 ---
     preset_system_template = preset.get('systemTemplate', '')
     preset_reply_rules = preset.get('replyRules', [])
@@ -715,7 +744,6 @@ def build_runtime_context(session_id: str) -> dict:
         'runtime_rules': runtime_rules,
         'session_context': session_context,
         'character_core': character_core,
-        'user_text': user_text,
         'player_profile_md': player_profile_md,
         'player_profile_json': player_profile_json,
         'canon': canon_text,
@@ -732,15 +760,16 @@ def build_runtime_context(session_id: str) -> dict:
         'lorebook_npc_candidates': merged_lorebook_candidates,
         'system_npc_candidates': system_npc_candidates,
         'continuity_candidates': continuity_candidates,
+        'context_audit': selector_decision,
         'scene_facts': {
             'time': state_json.get('time', '待确认'),
             'location': state_json.get('location', '待确认'),
             'main_event': state_json.get('main_event', '待确认'),
-            'scene_core': state_json.get('scene_core', '待确认'),
             'scene_entities': state_json.get('scene_entities', []),
             'onstage_npcs': onstage,
             'relevant_npcs': relevant,
             'immediate_goal': [state_json.get('immediate_goal', '待确认')],
+            'carryover_signals': state_json.get('carryover_signals', []),
             'immediate_risks': state_json.get('immediate_risks', []),
             'carryover_clues': state_json.get('carryover_clues', []),
             'tracked_objects': state_json.get('tracked_objects', []),
@@ -757,4 +786,7 @@ def build_runtime_context(session_id: str) -> dict:
         'recent_history': recent_history,
         'npc_registry': npc_registry,
         'keeper_records': keeper_records,
+        'summary_text': summary_text if bool(selector_decision.get('inject_summary')) else '',
+        'event_summaries': event_summaries,
+        'npc_roster': selector_decision.get('npc_roster', []),
     }

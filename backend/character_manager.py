@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import tempfile
+from urllib.parse import quote
 from base64 import b64decode
 from pathlib import Path
 
 from card_hints import invalidate_card_hints_cache
 from card_importer import extract_card_json, import_card_to_target, load_raw_card
+from player_profile import build_player_profile_override_draft, load_base_player_profile
 from paths import APP_ROOT, active_character_id, active_user_id, active_user_label, character_root, normalize_session_id, user_root
 from runtime_store import invalidate_history_cache
 
@@ -44,6 +47,22 @@ def current_user_character_root() -> Path:
     return user_root() / 'characters'
 
 
+def _character_cover_url(character_id: str) -> str | None:
+    encoded_id = quote(character_id)
+    character_root = current_user_character_root() / character_id
+    asset_root = character_root / 'source' / 'assets'
+    for stem in ('cover-small', 'cover', 'cover-original'):
+        for ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
+            candidate = asset_root / f'{stem}{ext}'
+            if candidate.exists():
+                return f'/character-cover?character_id={encoded_id}&variant={stem}'
+    imported_root = character_root / 'source' / 'imported'
+    for candidate in sorted(imported_root.glob('*.original.*')):
+        if candidate.is_file():
+            return f'/character-cover?character_id={encoded_id}'
+    return None
+
+
 def list_character_cards() -> list[dict]:
     root = current_user_character_root()
     items: list[dict] = []
@@ -63,6 +82,7 @@ def list_character_cards() -> list[dict]:
             'name': str(data.get('name', '') or core.get('title', '') or path.name).strip() or path.name,
             'subtitle': str(core.get('tagline', '') or data.get('role', '') or '').strip(),
             'summary': str(core.get('summary', '') or '').strip(),
+            'cover_url': _character_cover_url(path.name),
             'has_source': source.exists(),
             'active': path.name == active_id,
         })
@@ -90,6 +110,30 @@ def set_active_character(character_id: str) -> dict:
     return {
         'user_id': active_user_label(),
         'character_id': value,
+        'characters': list_character_cards(),
+    }
+
+
+def delete_character_card(character_id: str) -> dict:
+    value = _slug(character_id)
+    target = current_user_character_root() / value
+    if not target.exists():
+        raise ValueError('character not found')
+    if target.resolve() == current_user_character_root().resolve():
+        raise ValueError('invalid character target')
+    shutil.rmtree(target)
+
+    remaining = list_character_cards()
+    active_id = get_active_character_id()
+    if active_id == value:
+        next_id = remaining[0]['character_id'] if remaining else ''
+        _write_json(ACTIVE_CHARACTER_FILE, {'character_id': next_id})
+    invalidate_card_hints_cache()
+    invalidate_history_cache()
+    return {
+        'ok': True,
+        'deleted_character_id': value,
+        'active_character_id': get_active_character_id() if remaining else '',
         'characters': list_character_cards(),
     }
 
@@ -135,6 +179,7 @@ def import_character_card_upload(filename: str, file_bytes: bytes, *, target_nam
     report['user_id'] = active_user_label()
     report['character_id'] = target_character_id
     report['characters'] = list_character_cards()
+    report['player_profile_override_draft'] = build_player_profile_override_draft(payload if isinstance(payload, dict) else {}, base_profile=load_base_player_profile())
     return report
 
 

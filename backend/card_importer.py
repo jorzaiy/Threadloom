@@ -65,6 +65,46 @@ def _truncate(value: str, limit: int, label: str = '') -> str:
     return value[:limit]
 
 
+def _truncate_at_boundary(value: str, limit: int, label: str = '') -> str:
+    text = str(value or '').strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    boundaries = [cut.rfind(token) for token in ('\n\n', '\n-', '\n1.', '\n2.', '\n3.', '\n4.', '\n5.', '。', '！', '？', '. ')]
+    boundary = max(boundaries)
+    if boundary >= max(120, int(limit * 0.55)):
+        cut = cut[:boundary].rstrip()
+    else:
+        cut = cut.rstrip('，,；;：:、-—“"\' ')
+    cut = re.sub(r'\n\s*\d{1,2}[.)、：:]?\s*$', '', cut).rstrip()
+    if label:
+        logger.warning('Truncated %s from %d to %d chars at boundary', label, len(text), len(cut))
+    return cut
+
+
+def _clean_faction_label(value: str) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ''
+    text = text.strip('-•* ').rstrip('。；;，,')
+    if any(sep in text for sep in ('：', ':')):
+        head, tail = re.split(r'[：:]', text, 1)
+        head = head.strip('-•* ')
+        tail = tail.strip()
+        if head in {'势力', '势力范围', '势力定位', '定位', '说明', '核心', '主要成员', '领袖', '类型', '总部'}:
+            return ''
+        text = head if len(head) <= 12 else ''
+        if not text and tail and len(tail) <= 12 and not any(ch in tail for ch in '，。；,;'):
+            text = tail
+    if len(text) > 12:
+        return ''
+    if any(token in text for token in ('范围', '定位', '控制着', '传说中', '名义上', '非统一', '游离', '隐性资源', '负责', '当前')):
+        return ''
+    if any(ch in text for ch in '，。；,;()（）[]【】'):
+        return ''
+    return text
+
+
 def _read_png_chunks(data: bytes) -> list[tuple[str, bytes]]:
     if data[:8] != b'\x89PNG\r\n\x1a\n':
         raise ValueError('not a valid PNG file')
@@ -506,8 +546,9 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             'aliases': [],
             'role_label': name,
             'faction': '',
-            'summary': summary[:1200],
+            'summary': _truncate_at_boundary(summary, 1200, 'card primary npc summary'),
             'source_entry_id': 'card-core',
+            'source_kind': 'card_core',
             'priority': 1000,
         }]
 
@@ -556,8 +597,9 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
                 'aliases': [],
                 'role_label': role_label,
                 'faction': '',
-                'summary': summary[:1200],
+                'summary': _truncate_at_boundary(summary, 1200, 'relationship template npc summary'),
                 'source_entry_id': str(entry.get('id', '') or ''),
+                'source_kind': 'relationship_template',
                 'priority': int(entry.get('priority', 0) or 0) + 500,
             })
         deduped: list[dict] = []
@@ -600,8 +642,9 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
                 'aliases': [],
                 'role_label': title or '重要人物',
                 'faction': '',
-                'summary': row[:1200],
+                'summary': _truncate_at_boundary(row, 1200, 'markdown table npc summary'),
                 'source_entry_id': str(entry.get('id', '') or ''),
+                'source_kind': 'markdown_table',
                 'priority': int(entry.get('priority', 0) or 0),
             })
         return out
@@ -648,6 +691,8 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             return True
         if any(text.endswith(token) for token in ('盟', '派', '楼', '堂', '阁', '府', '军', '司', '门', '教', '帮', '骑')):
             if next_line.startswith(('定位:', '行事准则:', '权力实质:', '据点:', '类型:', '总部', '核心与理念:', '历史真相:')):
+                return True
+            if re.match(r'^[一二三四五六七八九十0-9]+[.)、：:]\s*(?:定位|介绍|说明)[:：]', next_line):
                 return True
         return False
 
@@ -731,7 +776,7 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             while index < len(lines):
                 probe = lines[index]
                 probe_next = lines[index + 1] if index + 1 < len(lines) else ''
-                if _is_org_heading(probe, probe_next) or _looks_like_person_block(probe, probe_next):
+                if _is_org_heading(probe, probe_next) or _is_role_container_heading(probe) or _looks_like_person_block(probe, probe_next):
                     break
                 block_lines.append(probe)
                 index += 1
@@ -764,9 +809,10 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
                 'name': name,
                 'aliases': aliases,
                 'role_label': role_label,
-                'faction': current_faction,
-                'summary': summary[:1200],
+                'faction': _clean_faction_label(current_faction),
+                'summary': _truncate_at_boundary(summary, 1200, 'embedded npc summary'),
                 'source_entry_id': str(entry.get('id', '') or ''),
+                'source_kind': 'embedded_heading',
                 'priority': int(entry.get('priority', 0) or 0),
             })
         return out
@@ -841,9 +887,10 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             'name': primary_name,
             'aliases': aliases,
             'role_label': role_label or primary_name,
-            'faction': faction,
-            'summary': content[:1200],
+            'faction': _clean_faction_label(faction),
+            'summary': _truncate_at_boundary(content, 1200, 'explicit npc summary'),
             'source_entry_id': str(entry.get('id', '') or ''),
+            'source_kind': 'explicit_npc_entry',
             'priority': int(entry.get('priority', 0) or 0),
         })
 
@@ -864,9 +911,16 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             str(item.get('summary', '') or ''),
         ):
             continue
-        if item in core_items:
+        target_bucket = 'core' if item in core_items else ('faction' if item in faction_named_items else 'roster')
+        item = {
+            **item,
+            'faction': _clean_faction_label(str(item.get('faction', '') or '')),
+            'summary': _truncate_at_boundary(str(item.get('summary', '') or ''), 1200, 'system npc summary'),
+            'source_kind': str(item.get('source_kind', '') or 'unknown'),
+        }
+        if target_bucket == 'core':
             deduped_core.append(item)
-        elif item in faction_named_items:
+        elif target_bucket == 'faction':
             deduped_faction.append(item)
         else:
             deduped_roster.append(item)
@@ -891,7 +945,6 @@ def _extract_openings_payload(card_json: dict) -> dict:
             'time': '待确认',
             'location': '待确认',
             'main_event': '开局待展开。',
-            'scene_core': '等待第一轮输入来确立当前场景。',
             'immediate_goal': '先进入开局场景，再决定第一步行动。',
         },
         'options': options,
@@ -930,6 +983,15 @@ def _write_imported_backups(card_json: dict, png_data: bytes | None, *, raw_card
 
 def _write_manifest(card_json: dict, lorebook: dict, system_npcs: dict, openings: dict, backups: dict, covers: dict, *, raw_card_hash: str) -> dict:
     payload = _extract_card_payload(card_json)
+    raw_lorebook = _extract_lorebook(card_json)
+    raw_entries = raw_lorebook.get('entries', []) if isinstance(raw_lorebook.get('entries', []), list) else []
+    kept_entries = lorebook.get('entries', []) if isinstance(lorebook.get('entries', []), list) else []
+    source_kinds: dict[str, int] = {}
+    for item in (system_npcs.get('core', []) or []) + (system_npcs.get('faction_named', []) or []) + (system_npcs.get('roster', []) or []):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get('source_kind', '') or 'unknown')
+        source_kinds[kind] = source_kinds.get(kind, 0) + 1
     manifest = {
         'version': 1,
         'importer': 'threadloom-v0.3',
@@ -950,10 +1012,17 @@ def _write_manifest(card_json: dict, lorebook: dict, system_npcs: dict, openings
             'cover_paths': covers.get('cover_paths', []),
         },
         'stats': {
+            'raw_lorebook_entries': len(raw_entries),
             'lorebook_entries': len(lorebook.get('entries', [])),
+            'filtered_lorebook_entries': max(0, len(raw_entries) - len(kept_entries)),
+            'archive_only_lorebook_entries': sum(1 for item in raw_entries if item.get('runtimeScope') == 'archive_only'),
             'lorebook_foundation_entries': sum(1 for item in (lorebook.get('entries', []) or []) if item.get('runtimeScope') == 'foundation'),
             'lorebook_featured_entries': sum(1 for item in (lorebook.get('entries', []) or []) if item.get('featured')),
             'system_npcs': len(system_npcs.get('items', [])),
+            'system_npcs_core': len(system_npcs.get('core', [])),
+            'system_npcs_faction_named': len(system_npcs.get('faction_named', [])),
+            'system_npcs_roster': len(system_npcs.get('roster', [])),
+            'system_npcs_source_kinds': source_kinds,
             'opening_options': len(openings.get('options', [])),
         },
     }

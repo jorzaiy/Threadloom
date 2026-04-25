@@ -4,11 +4,13 @@ from __future__ import annotations
 from copy import deepcopy
 
 try:
-    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name
+    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, looks_like_modifier_fragment
     from .card_hints import get_service_role_tokens
+    from .keeper_archive import load_keeper_record_archive
 except ImportError:
-    from name_sanitizer import sanitize_runtime_name, is_protagonist_name
+    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, looks_like_modifier_fragment
     from card_hints import get_service_role_tokens
+    from keeper_archive import load_keeper_record_archive
 THREAD_KIND_WEIGHT = {
     'main': 2,
     'risk': 1,
@@ -55,6 +57,16 @@ def _important_key(label: str) -> str:
     return f'important:{(label or "unknown").strip()}'
 
 
+def _is_generic_anchor(label: str, aliases: list[str], role_label: str) -> bool:
+    if not label:
+        return True
+    if len(set(aliases)) >= 2:
+        return False
+    if role_label and not _is_service_role(role_label) and role_label not in {'待确认', '当前互动核心人物', '相关场景人物'}:
+        return False
+    return True
+
+
 def _service_lock_allowed(*, label: str, role_label: str, reference_candidate: bool, user_mentions: int, total_mentions: int, thread_weight: int, retained_entity: bool, latest_change: str) -> bool:
     if reference_candidate:
         return True
@@ -70,6 +82,7 @@ def _service_lock_allowed(*, label: str, role_label: str, reference_candidate: b
 
 def update_important_npcs(state: dict, history: list[dict], reference_candidates: list[dict] | None = None) -> dict:
     current = deepcopy(state or {})
+    session_id = str(current.get('session_id', '') or '').strip()
     current_location = str(current.get('location', '') or '').strip()
     current_main_event = str(current.get('main_event', '') or '').strip()
     previous = current.get('important_npcs', []) if isinstance(current.get('important_npcs', []), list) else []
@@ -108,6 +121,8 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
             continue
         label = sanitize_runtime_name(entity.get('primary_label', ''))
         if not label or is_protagonist_name(label):
+            continue
+        if looks_like_modifier_fragment(label):
             continue
         aliases = [sanitize_runtime_name(alias) for alias in (entity.get('aliases') or []) if sanitize_runtime_name(alias) and not is_protagonist_name(alias)]
         names = [label] + aliases
@@ -159,7 +174,11 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
         )
         if _is_service_role(role_label) and not service_lock_ok and not previously_locked:
             continue
-        if importance_score < 3 and not previously_locked:
+        generic_anchor = _is_generic_anchor(label, aliases, role_label)
+        threshold = 5 if generic_anchor else 3
+        if importance_score < threshold and not previously_locked:
+            continue
+        if generic_anchor and user_mentions == 0 and thread_weight_by_actor.get(label, 0) <= 1 and not reference_candidate and not entity.get('onstage'):
             continue
 
         key = _important_key(label)
@@ -192,13 +211,55 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
             'newly_locked': not previously_locked,
         })
 
+    if not next_items and session_id:
+        try:
+            archive = load_keeper_record_archive(session_id)
+        except Exception:
+            archive = {}
+        registry_items = archive.get('npc_registry', {}).get('entities', []) if isinstance(archive.get('npc_registry', {}), dict) else []
+        for item in registry_items[:4]:
+            if not isinstance(item, dict):
+                continue
+            label = sanitize_runtime_name(item.get('canonical_name', ''))
+            if not label or is_protagonist_name(label):
+                continue
+            key = _important_key(label)
+            if key in seen:
+                continue
+            seen.add(key)
+            aliases = [sanitize_runtime_name(alias) for alias in (item.get('aliases', []) or []) if sanitize_runtime_name(alias) and not is_protagonist_name(alias)]
+            next_items.append({
+                'key': key,
+                'primary_label': label,
+                'aliases': aliases,
+                'role_label': str(item.get('role_label', '') or '待确认').strip() or '待确认',
+                'anchor_type': 'continuous',
+                'worldbook_candidate': False,
+                'reference_source': 'keeper_registry',
+                'importance_score': 3,
+                'locked': False,
+                'retained': True,
+                'present_now': False,
+                'inactive_turns': 0,
+                'last_location': current_location,
+                'last_main_event': current_main_event,
+                'newly_locked': False,
+            })
+
     for key, prev in prev_by_key.items():
         if key in seen:
             continue
         label = sanitize_runtime_name(prev.get('primary_label', ''))
         if not label or is_protagonist_name(label):
             continue
+        if looks_like_modifier_fragment(label):
+            continue
         carried = deepcopy(prev)
+        prev_role = str(carried.get('role_label', '') or '').strip()
+        prev_aliases = [sanitize_runtime_name(alias) for alias in (carried.get('aliases') or []) if sanitize_runtime_name(alias)]
+        generic_anchor = _is_generic_anchor(label, prev_aliases, prev_role)
+        if generic_anchor and int(prev.get('inactive_turns', 0) or 0) >= 1:
+            continue
         carried['aliases'] = [alias for alias in (carried.get('aliases') or []) if sanitize_runtime_name(alias) and not is_protagonist_name(alias)]
         carried['retained'] = True
         carried['present_now'] = False

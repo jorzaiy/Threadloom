@@ -63,8 +63,6 @@ def bootstrap_session(session_id: str) -> dict:
         state = parse_root_state_markdown(base_state_text, session_id) if base_state_text.strip() else seed_default_state(session_id)
         if not state.get('main_event') or state.get('main_event') == '待确认':
             state['main_event'] = '开始新的剧情会话。'
-        if not state.get('scene_core') or state.get('scene_core') == '待确认':
-            state['scene_core'] = '等待第一轮输入来确立当前场景。'
         save_state(session_id, state)
 
         save_context(session_id, {
