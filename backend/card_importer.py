@@ -210,7 +210,16 @@ def _extract_opening_options(card_payload: dict) -> list[dict]:
             'title': '默认开场',
             'prompt': first_message[:240],
             'full_text': first_message,
+            'kind': 'first_mes',
         })
+
+    def _extract_title_prompt(text: str) -> tuple[str, str]:
+        for sep in ('：', ':'):
+            if sep in text:
+                head, tail = text.split(sep, 1)
+                if 1 <= len(head.strip()) <= 80:
+                    return head.strip(), tail.strip()
+        return text, text
 
     greetings = card_payload.get('alternate_greetings', [])
     if not isinstance(greetings, list):
@@ -219,17 +228,29 @@ def _extract_opening_options(card_payload: dict) -> list[dict]:
         text = _clean_text(item)
         if not text:
             continue
-        title = text
-        prompt = text
-        if '：' in text:
-            title, prompt = text.split('：', 1)
-        elif ':' in text:
-            title, prompt = text.split(':', 1)
+        title, prompt = _extract_title_prompt(text)
         options.append({
             'id': f'opening-{index:02d}',
-            'title': title.strip()[:80] or f'开局 {index}',
-            'prompt': prompt.strip()[:240] or text[:240],
+            'title': title[:80] or f'开局 {index}',
+            'prompt': prompt[:240] or text[:240],
             'full_text': text,
+            'kind': 'alternate_greeting',
+        })
+
+    group_greetings = card_payload.get('group_only_greetings', [])
+    if not isinstance(group_greetings, list):
+        group_greetings = []
+    for index, item in enumerate(group_greetings, start=1):
+        text = _clean_text(item)
+        if not text:
+            continue
+        title, prompt = _extract_title_prompt(text)
+        options.append({
+            'id': f'opening-group-{index:02d}',
+            'title': title[:80] or f'群聊开局 {index}',
+            'prompt': prompt[:240] or text[:240],
+            'full_text': text,
+            'kind': 'group_only_greeting',
         })
     return options
 
@@ -266,25 +287,57 @@ def _extract_character_core(card_json: dict) -> dict:
     personality = _clean_text(payload.get('personality') or card_json.get('personality'))
     system_prompt = _clean_text(payload.get('system_prompt', ''))
     creator_notes = _clean_text(payload.get('creator_notes') or payload.get('creatorcomment') or card_json.get('creatorcomment'))
+    mes_example = _clean_text(payload.get('mes_example', ''))
+    post_history = _clean_text(payload.get('post_history_instructions', ''))
+    nickname = _clean_text(payload.get('nickname', ''))
+    character_version = str(payload.get('character_version', '') or '').strip()
+    talkativeness = str(payload.get('talkativeness', '') or '').strip()
+
+    raw_tags = payload.get('tags', [])
+    if isinstance(raw_tags, str):
+        tags = [tag.strip() for tag in raw_tags.split(',') if tag.strip()]
+    elif isinstance(raw_tags, list):
+        tags = [str(tag).strip() for tag in raw_tags if str(tag).strip()]
+    else:
+        tags = []
+
+    creator_notes_ml = payload.get('creator_notes_multilingual')
+    if not isinstance(creator_notes_ml, dict):
+        creator_notes_ml = {}
+
+    extensions = payload.get('extensions')
+    if not isinstance(extensions, dict):
+        extensions = {}
 
     summary_parts = [part for part in (description, scenario) if part]
     core = {
         'name': name or '未命名角色卡',
-        'role': _truncate(personality, 240, 'character role/personality'),
+        'nickname': nickname,
+        'role': _truncate_at_boundary(personality, 1500, 'character role/personality'),
         'coreDescription': {
             'title': name or '未命名角色卡',
-            'tagline': _truncate(scenario, 120, 'scenario/tagline'),
-            'summary': _truncate('\n\n'.join(summary_parts), 1200, 'character summary'),
+            'tagline': _truncate_at_boundary(scenario, 240, 'scenario/tagline'),
+            'summary': _truncate_at_boundary('\n\n'.join(summary_parts), 2400, 'character summary'),
         },
         'opening': '故事将从这里开始。',
-        'notes': _truncate(creator_notes, 800, 'creator notes'),
+        'notes': _truncate_at_boundary(creator_notes, 2000, 'creator notes'),
+        'mes_example': _truncate_at_boundary(mes_example, 4000, 'mes_example') if mes_example else '',
+        'post_history_instructions': _truncate_at_boundary(post_history, 4000, 'post_history_instructions') if post_history else '',
+        'tags': tags,
+        'character_version': character_version,
+        'talkativeness': talkativeness,
+        'creator_notes_multilingual': creator_notes_ml,
+        'extensions': extensions,
         'source': {
             'spec': str(card_json.get('spec', '') or '').strip(),
             'spec_version': str(card_json.get('spec_version', '') or '').strip(),
+            'creator': str(payload.get('creator', '') or '').strip(),
+            'creation_date': str(payload.get('creation_date', '') or '').strip(),
+            'modification_date': str(payload.get('modification_date', '') or '').strip(),
         },
     }
     if system_prompt:
-        core['system_summary'] = _truncate(system_prompt, 1200, 'system prompt')
+        core['system_summary'] = _truncate_at_boundary(system_prompt, 4000, 'system prompt')
     return core
 
 
@@ -415,14 +468,53 @@ def _convert_lorebook_entry(entry: dict) -> dict:
     keywords = [item for item in keys + secondary if str(item or '').strip()]
     always_on = bool(entry.get('constant', False))
     metadata = _classify_lorebook_entry(title, content, keywords, always_on)
+
+    raw_position = entry.get('position', '')
+    if isinstance(raw_position, (int, float)):
+        position = int(raw_position)
+    else:
+        position = str(raw_position or '').strip()
+
+    extensions = entry.get('extensions')
+    if not isinstance(extensions, dict):
+        extensions = {}
+
+    raw_probability = entry.get('probability', None)
+    try:
+        probability = int(raw_probability) if raw_probability is not None else None
+    except (TypeError, ValueError):
+        probability = None
+
+    raw_depth = entry.get('depth', None)
+    try:
+        depth = int(raw_depth) if raw_depth is not None else None
+    except (TypeError, ValueError):
+        depth = None
+
     return {
         'id': str(entry.get('id', entry.get('uid', ''))),
         'title': title,
+        'name': _clean_text(entry.get('name', '')),
         'keywords': keywords,
+        'secondary_keywords': [item for item in secondary if str(item or '').strip()],
         'content': content,
         'alwaysOn': always_on,
+        'selective': bool(entry.get('selective', False)),
+        'selectiveLogic': entry.get('selective_logic', entry.get('selectiveLogic', 0)),
         'priority': int(entry.get('insertion_order', entry.get('order', 0)) or 0),
         'enabled': bool(entry.get('enabled', True)),
+        'disable': bool(entry.get('disable', False)),
+        'caseSensitive': bool(entry.get('case_sensitive', False)),
+        'matchWholeWords': bool(entry.get('match_whole_words', False)),
+        'position': position,
+        'depth': depth,
+        'probability': probability,
+        'useProbability': bool(entry.get('useProbability', entry.get('use_probability', False))),
+        'group': str(entry.get('group', '') or '').strip(),
+        'groupOverride': bool(entry.get('groupOverride', False)),
+        'groupWeight': int(entry.get('groupWeight', 0) or 0),
+        'vectorized': bool(entry.get('vectorized', False)),
+        'extensions': extensions,
         'entryType': metadata.get('entryType', 'entry'),
         'runtimeScope': metadata.get('runtimeScope', 'situational'),
         'featured': bool(metadata.get('featured', False)),
@@ -432,6 +524,8 @@ def _convert_lorebook_entry(entry: dict) -> dict:
 def _extract_lorebook(card_json: dict) -> dict:
     payload = _extract_card_payload(card_json)
     raw_book = payload.get('character_book', card_json.get('character_book', {}))
+    if not isinstance(raw_book, dict):
+        raw_book = {}
     entries = raw_book.get('entries', []) if isinstance(raw_book, dict) else []
     if isinstance(entries, dict):
         entries = list(entries.values())
@@ -440,12 +534,67 @@ def _extract_lorebook(card_json: dict) -> dict:
         if not isinstance(item, dict):
             continue
         converted = _convert_lorebook_entry(item)
-        if converted.get('content'):
+        if converted.get('content') or converted.get('keywords') or converted.get('title'):
             normalized.append(converted)
+
+    book_extensions = raw_book.get('extensions') if isinstance(raw_book.get('extensions'), dict) else {}
     return {
-        'name': _clean_text((raw_book or {}).get('name', '')),
+        'name': _clean_text(raw_book.get('name', '')),
+        'description': _clean_text(raw_book.get('description', '')),
+        'scan_depth': raw_book.get('scan_depth'),
+        'token_budget': raw_book.get('token_budget'),
+        'recursive_scanning': bool(raw_book.get('recursive_scanning', False)),
+        'extensions': book_extensions,
         'entries': normalized,
     }
+
+
+_TEMPLATE_TOKEN_PATTERNS = (
+    re.compile(r'\{\{'),
+    re.compile(r'\{%'),
+    re.compile(r'^\[[A-Z][A-Z0-9_-]*\]'),
+    re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$'),
+)
+_TEMPLATE_TOKEN_KEYWORDS = ('user.', 'state.', 'self.', 'meta.', 'system.', 'event.')
+
+
+def _looks_like_template_token(text: str) -> bool:
+    value = str(text or '').strip()
+    if not value:
+        return True
+    if any(pattern.search(value) for pattern in _TEMPLATE_TOKEN_PATTERNS):
+        return True
+    lower = value.lower()
+    if any(keyword in lower for keyword in _TEMPLATE_TOKEN_KEYWORDS):
+        return True
+    return False
+
+
+_LEGACY_FACTION_HINTS: tuple[tuple[str, str, str], ...] = (
+    ('太子', '东宫', '东宫'),
+    ('', '东宫', '东宫'),
+    ('', '镇北司', '镇北司'),
+    ('', '黄泉引', '黄泉引'),
+    ('', '拜月教', '拜月教'),
+    ('', '七绝门', '七绝门'),
+)
+
+
+def _infer_faction(title: str, content: str) -> str:
+    """Best-effort faction inference from title/content.
+
+    Looks up the title/content against legacy hints first (kept for backwards
+    compatibility with the original RP card the importer was built around), then
+    falls back to '' so generic cards do not get spurious factions assigned.
+    """
+    title_text = str(title or '')
+    content_text = str(content or '')
+    for in_title, in_content, label in _LEGACY_FACTION_HINTS:
+        if in_title and in_title in title_text:
+            return label
+        if in_content and in_content in content_text:
+            return label
+    return ''
 
 
 def _is_runtime_template_lorebook_entry(entry: dict) -> bool:
@@ -537,10 +686,15 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             return []
         if any(token in name for token in non_character_name_tokens):
             return []
-        if len(name) > 24:
+        if len(name) > 60:
             return []
-        if not ('·' in name or 2 <= len(name) <= 8):
+        if _looks_like_template_token(name):
             return []
+        has_separator = any(sep in name for sep in ('·', ' ', '-', "'"))
+        if not has_separator:
+            char_count = sum(1 for ch in name if not ch.isspace())
+            if not (2 <= char_count <= 30):
+                return []
         return [{
             'name': name,
             'aliases': [],
@@ -584,9 +738,11 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             if not name_match:
                 continue
             clean_name = str(name_match.group(1)).strip()
-            if not clean_name or clean_name in {'{{user.name or ', '小美', '人际', '状态栏', '[EVENT]meet', '[SYSTEM]晶核动态系统', '血蚀纪'}:
+            if not clean_name:
                 continue
-            if len(clean_name) > 24:
+            if _looks_like_template_token(clean_name):
+                continue
+            if len(clean_name) > 32:
                 continue
             role_match = re.search(r"""['"]type['"]\s*:\s*['"]([^'"]+)['"]""", block)
             personality_match = re.search(r"""['"]personality['"]\s*:\s*['"]([^'"]+)['"]""", block)
@@ -817,6 +973,85 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             })
         return out
 
+    def _extract_embedded_npcs_latin(entry: dict) -> list[dict]:
+        """Best-effort NPC extraction for English / latin-script entries.
+
+        Recognises three common shapes:
+          1. Markdown headings:    "# Aria Stark" / "## Captain Olen" / "### …"
+          2. Bold-name + colon:    "**Aria Stark**: a noble of …"
+          3. Name-then-attr lines: "Aria Stark\nRole: knight\nAge: 24"
+        Skips entries whose content already triggers the CJK extractor.
+        """
+        content = str(entry.get('content', '') or '')
+        if not content.strip():
+            return []
+        cjk_chars = sum(1 for ch in content if '一' <= ch <= '鿿')
+        if cjk_chars > len(content) * 0.2:
+            return []
+
+        lines = [line.rstrip() for line in content.splitlines()]
+        attr_prefixes = ('role', 'rank', 'age', 'class', 'title', 'faction', 'alias', 'aliases', 'origin', 'gender', 'race')
+        out: list[dict] = []
+        idx = 0
+        while idx < len(lines):
+            line = lines[idx].strip()
+            if not line:
+                idx += 1
+                continue
+            heading_match = re.match(r'^#{1,4}\s+([A-Z][\w\s\.\'\-]{1,58})\s*$', line)
+            bold_match = re.match(r'^\*\*([A-Z][\w\s\.\'\-]{1,58})\*\*\s*[:：](.*)$', line)
+            name = ''
+            inline_summary = ''
+            if heading_match:
+                name = heading_match.group(1).strip()
+            elif bold_match:
+                name = bold_match.group(1).strip()
+                inline_summary = bold_match.group(2).strip()
+            else:
+                next_line = lines[idx + 1].strip().lower() if idx + 1 < len(lines) else ''
+                bare_match = re.match(r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\s*$', line)
+                if bare_match and any(next_line.startswith(prefix + ':') or next_line.startswith(prefix + ' :') for prefix in attr_prefixes):
+                    name = bare_match.group(1).strip()
+            if not name or _looks_like_template_token(name):
+                idx += 1
+                continue
+
+            block_lines = [line] if not heading_match and not bold_match else []
+            if inline_summary:
+                block_lines.append(inline_summary)
+            cursor = idx + 1
+            while cursor < len(lines):
+                next_raw = lines[cursor]
+                next_stripped = next_raw.strip()
+                if not next_stripped:
+                    cursor += 1
+                    continue
+                if re.match(r'^#{1,4}\s+[A-Z]', next_stripped):
+                    break
+                if re.match(r'^\*\*[A-Z][\w\s\.\'\-]+\*\*\s*[:：]', next_stripped):
+                    break
+                if re.match(r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\s*$', next_stripped):
+                    peek = lines[cursor + 1].strip().lower() if cursor + 1 < len(lines) else ''
+                    if any(peek.startswith(prefix + ':') for prefix in attr_prefixes):
+                        break
+                block_lines.append(next_stripped)
+                cursor += 1
+                if len(block_lines) >= 25:
+                    break
+            summary = '\n'.join(block_lines).strip()
+            out.append({
+                'name': name,
+                'aliases': [],
+                'role_label': name,
+                'faction': '',
+                'summary': _truncate_at_boundary(summary, 1200, 'embedded npc summary (latin)'),
+                'source_entry_id': str(entry.get('id', '') or ''),
+                'source_kind': 'embedded_heading_latin',
+                'priority': int(entry.get('priority', 0) or 0),
+            })
+            idx = cursor
+        return out
+
     core_items = _maybe_add_card_primary_npc()
     faction_named_items = []
     roster_items = []
@@ -846,6 +1081,8 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
                 continue
         if not _looks_like_system_npc(title, content):
             embedded = _extract_embedded_npcs(entry)
+            if not embedded:
+                embedded = _extract_embedded_npcs_latin(entry)
             for item in embedded:
                 title_text = str(item.get('role_label', '') or '')
                 name = str(item.get('name', '') or '')
@@ -872,17 +1109,7 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
             name_block = content_head.rstrip('：:').strip()
 
         primary_name, aliases, role_label = _extract_name_parts(name_block, content)
-        faction = ''
-        if '太子' in title or '东宫' in content:
-            faction = '东宫'
-        elif '镇北司' in content:
-            faction = '镇北司'
-        elif '黄泉引' in content:
-            faction = '黄泉引'
-        elif '拜月教' in content:
-            faction = '拜月教'
-        elif '七绝门' in content:
-            faction = '七绝门'
+        faction = _infer_faction(title, content)
         core_items.append({
             'name': primary_name,
             'aliases': aliases,
@@ -929,7 +1156,7 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
         'core': deduped_core,
         'faction_named': deduped_faction,
         'roster': deduped_roster,
-        'items': deduped_core + deduped_faction,
+        'items': deduped_core + deduped_faction + deduped_roster,
     }
 
 

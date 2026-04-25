@@ -294,28 +294,39 @@ def extract_lorebook_npc_candidates(entries: list[dict], onstage: list[str], rel
 def extract_system_npc_candidates(onstage: list[str], relevant: list[str], limit: int = 8) -> list[dict]:
     data = load_system_npcs()
     core_items = data.get('core', []) if isinstance(data.get('core', []), list) else []
-    items = core_items
+    faction_items = data.get('faction_named', []) if isinstance(data.get('faction_named', []), list) else []
+    roster_items = data.get('roster', []) if isinstance(data.get('roster', []), list) else []
     names_in_use = set(onstage or []) | set(relevant or [])
     candidates: list[dict] = []
     seen: set[str] = set()
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get('name', '') or '').strip()
-        if not name or name in names_in_use or name in seen:
-            continue
-        seen.add(name)
-        candidates.append({
-            'name': name,
-            'title': f"系统级 NPC：{name}",
-            'summary': str(item.get('summary', '') or '').strip(),
-            'priority': int(item.get('priority', 0) or 0),
-            'faction': str(item.get('faction', '') or '').strip(),
-            'role_label': str(item.get('role_label', '') or '').strip(),
-            'source': 'system_npc',
-        })
-        if len(candidates) >= limit:
-            break
+    bucket_label = {
+        'core': 'system_npc',
+        'faction_named': 'system_npc_faction',
+        'roster': 'system_npc_roster',
+    }
+    for bucket_name, bucket in (
+        ('core', core_items),
+        ('faction_named', faction_items),
+        ('roster', roster_items),
+    ):
+        for item in bucket:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get('name', '') or '').strip()
+            if not name or name in names_in_use or name in seen:
+                continue
+            seen.add(name)
+            candidates.append({
+                'name': name,
+                'title': f"系统级 NPC：{name}",
+                'summary': str(item.get('summary', '') or '').strip(),
+                'priority': int(item.get('priority', 0) or 0),
+                'faction': str(item.get('faction', '') or '').strip(),
+                'role_label': str(item.get('role_label', '') or '').strip(),
+                'source': bucket_label.get(bucket_name, 'system_npc'),
+            })
+            if len(candidates) >= limit:
+                return candidates
     return candidates
 
 

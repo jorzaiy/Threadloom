@@ -91,7 +91,7 @@ def _infer_candidate_identity(name: str, reference_candidates: list[dict]) -> di
         summary = (item.get('summary') or '').strip()
         title = (item.get('title') or '').strip()
         source = str(item.get('source', '') or '').strip()
-        if source == 'system_npc':
+        if source.startswith('system_npc'):
             role_label = str(item.get('role_label', '') or '').strip()
             if not role_label and title.startswith('系统级 NPC：'):
                 role_label = title.split('系统级 NPC：', 1)[1].strip()
