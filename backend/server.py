@@ -4,12 +4,13 @@ import json
 import logging
 import threading
 import sys
+from base64 import b64decode
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from bootstrap_session import bootstrap_session
-from character_manager import import_character_card_base64, list_character_cards, set_active_character
+from character_manager import delete_character_card, import_character_card_base64, list_character_cards, set_active_character
 from handler_message import handle_message
 from import_sillytavern_chat import import_sillytavern_from_content, preview_chat_import
 from model_config import (
@@ -25,7 +26,8 @@ from model_config import (
 )
 from regenerate_turn import regenerate_last_partial
 from session_lifecycle import delete_session, list_sessions, start_new_game
-from paths import normalize_session_id, resolve_session_dir
+from paths import DEFAULT_USER_ID, active_character_id, normalize_session_id, resolve_session_dir
+from player_profile import delete_user_avatar, load_base_player_profile, load_character_player_profile_override, resolve_user_avatar_path, save_base_player_profile, save_character_player_profile_override, save_user_avatar
 from runtime_store import build_entity_map, build_state_snapshot, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 from user_manager import (
     create_user, delete_user, list_users, login, logout,
@@ -34,7 +36,7 @@ from user_manager import (
 )
 
 
-HOST = '127.0.0.1'
+HOST = '0.0.0.0'
 PORT = 8765
 SESSION_LOCKS: dict[str, threading.Lock] = {}
 SESSION_LOCKS_GUARD = threading.Lock()
@@ -46,6 +48,16 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger('threadloom.server')
+MULTI_USER_PRODUCT_ENABLED = False
+
+
+def _experimental_disabled_payload(feature: str) -> dict:
+    return {
+        'error': {
+            'code': 'EXPERIMENTAL_DISABLED',
+            'message': f'{feature} is disabled in the current single-user product mode',
+        }
+    }
 
 
 class RuntimeHTTPServer(ThreadingHTTPServer):
@@ -190,6 +202,32 @@ class Handler(BaseHTTPRequestHandler):
                     'web': web_runtime_settings(),
                 })
 
+            if parsed.path == '/api/user-profile':
+                profile = load_base_player_profile()
+                return self._send(200, {
+                    'profile': profile,
+                    'avatar_url': '/user-avatar' if resolve_user_avatar_path() else None,
+                    'web': web_runtime_settings(),
+                })
+
+            if parsed.path == '/api/character/profile-override':
+                return self._send(200, {
+                    'override': load_character_player_profile_override(),
+                    'character_card': load_character_card_meta(),
+                    'web': web_runtime_settings(),
+                })
+
+            if parsed.path == '/user-avatar':
+                avatar_path = resolve_user_avatar_path()
+                if not avatar_path or not avatar_path.exists():
+                    return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'avatar not found'}})
+                content_type = 'image/png'
+                if avatar_path.suffix.lower() in {'.jpg', '.jpeg'}:
+                    content_type = 'image/jpeg'
+                elif avatar_path.suffix.lower() == '.webp':
+                    content_type = 'image/webp'
+                return self._send_raw(200, avatar_path.read_bytes(), content_type=content_type)
+
             if parsed.path == '/api/site-config':
                 payload = get_site_config_snapshot()
                 payload['supported_api_types'] = list_provider_configs()['supported_api_types']
@@ -202,6 +240,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, payload)
 
             if parsed.path == '/api/users':
+                if not MULTI_USER_PRODUCT_ENABLED:
+                    return self._send(403, _experimental_disabled_payload('multi-user management'))
+                caller = resolve_user_from_request(dict(self.headers))
+                if caller != DEFAULT_USER_ID:
+                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可查看用户列表'}})
                 return self._send(200, {
                     'users': list_users(),
                     'multi_user_enabled': is_multi_user_enabled(),
@@ -209,7 +252,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == '/api/auth/me':
                 uid = resolve_user_from_request(dict(self.headers))
-                return self._send(200, {'user_id': uid, 'multi_user_enabled': is_multi_user_enabled()})
+                if is_multi_user_enabled() and uid is None:
+                    return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': 'login required'}})
+                return self._send(200, {'user_id': uid or '', 'multi_user_enabled': is_multi_user_enabled()})
 
             if parsed.path == '/api/history':
                 if not session_id:
@@ -291,7 +336,30 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_raw(200, body, content_type='image/svg+xml')
 
             if parsed.path == '/character-cover':
-                cover_path = resolve_character_cover_path()
+                requested_character = (qs.get('character_id') or [''])[0].strip()
+                requested_variant = (qs.get('variant') or [''])[0].strip()
+                if requested_character and requested_character != active_character_id():
+                    from character_manager import current_user_character_root
+                    cover_path = None
+                    character_root = current_user_character_root() / requested_character
+                    asset_root = character_root / 'source' / 'assets'
+                    stems = [requested_variant] if requested_variant in {'cover-small', 'cover', 'cover-original'} else ['cover-small', 'cover', 'cover-original']
+                    for stem in stems:
+                        for ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
+                            candidate = asset_root / f'{stem}{ext}'
+                            if candidate.exists():
+                                cover_path = candidate
+                                break
+                        if cover_path:
+                            break
+                    if cover_path is None:
+                        imported_root = character_root / 'source' / 'imported'
+                        for candidate in sorted(imported_root.glob('*.original.*')):
+                            if candidate.is_file():
+                                cover_path = candidate
+                                break
+                else:
+                    cover_path = resolve_character_cover_path()
                 if cover_path and cover_path.exists():
                     body = cover_path.read_bytes()
                     mime = 'image/png'
@@ -380,6 +448,15 @@ class Handler(BaseHTTPRequestHandler):
                 result['web'] = web_runtime_settings()
                 return self._send(200, result)
 
+            if parsed.path == '/api/character/delete':
+                try:
+                    result = delete_character_card(str(payload.get('character_id', '') or ''))
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                result['character_card'] = load_character_card_meta()
+                result['web'] = web_runtime_settings()
+                return self._send(200, result)
+
             if parsed.path == '/api/characters/import':
                 filename = str(payload.get('filename', '') or '').strip()
                 file_base64 = str(payload.get('file_base64', '') or '').strip()
@@ -394,6 +471,58 @@ class Handler(BaseHTTPRequestHandler):
                 result['web'] = web_runtime_settings()
                 return self._send(200, result)
 
+            if parsed.path == '/api/characters/profile-override':
+                override = payload.get('override')
+                if not isinstance(override, dict):
+                    return self._invalid_input('override must be an object')
+                path = save_character_player_profile_override(override)
+                return self._send(200, {
+                    'ok': True,
+                    'path': str(path),
+                    'character_card': load_character_card_meta(),
+                    'web': web_runtime_settings(),
+                })
+
+            if parsed.path == '/api/user-profile':
+                profile = payload.get('profile')
+                if not isinstance(profile, dict):
+                    return self._invalid_input('profile must be an object')
+                path = save_base_player_profile(profile)
+                return self._send(200, {
+                    'ok': True,
+                    'path': str(path),
+                    'profile': load_base_player_profile(),
+                    'avatar_url': '/user-avatar' if resolve_user_avatar_path() else None,
+                    'web': web_runtime_settings(),
+                })
+
+            if parsed.path == '/api/user-avatar':
+                filename = str(payload.get('filename', '') or '').strip()
+                file_base64 = str(payload.get('file_base64', '') or '').strip()
+                if not filename or not file_base64:
+                    return self._invalid_input('filename and file_base64 are required')
+                try:
+                    file_bytes = b64decode(file_base64.encode('utf-8'), validate=True)
+                    path = save_user_avatar(filename, file_bytes)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                except Exception as err:
+                    return self._invalid_input(f'invalid avatar payload: {err}')
+                return self._send(200, {
+                    'ok': True,
+                    'path': str(path),
+                    'avatar_url': '/user-avatar',
+                    'web': web_runtime_settings(),
+                })
+
+            if parsed.path == '/api/user-avatar/delete':
+                delete_user_avatar()
+                return self._send(200, {
+                    'ok': True,
+                    'avatar_url': None,
+                    'web': web_runtime_settings(),
+                })
+
             if parsed.path == '/api/chat/preview':
                 import base64 as b64
                 content_b64 = str(payload.get('content_base64', '') or '').strip()
@@ -401,8 +530,6 @@ class Handler(BaseHTTPRequestHandler):
                     return self._invalid_input('content_base64 is required')
                 try:
                     content = b64.b64decode(content_b64).decode('utf-8')
-                    from paths import active_character_id
-                    from character_manager import load_character_card_meta
                     card_meta = load_character_card_meta()
                     expected_name = card_meta.get('name', '') if card_meta else ''
                     result = preview_chat_import(content, expected_character_name=expected_name)
@@ -418,7 +545,6 @@ class Handler(BaseHTTPRequestHandler):
                     return self._invalid_input('content_base64 is required')
                 try:
                     content = b64.b64decode(content_b64).decode('utf-8')
-                    from paths import active_character_id
                     card_meta = load_character_card_meta()
                     expected_name = card_meta.get('name', '') if card_meta else None
                     report = import_sillytavern_from_content(
@@ -472,6 +598,8 @@ class Handler(BaseHTTPRequestHandler):
 
             # ── 用户管理 API ──
             if parsed.path == '/api/auth/login':
+                if not MULTI_USER_PRODUCT_ENABLED:
+                    return self._send(403, _experimental_disabled_payload('multi-user login'))
                 uid = str(payload.get('user_id', '') or '').strip()
                 pwd = str(payload.get('password', '') or '')
                 try:
@@ -481,15 +609,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {'token': token, 'user_id': uid})
 
             if parsed.path == '/api/auth/logout':
+                if not MULTI_USER_PRODUCT_ENABLED:
+                    return self._send(403, _experimental_disabled_payload('multi-user logout'))
                 token = self._extract_token()
                 if token:
                     logout(token)
                 return self._send(200, {'ok': True})
 
             if parsed.path == '/api/users':
+                if not MULTI_USER_PRODUCT_ENABLED:
+                    return self._send(403, _experimental_disabled_payload('multi-user management'))
                 caller = resolve_user_from_request(dict(self.headers))
-                from paths import DEFAULT_USER_ID as _ADMIN
-                if caller != _ADMIN:
+                if caller != DEFAULT_USER_ID:
                     return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可管理用户'}})
                 action = str(payload.get('action', '') or '').strip()
                 if action == 'create':
@@ -517,9 +648,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._invalid_input('未知操作，支持: create, delete, set_admin_password')
 
             if parsed.path == '/api/multi-user':
+                if not MULTI_USER_PRODUCT_ENABLED:
+                    return self._send(403, _experimental_disabled_payload('multi-user mode toggle'))
                 caller = resolve_user_from_request(dict(self.headers))
-                from paths import DEFAULT_USER_ID as _ADMIN
-                if caller != _ADMIN:
+                if caller != DEFAULT_USER_ID:
                     return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可操作'}})
                 enabled = bool(payload.get('enabled', False))
                 set_multi_user_enabled(enabled)

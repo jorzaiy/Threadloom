@@ -294,17 +294,31 @@ def build_mid_window_digest(
     history: list[dict],
     hard_anchors: dict,
     max_pairs: int = 10,
+    use_llm: bool = True,
+    exclude_recent_pairs: int = 3,
 ) -> dict:
     pairs = _turn_pairs(history)
-    if len(pairs) <= 3:
+    try:
+        exclude_recent_pairs = max(0, int(exclude_recent_pairs or 0))
+    except (TypeError, ValueError):
+        exclude_recent_pairs = 3
+
+    eligible_pairs = pairs[:-exclude_recent_pairs] if exclude_recent_pairs else pairs
+    if len(eligible_pairs) < 2:
         return {}
 
-    mid_pairs = pairs[-13:-3][-max_pairs:]
+    mid_pairs = eligible_pairs[-max_pairs:]
     if not mid_pairs:
         return {}
 
-    from_turn = f"turn-{max(1, len(pairs) - len(mid_pairs) - 2):04d}"
-    to_turn = f"turn-{max(1, len(pairs) - 3):04d}"
+    from_index = max(1, len(eligible_pairs) - len(mid_pairs) + 1)
+    to_index = max(1, len(eligible_pairs))
+    from_turn = f"turn-{from_index:04d}"
+    to_turn = f"turn-{to_index:04d}"
+
+    # 允许调用方禁用 LLM 直接使用 heuristic
+    if not use_llm:
+        return _heuristic_digest(mid_pairs, hard_anchors, from_turn, to_turn)
 
     user_prompt = _build_user_prompt(mid_pairs, hard_anchors, from_turn, to_turn)
     try:
@@ -314,5 +328,8 @@ def build_mid_window_digest(
         if not normalized.get('stable_entities') and not normalized.get('ongoing_events') and not normalized.get('open_loops'):
             raise ValueError('mid digest is too weak')
         return normalized
-    except Exception:
+    except Exception as e:
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.warning('Mid-context LLM digest failed (%s), using heuristic fallback', str(e)[:100])
         return _heuristic_digest(mid_pairs, hard_anchors, from_turn, to_turn)

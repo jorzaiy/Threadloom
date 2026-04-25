@@ -211,7 +211,6 @@ def _is_clue_bearer(entity: dict, state: dict, history: list[dict]) -> bool:
     tokens = [name] + aliases
     scene_text_parts = [
         state.get('main_event', ''),
-        state.get('scene_core', ''),
         ' '.join(state.get('immediate_risks', []) or []),
         ' '.join(state.get('carryover_clues', []) or []),
         entity.get('role_label', ''),

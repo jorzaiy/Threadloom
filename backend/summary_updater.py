@@ -86,7 +86,6 @@ def build_summary_lines(state: dict, history: list[dict]) -> list[str]:
         f"- 时间：{state.get('time', '待确认')}",
         f"- 地点：{state.get('location', '待确认')}",
         f"- 主事件：{state.get('main_event', '待确认')}",
-        f"- 局势核心：{state.get('scene_core', '待确认')}",
         f"- 当前在场人物：{' / '.join(onstage) if onstage else '暂无'}",
         f"- 当前相关人物：{' / '.join(relevant) if relevant else '暂无'}",
         f"- 当前直接目标：{state.get('immediate_goal', '待确认')}",

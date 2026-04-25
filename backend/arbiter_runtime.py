@@ -28,7 +28,6 @@ def build_candidate_events(user_text: str, scene_facts: dict) -> list[dict]:
 
     world_time = scene_facts.get('time', '未明')
     location = scene_facts.get('location', '待确认')
-    scene_core = scene_facts.get('scene_core', '待确认')
     onstage = scene_facts.get('onstage_npcs', []) or []
     risks = scene_facts.get('immediate_risks', []) or []
     clues = scene_facts.get('carryover_clues', []) or []
@@ -56,7 +55,6 @@ def build_candidate_events(user_text: str, scene_facts: dict) -> list[dict]:
             {
                 'world_time': world_time,
                 'location': location,
-                'scene_core': scene_core,
                 'known_risks': risks,
                 'carryover_clues': clues,
                 'stealth_context': '用户试图降低声响、存在感或被观察概率。',
@@ -72,7 +70,6 @@ def build_candidate_events(user_text: str, scene_facts: dict) -> list[dict]:
             {
                 'world_time': world_time,
                 'location': location,
-                'scene_core': scene_core,
                 'known_risks': risks,
                 'knowledge_boundary': '需要检查是否存在合理知情来源。',
             },
@@ -87,7 +84,6 @@ def build_candidate_events(user_text: str, scene_facts: dict) -> list[dict]:
             {
                 'world_time': world_time,
                 'location': location,
-                'scene_core': scene_core,
                 'knowledge_boundary': '需区分独知、小范围共享与公开事实。',
                 'known_risks': risks,
             },
@@ -102,7 +98,6 @@ def build_candidate_events(user_text: str, scene_facts: dict) -> list[dict]:
             {
                 'world_time': world_time,
                 'location': location,
-                'scene_core': scene_core,
                 'known_risks': risks,
                 'terrain': location,
             },
@@ -117,7 +112,6 @@ def build_candidate_events(user_text: str, scene_facts: dict) -> list[dict]:
             {
                 'world_time': world_time,
                 'location': location,
-                'scene_core': scene_core,
                 'known_risks': risks,
                 'known_clues': clues,
                 'terrain': location,

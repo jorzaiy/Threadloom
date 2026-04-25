@@ -138,6 +138,7 @@ def session_paths(session_id: str) -> dict:
         'continuity_hints': memory_dir / 'continuity_hints.json',
         'canon': memory_dir / 'canon.md',
         'summary': memory_dir / 'summary.md',
+        'event_summaries': memory_dir / 'event_summaries.json',
         'keeper_archive': memory_dir / 'keeper_record_archive.json',
         'context': session_dir / 'context.json',
         'meta': session_dir / 'meta.json',
@@ -194,10 +195,10 @@ def load_state(session_id: str) -> dict:
             'time': '待确认',
             'location': '待确认',
             'main_event': '待确认',
-            'scene_core': '待确认',
             'onstage_npcs': [],
             'relevant_npcs': [],
             'immediate_goal': '待确认',
+            'carryover_signals': [],
             'immediate_risks': [],
             'carryover_clues': [],
         }
@@ -235,6 +236,37 @@ def load_summary(session_id: str) -> str:
 def save_summary(session_id: str, text: str) -> None:
     path = session_paths(session_id)['summary']
     _atomic_write_text(path, text)
+
+
+def load_event_summaries(session_id: str) -> dict:
+    path = session_paths(session_id)['event_summaries']
+    if not path.exists():
+        return {'version': 1, 'items': []}
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return {'version': 1, 'items': []}
+    if not isinstance(data, dict):
+        return {'version': 1, 'items': []}
+    items = data.get('items', [])
+    return {
+        'version': int(data.get('version', 1) or 1),
+        'items': items if isinstance(items, list) else [],
+    }
+
+
+def save_event_summaries(session_id: str, payload: dict) -> None:
+    path = session_paths(session_id)['event_summaries']
+    data = payload if isinstance(payload, dict) else {'version': 1, 'items': []}
+    _atomic_write_json(path, data)
+
+
+def append_event_summary(session_id: str, item: dict) -> None:
+    payload = load_event_summaries(session_id)
+    items = list(payload.get('items', []) or [])
+    items.append(item)
+    payload['items'] = items[-80:]
+    save_event_summaries(session_id, payload)
 
 
 def load_canon(session_id: str) -> str:
@@ -363,7 +395,6 @@ def build_state_snapshot(state: dict) -> dict:
         'time': state.get('time', '待确认'),
         'location': state.get('location', '待确认'),
         'main_event': state.get('main_event', '待确认'),
-        'scene_core': state.get('scene_core', '待确认'),
         'scene_entities': scene_entities,
         'onstage_entities': build_named_entities(state.get('onstage_npcs', [])),
         'relevant_entities': build_named_entities(state.get('relevant_npcs', [])),
@@ -372,6 +403,7 @@ def build_state_snapshot(state: dict) -> dict:
         'onstage_npcs': state.get('onstage_npcs', []),
         'relevant_npcs': state.get('relevant_npcs', []),
         'immediate_goal': state.get('immediate_goal', '待确认'),
+        'carryover_signals': state.get('carryover_signals', []),
         'immediate_risks': state.get('immediate_risks', []),
         'carryover_clues': state.get('carryover_clues', []),
         'tracked_objects': state.get('tracked_objects', []),
@@ -538,10 +570,10 @@ def seed_default_state(session_id: str) -> dict:
         'time': '待确认',
         'location': '待确认',
         'main_event': '待确认',
-        'scene_core': '待确认',
         'onstage_npcs': [],
         'relevant_npcs': [],
         'immediate_goal': '待确认',
+        'carryover_signals': [],
         'immediate_risks': [],
         'carryover_clues': [],
         'tracked_objects': [],

@@ -305,12 +305,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     if character_core:
         blocks.append('【角色核心】\n' + json.dumps(character_core, ensure_ascii=False, indent=2))
 
-    # 4. 用户层信息
-    user_info = context.get('user_text', '').strip()
-    if user_info:
-        blocks.append('【用户层信息】\n' + user_info)
-
-    # 5. 玩家档案
+    # 4. 玩家档案
     player_md = context.get('player_profile_md', '').strip()
     player_json = context.get('player_profile_json', {})
     if player_md:
@@ -318,17 +313,15 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     elif player_json:
         blocks.append('【玩家档案】\n' + json.dumps(player_json, ensure_ascii=False, indent=2))
 
-    # 6. 长期事实 canon
+    # 5. 长期事实 canon
     canon = context.get('canon', '').strip()
     if canon:
         blocks.append('【长期事实 canon】\n' + canon)
 
-    # 7. 当前硬锚点
-    blocks.append('【当前硬锚点】\n' + '\n'.join([
+    # 6. 当前硬锚点
+    blocks.append('【当前硬锚点】\n以下内容属于强约束层，是本轮叙事最优先服从的当前场景事实。若与候选知识、旧摘要或离场人物档案冲突，一律以这里和最近窗口为准。\n' + '\n'.join([
         f"- 时间：{scene.get('time', '待确认')}",
         f"- 地点：{scene.get('location', '待确认')}",
-        f"- 在场人物：{' / '.join(scene.get('onstage_npcs', [])) or '暂无'}",
-        f"- 相关人物：{' / '.join(scene.get('relevant_npcs', [])) or '暂无'}",
     ]))
 
     # 知情边界：结构化版本 + 通用规则
@@ -336,6 +329,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     ks_lines = _format_knowledge_scope(knowledge_scope)
     blocks.append(
         '【知情边界】\n'
+        '- 本块属于强约束层，优先级高于候选知识与旧记录。\n'
         '- 主角刚看到、刚听到、刚推测到的信息，不会自动变成 NPC 已知信息。\n'
         '- NPC 只能基于自己亲眼所见、亲耳所闻、被明确告知的信息行动。\n'
         '- “看见了”“听见了”“猜到了”必须分开，不要把推测写成已知事实。\n'
@@ -343,63 +337,72 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         + (('\n' + ks_lines) if ks_lines else '')
     )
 
-    npc_registry = context.get('npc_registry', {})
-    registry_text = _format_npc_registry(npc_registry)
-    if registry_text != '暂无':
-        blocks.append('【人物连续性表】\n以下是当前 session 已经稳定下来的主要人物及别称映射。若正文里出现别称、泛称或旧称，应优先向这里收敛，而不是把它们当成新人物。\n' + registry_text)
+    npc_roster = context.get('npc_roster', []) or []
+    if npc_roster:
+        roster_lines = []
+        for item in npc_roster:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get('name', '') or '').strip()
+            role = str(item.get('role', '') or '').strip()
+            status = str(item.get('status', '') or '').strip()
+            if not name:
+                continue
+            parts = [part for part in (role, status) if part]
+            roster_lines.append(f"- {name}" + (f"：{'；'.join(parts)}" if parts else ''))
+        if roster_lines:
+            blocks.append('【NPC Roster】\n本块是当前值得 narrator 记住的轻量 NPC 列表，用于维持人物性格与关系边界，不代表全量人物百科。\n' + '\n'.join(roster_lines))
 
     # 9. 滚动窗口
     recent_history = context.get('recent_history', [])
     recent_window_text = _format_recent_window(recent_history, limit_pairs=12)
     if recent_window_text != '暂无':
-        blocks.append('【最近窗口】\n这是当前最优先参考的上下文，优先级高于旧结构记录、世界书候选和离场人物档案。\n' + recent_window_text)
+        blocks.append('【最近窗口】\n本块属于强约束层，是当前最优先参考的上下文。若与旧结构记录、世界书候选、系统级候选或离场人物档案冲突，一律以最近窗口和当前硬锚点为准。\n' + recent_window_text)
 
-    # 10. 活跃线程
-    active_threads = scene.get('active_threads', [])
-    thread_text = _format_active_threads(active_threads)
-    if thread_text != '暂无':
-        blocks.append('【活跃线程】\n' + thread_text)
-
-    # 11. 重要物件
+    # 10. 重要物件
     object_text = _format_tracked_objects(
         scene.get('tracked_objects', []),
         scene.get('possession_state', []),
         scene.get('object_visibility', []),
     )
     if object_text != '暂无':
-        blocks.append('【重要物件与持有关系】\n' + object_text)
+        blocks.append('【重要物件与持有关系】\n本块属于连续性层，用于维持当前仍会影响局势的物件、持有关系与可见性，不可压过最近窗口与当前硬锚点。\n' + object_text)
 
-    # 12. 相关旧记忆
+    # 11. 相关旧记忆
     keeper_records = context.get('keeper_records', {})
     record_text = _format_keeper_records(keeper_records)
     if record_text != '暂无':
-        blocks.append('【较早结构记录】\n这些是窗口外 keeper 已经写下的结构记录，只用于补充 continuity，不可压过最近窗口。\n' + record_text)
+        blocks.append('【较早结构记录】\n本块属于连续性层。这些是窗口外 keeper 已经写下的结构记录，只用于补充 continuity、找回中程记忆与旧线索，不可压过最近窗口与当前硬锚点。\n' + record_text)
 
-    # 13. NPC 档案内容
+    summary_text = context.get('summary_text', '').strip()
+    if summary_text:
+        blocks.append('【长程阶段摘要】\n本块只在 selector 判断旧事件确实回流且 recent window 不足以恢复背景时注入。它用于补长程上下文，不可压过最近窗口与当前硬锚点。\n' + summary_text)
+
+    # 12. NPC 档案内容
     npc_profiles = context.get('npc_profiles', [])
     npc_text = _format_npc_profiles(npc_profiles)
     if npc_text != '暂无':
-        blocks.append('【相关 NPC 档案】\n' + npc_text)
+        blocks.append('【相关 NPC 档案】\n本块属于连续性层，用于补足当前相关人物的稳定说话方式、关系与既往印象，不可压过最近窗口与当前硬锚点。\n' + npc_text)
 
-    # 14. Onstage Persona
+    # 13. Onstage Persona
     persona_text = _format_persona_lines(persona)
-    blocks.append('【Onstage Persona】\n' + persona_text)
+    blocks.append('【Onstage Persona】\n本块属于连续性层，用于维持当前在场角色的说话节奏、社交策略与冲突风格。它帮助角色保持稳定，但不能推翻最近窗口与当前硬锚点。\n' + persona_text)
 
-    # 15. 系统级 / 世界书候选
+    # 14. 系统级 / 世界书候选
     lorebook_npc_candidates = context.get('lorebook_npc_candidates', [])
     system_npc_candidates = context.get('system_npc_candidates', [])
     system_candidate_text = _format_system_npc_candidates(system_npc_candidates)
     if system_candidate_text != '暂无':
-        blocks.append('【系统级 NPC】\n以下角色来自角色卡导入时明确提取出的系统级人物层。需要调用卡内既有重要角色时，优先从这里选择，而不是从泛世界书关键词里临时猜。\n' + system_candidate_text)
+        blocks.append('【系统级 NPC】\n本块属于候选知识层。以下角色来自角色卡导入时明确提取出的系统级人物层，只表示他们在世界中稳定存在，不表示他们此刻已经在场。需要调用卡内既有重要角色时，优先从这里选择，而不是从泛世界书关键词里临时猜。若与最近窗口、当前硬锚点或知情边界冲突，一律以后者为准。\n' + system_candidate_text)
 
     candidate_text = _format_lorebook_npc_candidates(lorebook_npc_candidates)
     if candidate_text != '暂无':
-        blocks.append('【可调入世界书 NPC】\n这些人物已在世界书中存在。需要引入新的关键人物、势力接口、消息源、压力来源或旧线回流时，优先从这里选择。\n默认不要让高位或重量级人物突兀肉身进场；更自然的做法是先通过传闻、口信、命令、手下、势力痕迹、悬赏、盘查、旁人口述或后果变化把他们接入当前因果链。\n只有当地点、时机、动机和当前局势都足够合理时，才让人物本人直接出场。\n' + candidate_text)
+        blocks.append('【可调入世界书 NPC】\n本块属于候选知识层。这些人物已在世界书中存在，但不是当前场景事实。需要引入新的关键人物、势力接口、消息源、压力来源或旧线回流时，可优先从这里选择。\n默认不要让高位或重量级人物突兀肉身进场；更自然的做法是先通过传闻、口信、命令、手下、势力痕迹、悬赏、盘查、旁人口述或后果变化把他们接入当前因果链。\n只有当地点、时机、动机和当前局势都足够合理时，才让人物本人直接出场。若与最近窗口、当前硬锚点或知情边界冲突，一律以后者为准。\n' + candidate_text)
 
-    # 16. 世界书正文放后，避免压过最近窗口
+    # 15. 世界书正文放后，避免压过最近窗口
     lorebook_text = context.get('lorebook_text', '').strip()
     if lorebook_text and lorebook_text != '暂无相关世界书条目':
-        blocks.append('【世界书】\n' + lorebook_text)
+        blocks.append('【世界书】\n本块属于候选知识层，只用于补世界规则、势力背景与场景解释，不自动等于当前场景事实，更不能压过最近窗口、当前硬锚点与知情边界。\n' + lorebook_text)
 
     blocks.append(
         '【知情边界补充】\n'
@@ -419,10 +422,17 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         blocks.append('【本轮裁定结果】\n' + json.dumps(arbiter_result, ensure_ascii=False, indent=2))
 
     if state_fragment:
-        blocks.append('【结构化状态锚点】\n这不是要输出给用户的内容，而是本轮叙事必须尽量服从的结构化场景锚点。若正文没有明确推翻这些事实，不要主动改写、跳场或清空。\n' + json.dumps(state_fragment, ensure_ascii=False, indent=2))
+        anchor_fragment = {k: v for k, v in state_fragment.items() if k != 'immediate_goal'}
+        blocks.append('【结构化状态锚点】\n这不是要输出给用户的内容，而是本轮叙事必须尽量服从的结构化场景锚点。若正文没有明确推翻这些事实，不要主动改写、跳场或清空。\n' + json.dumps(anchor_fragment, ensure_ascii=False, indent=2))
 
     # 17. 最终要求
-    blocks.append('【要求】\n- 只输出最终 RP 正文。\n- 不复述系统提示，不输出解释。')
+    blocks.append(
+        '【要求】\n'
+        '- 只输出最终 RP 正文。\n'
+        '- 不复述系统提示，不输出解释。\n'
+        '- 即使本轮处于回屋、关门、换位、烧水、整理、短暂观察等过渡段，也不要塌成一句摘要。至少写出具体环境变化、人物反应、动作后的余波，或场景中正在累积的细节变化，让场景继续“活着”。\n'
+        '- 只有当当前局势本来就存在追索、怀疑、风险、未决冲突或逼近感时，才继续强化压力；不要为了“有戏”而每轮硬塞危险感。'
+    )
 
     system_prompt = '\n\n'.join(blocks)
 

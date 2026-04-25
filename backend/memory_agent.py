@@ -35,7 +35,7 @@ def _shorten(text: str, limit: int = 180) -> str:
 def _query_terms(user_text: str, scene_facts: dict, summary_text: str) -> set[str]:
     parts: list[str] = [user_text, summary_text]
     if isinstance(scene_facts, dict):
-        for key in ('location', 'main_event', 'scene_core'):
+        for key in ('location', 'main_event'):
             parts.append(str(scene_facts.get(key, '') or ''))
         parts.extend(scene_facts.get('onstage_npcs', []) or [])
         parts.extend(scene_facts.get('relevant_npcs', []) or [])

@@ -22,7 +22,6 @@ def resolve_important_npc_continuity(state: dict) -> dict:
     text_pool = ' '.join([
         str(current.get('location', '') or ''),
         str(current.get('main_event', '') or ''),
-        str(current.get('scene_core', '') or ''),
         ' '.join(current.get('immediate_risks', []) or []),
         ' '.join(current.get('carryover_clues', []) or []),
         ' '.join(

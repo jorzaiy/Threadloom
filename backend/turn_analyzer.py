@@ -38,7 +38,7 @@ def clean_text(value: str) -> str:
 
 def build_scene_signal_text(scene_facts: dict) -> str:
     parts: list[str] = []
-    for key in ('scene_core', 'location', 'main_event'):
+    for key in ('location', 'main_event'):
         value = scene_facts.get(key, '')
         if isinstance(value, str) and value.strip():
             parts.append(value)
@@ -246,7 +246,6 @@ def _llm_analysis(user_text: str, scene_facts: dict) -> dict:
             'time': scene_facts.get('time', '待确认'),
             'location': scene_facts.get('location', '待确认'),
             'main_event': scene_facts.get('main_event', '待确认'),
-            'scene_core': scene_facts.get('scene_core', '待确认'),
             'immediate_risks': scene_facts.get('immediate_risks', []),
             'carryover_clues': scene_facts.get('carryover_clues', []),
             'scene_entities': scene_facts.get('scene_entities', []),

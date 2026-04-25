@@ -57,6 +57,15 @@ def _is_generic_label(value: str) -> bool:
 
 def _compress_secondary_label(text: str, kind: str) -> str:
     value = _clean_label(text)
+    if not value:
+        return '当前主线' if kind == 'main' else ('当前风险变化' if kind == 'risk' else '当前线索变化')
+    if _is_generic_label(value) or len(value) > 28 or any(token in value for token in ('“', '”', '：', ':', '…', '，')):
+        if kind == 'risk':
+            return '当前风险变化'
+        if kind == 'clue':
+            return '当前线索变化'
+        if kind == 'main':
+            return '当前主线'
     if kind == 'risk':
         if any(token in value for token in ('表态', '走向', '态度')):
             return '表态风险'
@@ -73,13 +82,91 @@ def _compress_secondary_label(text: str, kind: str) -> str:
             return '延续线索'
         if any(token in value for token in ('表态', '细节', '回流')):
             return '细节线索'
-        if any(token in value for token in ('记录板', '画圈', '标记')):
-            return '记录板标记'
-        if any(token in value for token in ('怀疑', '假身份', '林诺')):
+        if any(token in value for token in ('标记', '记号', '记录')):
+            return '标记线索'
+        if any(token in value for token in ('怀疑', '假身份', '身份')):
             return '身份疑点'
-        if any(token in value for token in ('高崎', '掩护', '垫脚', '协作')):
+        if any(token in value for token in ('掩护', '协作', '配合')):
             return '协作线索'
     return value
+
+
+def _looks_playable_thread_label(value: str) -> bool:
+    text = _clean_label(value)
+    if not text:
+        return False
+    if _is_generic_label(text):
+        return False
+    if len(text) < 6 or len(text) > 30:
+        return False
+    if text in {'当前主线', '暴露风险', '当前风险变化', '当前线索变化'}:
+        return False
+    return True
+
+
+def _should_override_main_label_with_event(current_label: str, main_event: str) -> bool:
+    current_text = _extract_playable_phrase(str(current_label or ''))
+    event_text = _extract_playable_phrase(str(main_event or ''))
+    if not _looks_playable_thread_label(event_text):
+        return False
+    if not _looks_playable_thread_label(current_text):
+        return True
+    if _is_generic_label(current_text):
+        return True
+    if len(event_text) >= len(current_text) + 6:
+        return True
+    return False
+
+
+def _extract_playable_phrase(text: str) -> str:
+    value = _clean_label(text)
+    if not value:
+        return ''
+    value = re.sub(r'^当前局面正围绕', '', value).strip()
+    value = re.sub(r'^当前场面正围绕', '', value).strip()
+    value = re.sub(r'^说：', '', value).strip()
+    value = re.sub(r'^问：', '', value).strip()
+    if '→' in value:
+        value = value.split('→')[-1].strip()
+    if '“' in value:
+        value = value.split('“', 1)[0].strip()
+    if '"' in value:
+        value = value.split('"', 1)[0].strip()
+    value = value.strip('“”" ') 
+    if '。' in value:
+        value = value.split('。', 1)[0].strip()
+    if '，' in value and len(value) > 24:
+        parts = [part.strip() for part in value.split('，') if part.strip()]
+        if len(parts) >= 2 and len(parts[0]) < 8:
+            value = ''.join(parts[:2]).strip()
+        else:
+            value = parts[0].strip()
+    return _short(value, 28)
+
+
+def _compose_main_label(state: dict, goal: str, obstacle: str, latest: str, actors: list[str]) -> str:
+    candidates = []
+    actor_text = ' / '.join(actor for actor in actors[:2] if actor)
+    for raw in (
+        state.get('main_event', ''),
+        goal,
+        obstacle,
+        latest,
+    ):
+        phrase = _extract_playable_phrase(str(raw or ''))
+        if not phrase:
+            continue
+        if actor_text and actor_text not in phrase and len(phrase) <= 20:
+            phrase = f'{actor_text}{phrase}'
+        candidates.append(phrase)
+    for phrase in candidates:
+        if _looks_playable_thread_label(phrase):
+            return phrase
+    if actor_text and goal:
+        fallback = _short(f'{actor_text}{_extract_playable_phrase(goal)}', 28)
+        if _looks_playable_thread_label(fallback):
+            return fallback
+    return '当前主线推进'
 
 
 def _norm_key(text: str) -> str:
@@ -252,7 +339,7 @@ def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: st
     used_ids: set[str] = set()
     newly_resolved: list[dict] = []
     actors = _actors_from_state(current)
-    latest_change = _short(narrator_reply or user_text or current.get('scene_core', ''))
+    latest_change = _short(narrator_reply or user_text or current.get('main_event', ''))
     candidates: list[dict] = []
 
     def add_candidate(key: str, *, label: str, kind: str, priority: str, goal: str, obstacle: str, latest: str):
@@ -278,29 +365,54 @@ def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: st
 
     main_event = str(current.get('main_event', '') or '').strip()
     immediate_goal = str(current.get('immediate_goal', '') or '').strip()
-    immediate_risks = [str(item).strip() for item in (current.get('immediate_risks', []) or []) if str(item).strip()]
-    carryover_clues = [str(item).strip() for item in (current.get('carryover_clues', []) or []) if str(item).strip()]
+    signal_items = [item for item in (current.get('carryover_signals', []) or []) if isinstance(item, dict)]
+    if signal_items:
+        immediate_risks = []
+        carryover_clues = []
+        for item in signal_items:
+            signal_type = str(item.get('type', '') or 'mixed').strip() or 'mixed'
+            text = str(item.get('text', '') or '').strip()
+            if not text:
+                continue
+            if signal_type in {'risk', 'mixed'} and text not in immediate_risks:
+                immediate_risks.append(text)
+            if signal_type in {'clue', 'mixed'} and text not in carryover_clues:
+                carryover_clues.append(text)
+    else:
+        immediate_risks = [str(item).strip() for item in (current.get('immediate_risks', []) or []) if str(item).strip()]
+        carryover_clues = [str(item).strip() for item in (current.get('carryover_clues', []) or []) if str(item).strip()]
     arbiter_signals = current.get('arbiter_signals', {}) if isinstance(current.get('arbiter_signals', {}), dict) else {}
     arbiter_events = arbiter_signals.get('events', []) if isinstance(arbiter_signals.get('events', []), list) else []
 
     def _better_main_label() -> str:
+        composed = _compose_main_label(
+            current,
+            immediate_goal or '维持当前主推进并准备下一步选择',
+            immediate_risks[0] if immediate_risks else '待确认',
+            latest_change,
+            actors,
+        )
+        if _looks_playable_thread_label(composed):
+            return composed
         if main_event and not _is_generic_label(main_event):
-            return main_event
+            return _extract_playable_phrase(main_event)
         if active_threads := current.get('active_threads', []):
             for item in active_threads:
                 if not isinstance(item, dict):
                     continue
                 label = str(item.get('label', '') or '').strip()
-                if label and not _is_generic_label(label):
-                    return label
+                if _looks_playable_thread_label(label):
+                    return _extract_playable_phrase(label)
         if immediate_goal and not immediate_goal.startswith('先处理“'):
-            return immediate_goal
+            goal_phrase = _extract_playable_phrase(immediate_goal)
+            if _looks_playable_thread_label(goal_phrase):
+                return goal_phrase
         text = str(current.get('location', '') or '').strip()
         if text and immediate_risks:
-            return f'{text}中的局势仍在朝更高压方向推进'
+            return _short(f'{text}中的局势继续推进', 28)
         if text:
-            return f'{text}中的局势仍在持续演化'
-        return '当前局势仍在持续演化'
+            return _short(f'{text}中的局势继续推进', 28)
+        return '当前主线推进'
 
     add_candidate(
         f'main:{_norm_key(_better_main_label() or immediate_goal or "当前主线程")}',
@@ -363,8 +475,6 @@ def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: st
             prev = _find_thread_match(item, prev_threads)
         if prev:
             thread_id = str(prev.get('thread_id', '') or '')
-            if item.get('kind') != 'main':
-                item['key'] = str(prev.get('key', key) or key)
             item['stability_turns'] = int(prev.get('stability_turns', 1) or 1) + 1
             item['cooldown_turns'] = 0
         else:
@@ -430,14 +540,16 @@ def apply_thread_tracker(state: dict, *, user_text: str = '', narrator_reply: st
         })
     # 只保留最近 20 条已解决事件
     next_state['resolved_events'] = existing_resolved[-20:]
-    current_main_event = _clean_label(str(next_state.get('main_event', '') or ''))
-    if current_main_event and not _is_generic_label(current_main_event):
+    current_main_event = _extract_playable_phrase(str(next_state.get('main_event', '') or ''))
+    if _looks_playable_thread_label(current_main_event):
         for item in next_state['active_threads']:
             if not isinstance(item, dict):
                 continue
             if str(item.get('kind', '') or '') != 'main':
                 continue
-            item['label'] = current_main_event
-            item['key'] = _make_thread_key('main', current_main_event)
+            current_label = str(item.get('label', '') or '')
+            if _should_override_main_label_with_event(current_label, current_main_event):
+                item['label'] = current_main_event
+                item['key'] = _make_thread_key('main', current_main_event)
             break
     return next_state
