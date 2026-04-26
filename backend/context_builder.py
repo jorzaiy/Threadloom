@@ -718,7 +718,8 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     # --- 世界书加载：只作为 selector 候选池，不默认注入 ---
     lorebook_path = resolve_source(sources.get('lorebook', 'character/lorebook.json'))
     lorebook_foundation_path, lorebook_index_path = _distilled_lore_paths(lorebook_path)
-    # 关键词触发源优先围绕当前 state / scene entities，再辅以少量 recent history
+    # Situational lore matching should stay close to the active scene, with only
+    # a small recent-history tail to avoid stale opening-menu terms dominating.
     trigger_parts = []
     trigger_parts.append(user_text)
     for item in state_json.get('carryover_signals', []) or []:
@@ -736,7 +737,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     for key, value in arbiter_signals.get('flags', {}).items() if isinstance(arbiter_signals.get('flags', {}), dict) else []:
         trigger_parts.append(str(key))
         trigger_parts.append(str(value))
-    for item in recent_history:
+    for item in recent_history[-6:]:
         trigger_parts.append(item.get('content', ''))
     trigger_text = '\n'.join(trigger_parts)
 

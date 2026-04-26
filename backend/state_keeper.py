@@ -77,7 +77,7 @@ immediate_goal, carryover_signals。
 规则：
 1. 优先尊重输入里的结构化状态锚点。
 2. 没有明确证据，不要把已有字段改回待确认。
-3. 只在正文明确表明离场、转场、时间推进时才改对应字段。
+3. 只在正文明确表明人物存在、地点或时间已经发生变化时才改对应字段。
 4. 不编造新人物、新地点、新事件。
 5. character 才是人物；object 是关键物件；ambient_group 是背景群体。
 6. 如果是人物，优先判断它更接近哪个功能槽位：conflict_target / pursuer / observer。
@@ -94,7 +94,7 @@ tracked_objects, possession_state, object_visibility,
 knowledge_scope。
 
 不要维护 NPC 基础设定；姓名、别称、性格、外貌、身份由 actor registry 创建后锁定。
-不要记录短期人物状态；受伤、被围、昏迷、是否在场、当前位置等只由最近窗口和当前硬锚点承载。
+不要记录短期人物状态；人物的临时处境、在场关系、行动阶段和当前位置只由最近窗口承载。
 
 time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架。
 除非叙事正文明确推翻它们，否则不要重复输出，也不要改写。

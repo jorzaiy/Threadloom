@@ -36,7 +36,7 @@ DISTILL_SYSTEM = """你是角色卡世界书蒸馏器。
 
 目标：把完整世界书压缩成两个运行期产物：
 1. foundation_rules：每轮常驻的短规则/世界基础，不写剧情推进，不写当前场景状态。
-2. situational_lore：只输出最关键的按关键词召回摘要；也可以输出空数组，遗漏条目会由脚本补齐。
+2. situational_lore：只输出最关键的条件召回摘要；也可以输出空数组，遗漏条目会由脚本补齐。
 
 输出格式：
 {
@@ -53,7 +53,7 @@ DISTILL_SYSTEM = """你是角色卡世界书蒸馏器。
 2. situational_lore 保留可条件召回的细节，不要泛化成空话。
 3. 不要把 NPC 当前短期状态、开局即时冲突、会话状态写成 foundation。
 4. 每条必须能追溯 source_entry_ids。
-5. keywords 要包含原名、别名、地点、势力、机制词，方便中文子串命中。
+5. keywords 只用于检索索引，应提取原文中稳定出现的名称、地点、势力或机制称呼，不要发明剧情触发词。
 6. foundation_rules 最多 3 条，situational_lore 最多 3 条；不要试图覆盖全部条目，遗漏条目会由脚本 fallback 补齐。
 7. 每条 text/summary 控制在 40-120 中文字，宁可少写，不要展开长列表。
 """

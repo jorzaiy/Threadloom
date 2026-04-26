@@ -233,10 +233,6 @@ def _format_recent_window(history: list[dict], limit_pairs: int = 6) -> str:
     for user_item, assistant_item in pairs:
         user_text = str(user_item.get('content', '') or '').strip()
         assistant_text = str(assistant_item.get('content', '') or '').strip()
-        if len(user_text) > 180:
-            user_text = user_text[:177] + '...'
-        if len(assistant_text) > 260:
-            assistant_text = assistant_text[:257] + '...'
         lines.append(f"[用户] {user_text}")
         lines.append(f"[叙事] {assistant_text}")
     return '\n'.join(lines)
@@ -407,20 +403,25 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         blocks.append(
             '【角色注册表】\n'
             '本块是长期角色基础设定表。角色的姓名、别称、性格、外貌、身份一旦登记就视为锁定；不要在正文中随意改写。\n'
-            '本块不表示这些角色当前在场，也不记录受伤、被困、离场等短期状态。当前局势以最近12轮和本轮用户输入为准。\n'
+            '本块不表示这些角色当前在场，也不记录临时处境、行动阶段或空间关系。当前局势以最近12轮和本轮用户输入为准。\n'
             + actor_text
         )
 
     selected_chunks = context.get('selected_summary_chunks', [])
     chunk_text = _format_summary_chunks(selected_chunks)
     if chunk_text != '暂无':
-        blocks.append('【召回的12轮外历史】\n本块来自固定分段 summary chunk，只用于补充最近12轮之外的历史；不得覆盖最近12轮和本轮用户输入。\n' + chunk_text)
+        blocks.append('【召回的12轮外历史】\n本块来自固定分段 summary chunk，只用于补充更早历史，不是当前场景事实源。\n' + chunk_text)
 
     # 9. 最近 12 轮窗口
     recent_history = context.get('recent_history', [])
     recent_window_text = _format_recent_window(recent_history, limit_pairs=12)
     if recent_window_text != '暂无':
-        blocks.append('【最近12轮完整上下文】\n本块是当前场景最优先参考的事实来源。若与角色注册表、物品/情报账本、旧summary或世界书候选冲突，以最近12轮和本轮用户输入为准。\n' + recent_window_text)
+        blocks.append(
+            '【最近12轮完整上下文】\n'
+            '本块与本轮用户输入是当前场景的事实源；其他块只提供长期设定、账本或候选背景。\n'
+            '尤其要核对上一轮叙事末尾已经改变的空间关系、视线范围、人物控制权和行动链；后续必须承接这些变化，除非正文给出可见、可理解的过渡，不得把人物或物件回滚到更早的位置、关系或动作阶段。\n'
+            + recent_window_text
+        )
 
     # 10. 重要物件
     object_text = _format_tracked_objects(
@@ -429,27 +430,27 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         scene.get('object_visibility', []),
     )
     if object_text != '暂无':
-        blocks.append('【重要物件与持有关系】\n本块是物品账本，只说明持续物件、持有关系与可见性；当前动作和短期位置以最近12轮为准。\n' + object_text)
+        blocks.append('【重要物件与持有关系】\n本块是物品账本，只说明持续物件、持有关系与可见性，不直接规定当前动作或临时位置。\n' + object_text)
 
     # 14. 系统级 / 世界书候选
     lorebook_npc_candidates = context.get('lorebook_npc_candidates', [])
     system_npc_candidates = context.get('system_npc_candidates', [])
     system_candidate_text = _format_system_npc_candidates(system_npc_candidates)
     if system_candidate_text != '暂无':
-        blocks.append('【系统级 NPC】\n本块属于 selector 命中的候选知识层，只表示他们在世界中稳定存在，不表示他们此刻已经在场。若与最近12轮或知情边界冲突，一律以后者为准。\n' + system_candidate_text)
+        blocks.append('【系统级 NPC】\n本块属于 selector 命中的候选知识层，只表示这些人物在世界中稳定存在，不表示他们此刻已经在场。\n' + system_candidate_text)
 
     candidate_text = _format_lorebook_npc_candidates(lorebook_npc_candidates)
     if candidate_text != '暂无':
-        blocks.append('【可调入世界书 NPC】\n本块属于 selector 命中的候选知识层。这些人物已在世界书中存在，但不是当前场景事实。需要引入时优先通过传闻、口信、命令、手下、势力痕迹、悬赏、盘查、旁人口述或后果变化接入。若与最近12轮或知情边界冲突，一律以后者为准。\n' + candidate_text)
+        blocks.append('【可调入世界书 NPC】\n本块属于 selector 命中的候选知识层。这些人物已在世界书中存在，但不是当前场景事实；需要引入时必须通过场景内可感知的路径自然接入。\n' + candidate_text)
 
     foundation_text = context.get('lorebook_foundation_text', '').strip()
     if foundation_text:
-        blocks.append('【世界书基础规则】\n本块是导入时蒸馏出的常驻瘦身世界书，只提供世界认知、身份边界、势力/规则口径的参考；它不是当前场景事实源，不得覆盖最近12轮的当前动作、位置、短期状态和知情边界。\n' + foundation_text)
+        blocks.append('【世界书基础规则】\n本块是导入时蒸馏出的常驻瘦身世界书，只提供世界认知、身份边界、势力/规则口径参考；它不是当前场景事实源。\n' + foundation_text)
 
     # 15. 世界书正文放后，避免压过最近窗口
     lorebook_text = context.get('lorebook_text', '').strip()
     if lorebook_text and lorebook_text != '暂无相关世界书条目':
-        blocks.append('【情境世界书】\n本块只包含 selector 命中的蒸馏世界书条目，用于补世界规则、势力背景与场景解释；不自动等于当前场景事实，更不能压过最近12轮与知情边界。\n' + lorebook_text)
+        blocks.append('【情境世界书】\n本块只包含 selector 命中的蒸馏世界书条目，用于补世界规则、势力背景与场景解释；不自动等于当前场景事实。\n' + lorebook_text)
 
     blocks.append(
         '【知情边界补充】\n'

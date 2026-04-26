@@ -173,22 +173,20 @@
 
 原则：
 - `runtime-rules.md` 必须先于其他上下文被加载
-- 它是 runtime 的长期底板，不应被当前在线会话历史压过
+- 它是 runtime 的长期底板，不依赖未注入的会话惯性；但每轮必须服从已注入的本轮输入与最近上下文
 
 ## 真相源顺序
 
 第一真相源：
-- `runtime-rules`
-- `canon`
-- `state`
-- `recent window`
-- `keeper archive`
-- `npc profiles`
-- session-local `persona seeds`
+- 本轮用户输入
+- 最近 12 对完整 recent window
+- `runtime-rules` 中的主角控制权、知情边界与世界运行原则
 
 辅助真相源：
-- 可调入世界书人物
-- `summary`（调试 / 运维 / 写回用途）
+- `actors / items / knowledge` 长期账本
+- 固定分段 summary chunk（只补 recent window 外历史）
+- 世界书 foundation / 情境条目（只补世界规则、势力背景与解释）
+- `state` / `event` / `thread`（state/debug/recall 辅助，不默认主导 narrator 当前事实）
 
 ## Narrator Prompt 分层
 
@@ -196,17 +194,14 @@
 
 强约束层：
 - 玩家档案（runtime slim 版）
-- 当前硬锚点
 - 知情边界
 - 最近窗口
 
 连续性层：
-- 人物连续性表
-- 活跃线程
+- actor registry（长期基础设定，不表示当前在场）
 - 重要物件与持有关系
-- 较早结构记录
-- 相关 NPC 档案
-- Onstage Persona
+- 情报账本
+- 召回的固定 summary chunk
 
 候选知识层：
 - 系统级 NPC
@@ -214,15 +209,16 @@
 - 世界书正文
 
 当前运行原则：
-- 若强约束层与候选知识层冲突，一律以强约束层为准。
-- 连续性层用于维持旧人物、旧物件、旧线程与中程记忆，不可压过最近窗口与当前硬锚点。
+- 本轮用户输入与最近 12 对完整上下文是当前场景事实源。
+- 连续性层只用于保持长期设定、物件归属、知情边界和 recent window 外历史，不可回滚 recent window 中已经发生的空间关系、控制权或行动链变化。
 - 候选知识层只表示“可调用”，不表示“此刻已在场”或“当前已发生”。
+- prompt 中避免为具体剧情动作维护关键词式规则；连续性要求用通用的空间关系、视线范围、人物控制权与行动链原则表达。
 - narrator 的目标不是围着主角单点响应，而是维持一个会自己流转的 RP 世界：主角是参与者与观察者，不是唯一驱动器。
 
 当前已开始把部分候选知识块改成规则版条件注入：
 - 世界书正文：只有在当前场景明显需要世界规则/势力/地点解释时才注入
-- 系统级 NPC / 世界书 NPC 候选：只有在 onstage/relevant/important NPC 与 recent window 或 active_threads 命中时才注入
-- 相关 NPC 档案：默认只给 onstage NPC，必要时再补少量 relevant/important NPC
+- 系统级 NPC / 世界书 NPC 候选：只作为候选知识层，必须通过场景内可感知路径自然接入
+- 相关 NPC 档案：已让位于 actor registry；短期状态不写入长期人物基础设定
 
 当前 selector 已从 `context_builder.py` 中抽离为独立模块：
 - `backend/selector.py`

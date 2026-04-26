@@ -253,6 +253,14 @@ function sessionId() {
   return currentSessionId.trim();
 }
 
+function fallbackSessionId() {
+  const user = (lastCharacterCard?.user_id || 'default_user').trim() || 'default_user';
+  const character = (lastCharacterCard?.character_id || lastCharacterCard?.name || 'story').trim() || 'story';
+  const safeUser = user.replace(/[^0-9A-Za-z_\-\u4e00-\u9fff]/g, '-');
+  const safeCharacter = character.replace(/[^0-9A-Za-z_\-\u4e00-\u9fff]/g, '-');
+  return `${safeCharacter}-${safeUser}`.slice(0, 100) || 'story-live';
+}
+
 function topSessions(items, { activeLimit = 5 } = {}) {
   const active = (items || [])
     .filter(item => !item.replay)
@@ -983,11 +991,15 @@ function renderMessages(items) {
     newBtn.type = 'button';
     newBtn.textContent = '开始新对话';
     newBtn.addEventListener('click', async () => {
+      newBtn.disabled = true;
+      setStatus('新游戏初始化中...', 'working');
       try {
         await startNewGame();
         setStatus('已开始新对话', 'ok');
       } catch (err) {
         setStatus(`错误：${err.message}`, 'error');
+      } finally {
+        newBtn.disabled = false;
       }
     });
     const importBtn = document.createElement('button');
@@ -1254,18 +1266,41 @@ function renderState(state) {
 
   const npcRows = [];
   const seenNpc = new Set();
+  const seenNpcNames = new Set();
+  const actors = state.actors && typeof state.actors === 'object' ? state.actors : {};
+  const actorIndex = state.actor_context_index && typeof state.actor_context_index === 'object' ? state.actor_context_index : {};
+  const activeActorIds = Array.isArray(actorIndex.active_actor_ids) ? actorIndex.active_actor_ids : Object.keys(actors);
+  for (const actorId of activeActorIds) {
+    if (actorId === 'protagonist') continue;
+    const actor = actors[actorId];
+    if (!actor || typeof actor !== 'object' || actor.kind === 'protagonist') continue;
+    const name = actor.name || actor.aliases?.[0] || '';
+    if (!name) continue;
+    const key = `actor|${actorId}`;
+    if (seenNpc.has(key) || seenNpcNames.has(name)) continue;
+    seenNpc.add(key);
+    seenNpcNames.add(name);
+    npcRows.push({
+      name,
+      entity_id: null,
+      role_label: actor.identity || 'actor registry',
+      ambiguous: false,
+    });
+  }
   for (const group of [state.onstage_entities || [], state.relevant_entities || []]) {
     for (const item of group) {
       const key = `${item?.entity_id || ''}|${item?.name || ''}`;
-      if (seenNpc.has(key)) continue;
+      if (seenNpc.has(key) || seenNpcNames.has(item?.name || '')) continue;
       seenNpc.add(key);
+      if (item?.name) seenNpcNames.add(item.name);
       npcRows.push(item);
     }
   }
   for (const item of state.scene_entities || []) {
     const key = `${item?.entity_id || ''}|${item?.primary_label || ''}`;
-    if (seenNpc.has(key) || !item?.primary_label) continue;
+    if (seenNpc.has(key) || !item?.primary_label || seenNpcNames.has(item.primary_label)) continue;
     seenNpc.add(key);
+    seenNpcNames.add(item.primary_label);
     npcRows.push({
       name: item.primary_label,
       entity_id: item.entity_id || null,
@@ -1276,8 +1311,9 @@ function renderState(state) {
   }
   for (const item of state.important_npcs || []) {
     const key = `important|${item?.primary_label || ''}`;
-    if (seenNpc.has(key) || !item?.primary_label) continue;
+    if (seenNpc.has(key) || !item?.primary_label || seenNpcNames.has(item.primary_label)) continue;
     seenNpc.add(key);
+    seenNpcNames.add(item.primary_label);
     npcRows.push({
       name: item.primary_label,
       entity_id: null,
@@ -1600,12 +1636,13 @@ async function importCharacterCard() {
 }
 
 async function startNewGame() {
+  const previousSessionId = sessionId() || fallbackSessionId();
   const data = await apiJson('/api/new-game', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({session_id: sessionId() || 'story-live'})
+    body: JSON.stringify({session_id: previousSessionId})
   });
-  currentSessionId = data.session_id || sessionId();
+  currentSessionId = data.session_id || previousSessionId;
   pendingUserMessage = null;
   renderMessages(data.messages || []);
   renderState(data.state_snapshot || {});

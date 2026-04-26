@@ -312,6 +312,7 @@ http://127.0.0.1:8765
 
 - 系统级 NPC 候选与世界书预算注入已真实进入 narrator prompt
 - `12` 对 recent window 已真实生效
+- recent window 在 narrator prompt 中按完整正文注入，不再按短摘要截断；连续性问题优先检查 turn trace 的 `【最近12轮完整上下文】` 是否包含上一轮关键变化
 - keeper archive 在记录真正掉出 recent window 后，会以 `【较早结构记录】` 真实进入 narrator prompt
 - HTTP 层已修：客户端提前断开时，backend 不再把已完成请求伪装成 `500`，只记录轻量断连日志
 
@@ -415,6 +416,7 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
   - `/api/history` 与 `/api/state` 对不存在的 session 现在只返回空结果，不会顺手 bootstrap 出一个新目录
 - 这意味着：
   - 清空当前角色卡下的 session 后，页面保持空白等待用户点击“开始新游戏”
+  - 空态卡片里的“开始新对话”与 Session 管理里的“开始新游戏”现在走同一条 `/api/new-game` 初始化路径
   - 不会再因为页面初始化而自动长回 `sessions/story-live`
 - 当前首页变慢的判断：
   - 主要风险更像是 session 列表过多时的枚举与排序，而不是封面图本身

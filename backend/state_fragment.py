@@ -54,7 +54,7 @@ def _stability_hints(turn_mode: str, fragment: dict) -> list[str]:
     if turn_mode in {'observation', 'stealth', 'probe', 'general'}:
         hints.append('若本轮只是观察、试探或短回应，时间、地点与主事件默认延续，不要主动改回待确认。')
         if fragment.get('onstage_npcs'):
-            hints.append('若正文没有明确写出离场、转场或失去接触，不要主动清空当前在场人物。')
+            hints.append('若正文没有明确改变人物存在关系或场景接触关系，不要主动清空当前在场人物。')
     if turn_mode == 'confrontation':
         hints.append('若本轮存在明显对峙或冲突，优先维持当前主事件与风险线，不要无依据切换到新场景。')
     if fragment.get('scene_entities'):
