@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from bootstrap_session import bootstrap_session
-from character_manager import delete_character_card, import_character_card_base64, list_character_cards, set_active_character
+from character_manager import delete_character_card, import_character_card_base64, list_character_cards, rebuild_character_lorebook, set_active_character
 from handler_message import handle_message
 from import_sillytavern_chat import import_sillytavern_from_content, preview_chat_import
 from model_config import (
@@ -451,6 +451,15 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/character/delete':
                 try:
                     result = delete_character_card(str(payload.get('character_id', '') or ''))
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                result['character_card'] = load_character_card_meta()
+                result['web'] = web_runtime_settings()
+                return self._send(200, result)
+
+            if parsed.path == '/api/character/rebuild-lorebook':
+                try:
+                    result = rebuild_character_lorebook(str(payload.get('character_id', '') or ''))
                 except ValueError as err:
                     return self._invalid_input(str(err))
                 result['character_card'] = load_character_card_meta()

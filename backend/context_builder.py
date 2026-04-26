@@ -9,7 +9,7 @@ from object_bootstrap_agent import load_object_registry
 from clue_bootstrap_agent import load_clue_registry
 from player_profile import load_effective_player_profile, render_runtime_player_profile_markdown
 from selector import build_selector_decision
-from runtime_store import is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history, load_persona_index, load_state, load_summary
+from runtime_store import is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history, load_persona_index, load_state, load_summary, load_summary_chunks
 from paths import APP_ROOT, SHARED_ROOT, resolve_layered_source
 
 ROOT = SHARED_ROOT
@@ -23,6 +23,10 @@ def read_text(path: Path) -> str:
 
 def read_json(path: Path):
     return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+
+
+def _distilled_lore_paths(lorebook_path: Path) -> tuple[Path, Path]:
+    return lorebook_path.parent / 'lorebook-foundation.json', lorebook_path.parent / 'lorebook-index.json'
 
 
 def _normalize_compact_text(text: str) -> str:
@@ -263,6 +267,89 @@ def summarize_lorebook_entries(entries: list[dict], *, max_entry_chars: int = 32
     return {
         'text': '\n\n'.join(blocks).strip() if blocks else '暂无相关世界书条目',
         'items': items,
+        'total_chars': len('\n\n'.join(blocks).strip()) if blocks else 0,
+    }
+
+
+def format_lorebook_foundation(path: Path, *, max_rule_chars: int = 180, max_total_chars: int = 1600) -> dict:
+    data = read_json(path)
+    rules = data.get('rules', []) if isinstance(data.get('rules', []), list) else []
+    blocks = []
+    items = []
+    total = 0
+    for item in rules:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get('title', '') or '世界基础').strip()
+        text = _short_lore_text(item.get('text', ''), max_rule_chars)
+        if not text:
+            continue
+        block = f'- {title}: {text}'
+        if blocks and total + len(block) > max_total_chars:
+            break
+        blocks.append(block)
+        total += len(block)
+        items.append({
+            'title': title,
+            'category': str(item.get('category', '') or '').strip(),
+            'source_entry_ids': item.get('source_entry_ids', []) if isinstance(item.get('source_entry_ids', []), list) else [],
+        })
+    return {
+        'text': '\n'.join(blocks).strip(),
+        'items': items,
+        'provider': str(data.get('provider', '') or '').strip(),
+        'total_chars': len('\n'.join(blocks).strip()) if blocks else 0,
+    }
+
+
+def load_lorebook_index_hits(path: Path, trigger_text: str, *, limit: int = 4, max_item_chars: int = 220, max_total_chars: int = 1200) -> dict:
+    data = read_json(path)
+    items = data.get('items', []) if isinstance(data.get('items', []), list) else []
+    trigger_lower = str(trigger_text or '').lower()
+    scored: list[tuple[int, dict, list[str]]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get('title', '') or '').strip()
+        keywords = [str(x or '').strip() for x in (item.get('keywords', []) or []) if str(x or '').strip()] if isinstance(item.get('keywords', []), list) else []
+        hits = []
+        score = 0
+        if title and title.lower() in trigger_lower:
+            score += 6
+            hits.append(title)
+        for keyword in keywords:
+            if keyword.lower() in trigger_lower:
+                score += 4
+                hits.append(keyword)
+        if score <= 0:
+            continue
+        scored.append((score, item, hits[:6]))
+    scored.sort(key=lambda row: row[0], reverse=True)
+    blocks = []
+    hit_items = []
+    total = 0
+    for score, item, hits in scored[:limit]:
+        title = str(item.get('title', '') or '世界书线索').strip()
+        summary = _short_lore_text(item.get('summary', ''), max_item_chars)
+        if not summary:
+            continue
+        block = f"### {title}\n{summary}"
+        if blocks and total + len(block) > max_total_chars:
+            break
+        blocks.append(block)
+        total += len(block)
+        hit_items.append({
+            'id': str(item.get('id', '') or '').strip(),
+            'title': title,
+            'score': score,
+            'keyword_hits': hits,
+            'category': str(item.get('category', '') or '').strip(),
+            'source_entry_ids': item.get('source_entry_ids', []) if isinstance(item.get('source_entry_ids', []), list) else [],
+        })
+    return {
+        'text': '\n\n'.join(blocks).strip(),
+        'items': hit_items,
+        'provider': str(data.get('provider', '') or '').strip(),
         'total_chars': len('\n\n'.join(blocks).strip()) if blocks else 0,
     }
 
@@ -559,7 +646,24 @@ def count_complete_turn_pairs(items: list[dict]) -> int:
     return pair_count
 
 
-def build_runtime_context(session_id: str) -> dict:
+def _slim_character_core(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    keep = {}
+    for key in ('name', 'role', 'description', 'personality', 'scenario', 'first_mes'):
+        value = data.get(key)
+        if value:
+            keep[key] = value
+    core = data.get('coreDescription') if isinstance(data.get('coreDescription'), dict) else {}
+    if core:
+        keep['coreDescription'] = {k: v for k, v in core.items() if k in {'title', 'tagline', 'summary', 'protagonist'} and v}
+    hints = data.get('hints') if isinstance(data.get('hints'), dict) else {}
+    if hints:
+        keep['hints'] = {k: v for k, v in hints.items() if k in {'runtimeRules', 'style', 'protagonist'} and v}
+    return keep
+
+
+def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     cfg = load_runtime_config()
     sources = cfg.get('sources', {})
     memory_cfg = cfg.get('memory', {}) if isinstance(cfg.get('memory', {}), dict) else {}
@@ -570,8 +674,9 @@ def build_runtime_context(session_id: str) -> dict:
     canon_text = load_canon(session_id)
     summary_text = load_summary(session_id)
     event_summaries = load_event_summaries(session_id).get('items', [])
+    summary_chunks = load_summary_chunks(session_id).get('chunks', [])
     session_context = load_context(session_id)
-    character_core = read_json(resolve_source(sources['character_core']))
+    character_core = _slim_character_core(read_json(resolve_source(sources['character_core'])))
     player_profile_json = load_effective_player_profile()
     player_profile_md = render_runtime_player_profile_markdown(player_profile_json)
 
@@ -579,13 +684,6 @@ def build_runtime_context(session_id: str) -> dict:
     active_preset_name = sources.get('active_preset', 'world-sim-balanced')
     preset = read_json(preset_dir / f'{active_preset_name}.json')
 
-    state_text = ''
-    if state_json:
-        state_text = '\n'.join([
-            f"- 当前时间：{state_json.get('time', '待确认')}。",
-            f"- 当前地点：{state_json.get('location', '待确认')}。",
-            f"- 当前主事件：{state_json.get('main_event', '待确认')}。",
-        ])
     onstage = state_json.get('onstage_npcs', [])
     relevant = state_json.get('relevant_npcs', [])
 
@@ -617,14 +715,12 @@ def build_runtime_context(session_id: str) -> dict:
     active_threads = state_json.get('active_threads', []) if isinstance(state_json.get('active_threads', []), list) else []
     important_npcs = state_json.get('important_npcs', []) if isinstance(state_json.get('important_npcs', []), list) else []
 
-    # --- 世界书加载 ---
+    # --- 世界书加载：只作为 selector 候选池，不默认注入 ---
     lorebook_path = resolve_source(sources.get('lorebook', 'character/lorebook.json'))
+    lorebook_foundation_path, lorebook_index_path = _distilled_lore_paths(lorebook_path)
     # 关键词触发源优先围绕当前 state / scene entities，再辅以少量 recent history
     trigger_parts = []
-    trigger_parts.append(state_json.get('main_event', ''))
-    trigger_parts.append(state_json.get('time', ''))
-    trigger_parts.append(state_json.get('location', ''))
-    trigger_parts.append(state_json.get('immediate_goal', ''))
+    trigger_parts.append(user_text)
     for item in state_json.get('carryover_signals', []) or []:
         if not isinstance(item, dict):
             continue
@@ -637,38 +733,19 @@ def build_runtime_context(session_id: str) -> dict:
             continue
         trigger_parts.append(item.get('event_id', ''))
         trigger_parts.append(item.get('result', ''))
-    for item in active_threads[:4]:
-        if not isinstance(item, dict):
-            continue
-        for field in ('label', 'goal', 'obstacle', 'latest_change', 'kind'):
-            trigger_parts.append(str(item.get(field, '')))
-    for item in important_npcs[:6]:
-        if not isinstance(item, dict):
-            continue
-        for field in ('primary_label', 'role_label', 'anchor_type'):
-            trigger_parts.append(str(item.get(field, '')))
     for key, value in arbiter_signals.get('flags', {}).items() if isinstance(arbiter_signals.get('flags', {}), dict) else []:
         trigger_parts.append(str(key))
         trigger_parts.append(str(value))
-    for npc in onstage + relevant:
-        trigger_parts.append(npc)
-    for entity in state_json.get('scene_entities', []) or []:
-        if not isinstance(entity, dict):
-            continue
-        trigger_parts.append(entity.get('primary_label', ''))
-        trigger_parts.append(entity.get('role_label', ''))
-        trigger_parts.extend(entity.get('aliases', []) or [])
-        possible_link = entity.get('possible_link')
-        if possible_link:
-            trigger_parts.append(possible_link)
-    for item in recent_history[-4:]:
+    for item in recent_history:
         trigger_parts.append(item.get('content', ''))
     trigger_text = '\n'.join(trigger_parts)
 
     lorebook_strategy = preset.get('lorebookStrategy', {})
     max_lore_entries = int(lorebook_strategy.get('maxEntries', 6) or 6)
     min_lore_entries = int(lorebook_strategy.get('minEntries', 2) or 2)
-    include_always_on = bool(lorebook_strategy.get('includeAlwaysOn', True))
+    include_always_on = bool(lorebook_strategy.get('includeAlwaysOn', True)) and current_pair_count == 0
+    if current_pair_count > 0:
+        min_lore_entries = 0
     always_on_limit = int(lorebook_strategy.get('alwaysOnMaxEntries', 3) or 3)
     matched_limit = int(lorebook_strategy.get('matchedMaxEntries', max(0, max_lore_entries - always_on_limit)) or max(0, max_lore_entries - always_on_limit))
     foundation_rule_limit = int(lorebook_strategy.get('foundationRuleMaxEntries', 1) or 1)
@@ -703,7 +780,19 @@ def build_runtime_context(session_id: str) -> dict:
         max_entry_chars=max_entry_chars,
         max_total_chars=max_total_chars,
     )
-    lorebook_text = lorebook_summary['text']
+    lorebook_index_hits = load_lorebook_index_hits(
+        lorebook_index_path,
+        trigger_text,
+        limit=int(lorebook_strategy.get('situationalIndexMaxItems', 2) or 2),
+        max_item_chars=int(lorebook_strategy.get('situationalIndexMaxItemChars', 220) or 220),
+        max_total_chars=int(lorebook_strategy.get('situationalIndexMaxTotalChars', 700) or 700),
+    )
+    lorebook_foundation = format_lorebook_foundation(
+        lorebook_foundation_path,
+        max_rule_chars=int(lorebook_strategy.get('foundationMaxRuleChars', 180) or 180),
+        max_total_chars=int(lorebook_strategy.get('foundationMaxTotalChars', 1600) or 1600),
+    )
+    lorebook_text = lorebook_index_hits['text'] or lorebook_summary['text']
     system_npc_candidates = extract_system_npc_candidates(onstage, relevant, limit=system_npc_limit)
     lorebook_npc_candidates = extract_lorebook_npc_candidates(lorebook_entries, onstage, relevant, limit=lorebook_npc_limit)
     featured_cast = build_featured_cast(lorebook_path, trigger_text, onstage, relevant, limit=featured_cast_limit)
@@ -736,8 +825,12 @@ def build_runtime_context(session_id: str) -> dict:
         lorebook_npc_candidates=merged_lorebook_candidates,
         event_summaries=event_summaries,
         summary_text=summary_text,
+        summary_chunks=summary_chunks,
+        user_text=user_text,
     )
-    inject_lorebook_text = bool(selector_decision.get('inject_lorebook_text'))
+    inject_lorebook_text = bool(selector_decision.get('inject_lorebook_text')) or bool(lorebook_index_hits.get('items'))
+    if inject_lorebook_text:
+        selector_decision['inject_lorebook_text'] = True
     inject_npc_candidates = bool(selector_decision.get('inject_npc_candidates'))
     npc_profile_targets = selector_decision.get('npc_profile_targets', []) or []
     npc_profiles = load_npc_profiles(resolve_source(sources['npc_profiles_dir']), npc_profile_targets) if npc_profile_targets else []
@@ -758,7 +851,7 @@ def build_runtime_context(session_id: str) -> dict:
         'player_profile_md': player_profile_md,
         'player_profile_json': player_profile_json,
         'canon': canon_text,
-        'state_text': state_text,
+        'state_text': '',
         'active_preset': {
             'name': active_preset_name,
             'data': preset,
@@ -767,7 +860,14 @@ def build_runtime_context(session_id: str) -> dict:
         },
         'lorebook_text': lorebook_text,
         'lorebook_entries': lorebook_entries,
-        'lorebook_injection': lorebook_summary,
+        'lorebook_foundation_text': lorebook_foundation.get('text', ''),
+        'lorebook_foundation': lorebook_foundation,
+        'lorebook_index_hits': lorebook_index_hits,
+        'lorebook_injection': {
+            **lorebook_summary,
+            'foundation': lorebook_foundation,
+            'index_hits': lorebook_index_hits,
+        },
         'lorebook_npc_candidates': merged_lorebook_candidates,
         'system_npc_candidates': system_npc_candidates,
         'continuity_candidates': continuity_candidates,
@@ -787,6 +887,9 @@ def build_runtime_context(session_id: str) -> dict:
             'possession_state': state_json.get('possession_state', []),
             'object_visibility': state_json.get('object_visibility', []),
             'knowledge_scope': state_json.get('knowledge_scope', {}),
+            'knowledge_records': state_json.get('knowledge_records', []),
+            'actors': state_json.get('actors', {}),
+            'actor_context_index': state_json.get('actor_context_index', {}),
             'resolved_events': state_json.get('resolved_events', []),
             'arbiter_signals': arbiter_signals,
             'active_threads': active_threads,
@@ -797,7 +900,9 @@ def build_runtime_context(session_id: str) -> dict:
         'recent_history': recent_history,
         'npc_registry': npc_registry,
         'keeper_records': keeper_records,
-        'summary_text': summary_text if bool(selector_decision.get('inject_summary')) else '',
+        'summary_text': '',
+        'summary_chunks': summary_chunks,
+        'selected_summary_chunks': [chunk for chunk in summary_chunks if str(chunk.get('chunk_id', '') or '') in {str(hit.get('chunk_id', '') or '') for hit in (selector_decision.get('summary_chunk_hits', []) or [])}] if bool(selector_decision.get('inject_summary')) else [],
         'event_summaries': event_summaries,
         'npc_roster': selector_decision.get('npc_roster', []),
     }

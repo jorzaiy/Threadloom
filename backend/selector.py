@@ -38,34 +38,21 @@ def important_npc_names(items: list[dict], limit: int = 4) -> list[str]:
     return names
 
 
-def should_inject_lorebook_text(state_json: dict, recent_history: list[dict], keeper_records: dict, lorebook_entries: list[dict], active_threads: list[dict]) -> bool:
+def should_inject_lorebook_text(state_json: dict, recent_history: list[dict], keeper_records: dict, lorebook_entries: list[dict], active_threads: list[dict], user_text: str = '') -> bool:
     if not lorebook_entries:
         return False
-    location = str(state_json.get('location', '') or '').strip()
-    main_event = str(state_json.get('main_event', '') or '').strip()
-    recent_text = joined_recent_text(recent_history)
-    anchor_text = ' '.join([
-        main_event,
-        location,
-        json.dumps(keeper_records or {}, ensure_ascii=False),
-        recent_text,
-    ])
-    explanation_pressure = 0
-    if location and location not in {'待确认', '住处内', '门前', '巷口', '屋内'}:
-        explanation_pressure += 1
-    if keeper_records:
-        explanation_pressure += 1
-    for entry in lorebook_entries[:3]:
+    trigger_text = str(user_text or '')
+    if not trigger_text.strip():
+        return False
+    for entry in lorebook_entries[:6]:
         title = str(entry.get('title', '') or '').strip()
-        runtime_scope = str(entry.get('runtimeScope', '') or '').strip()
-        entry_type = str(entry.get('entryType', '') or '').strip()
-        if title and title in anchor_text:
-            explanation_pressure += 1
-        if runtime_scope == 'foundation' and any(token in anchor_text for token in (title,)):
-            explanation_pressure += 1
-        if entry_type in {'faction', 'world'} and title and location and title in location:
-            explanation_pressure += 1
-    return explanation_pressure >= 2
+        if title and title in trigger_text:
+            return True
+        for keyword in entry.get('keywords', []) or []:
+            token = str(keyword or '').strip()
+            if token and token in trigger_text:
+                return True
+    return False
 
 
 def should_inject_npc_candidates(onstage: list[str], relevant: list[str], active_threads: list[dict], recent_history: list[dict], important_npcs: list[dict], candidates: list[dict]) -> bool:
@@ -145,57 +132,56 @@ def build_npc_roster(*, onstage: list[str], relevant: list[str], active_threads:
     return result
 
 
-def event_summary_hits(event_summaries: list[dict], *, recent_history: list[dict], active_threads: list[dict], important_npcs: list[dict], tracked_objects: list[dict], carryover_clues: list[str]) -> list[dict]:
+def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict], user_text: str = '', tracked_objects: list[dict] | None = None, knowledge_records: list[dict] | None = None) -> list[dict]:
     recent_text = joined_recent_text(recent_history)
+    query_text = '\n'.join([recent_text, str(user_text or '')])
     object_labels = [str(item.get('label', '') or '').strip() for item in (tracked_objects or []) if isinstance(item, dict) and str(item.get('label', '') or '').strip()]
-    clue_labels = [str(item).strip() for item in (carryover_clues or []) if str(item).strip()]
+    knowledge_texts = [str(item.get('text', '') or '').strip() for item in (knowledge_records or []) if isinstance(item, dict) and str(item.get('text', '') or '').strip()]
     hits = []
-    for item in event_summaries[-12:]:
+    for item in summary_chunks[-12:]:
         if not isinstance(item, dict):
             continue
         score = 0
         reason = []
-        actors = [str(x).strip() for x in (item.get('actors', []) or []) if str(x).strip()]
-        actor_overlap = any(name and name in recent_text for name in actors)
+        actors = [str(x).strip() for x in (item.get('actors_mentioned', []) or []) if str(x).strip()]
+        actor_overlap = any(name and name in query_text for name in actors)
         if actor_overlap:
             score += 2
             reason.append('actor_overlap')
-        event_objects = [str(x).strip() for x in (item.get('objects', []) or []) if str(x).strip()]
+        event_objects = [str(x).strip() for x in (item.get('objects_mentioned', []) or []) if str(x).strip()]
         object_overlap = any(obj in event_objects for obj in object_labels)
         if object_overlap:
             score += 2
             reason.append('object_overlap')
-        event_clues = [str(x).strip() for x in (item.get('clues', []) or []) if str(x).strip()]
-        clue_overlap = any(clue and any(clue[:6] and clue[:6] in ec for ec in event_clues) for clue in clue_labels if len(clue) >= 6)
+        chunk_text = ' '.join(str(x or '') for field in ('dense_summary', 'key_events', 'unresolved', 'keywords', 'locations') for x in (item.get(field, []) or []))
+        clue_overlap = any(text and text[:8] in chunk_text for text in knowledge_texts if len(text) >= 8)
         if clue_overlap:
             score += 2
-            reason.append('clue_overlap')
-        summary = str(item.get('summary', '') or '').strip()
-        summary_overlap = bool(summary and summary[:8] in recent_text)
-        if summary_overlap:
-            score += 1
-            reason.append('summary_overlap')
-        # actor/object overlap 只能算弱相关；若没有 clue 或 summary 的辅助命中，不足以触发旧事件回流
-        if score > 0 and (clue_overlap or summary_overlap or (actor_overlap and clue_overlap) or (object_overlap and clue_overlap)):
-            hits.append({'event_id': item.get('event_id'), 'turn_id': item.get('turn_id'), 'score': score, 'reason': '+'.join(reason)})
+            reason.append('knowledge_overlap')
+        keyword_overlap = any(keyword and keyword in query_text for keyword in (item.get('keywords', []) or []))
+        if keyword_overlap:
+            score += 2
+            reason.append('keyword_overlap')
+        if score >= 2 and (clue_overlap or keyword_overlap or object_overlap or actor_overlap):
+            hits.append({'chunk_id': item.get('chunk_id'), 'turn_start': item.get('turn_start'), 'turn_end': item.get('turn_end'), 'score': score, 'reason': '+'.join(reason)})
     hits.sort(key=lambda x: -x['score'])
     return hits[:3]
 
 
-def build_selector_decision(*, state_json: dict, recent_history: list[dict], keeper_records: dict, active_threads: list[dict], important_npcs: list[dict], onstage: list[str], relevant: list[str], lorebook_entries: list[dict], system_npc_candidates: list[dict], lorebook_npc_candidates: list[dict], event_summaries: list[dict], summary_text: str) -> dict:
-    inject_lorebook = should_inject_lorebook_text(state_json, recent_history, keeper_records, lorebook_entries, active_threads)
+def build_selector_decision(*, state_json: dict, recent_history: list[dict], keeper_records: dict, active_threads: list[dict], important_npcs: list[dict], onstage: list[str], relevant: list[str], lorebook_entries: list[dict], system_npc_candidates: list[dict], lorebook_npc_candidates: list[dict], event_summaries: list[dict], summary_text: str, summary_chunks: list[dict] | None = None, user_text: str = '') -> dict:
+    inject_lorebook = should_inject_lorebook_text(state_json, recent_history, keeper_records, lorebook_entries, active_threads, user_text=user_text)
     all_candidates = list(system_npc_candidates) + list(lorebook_npc_candidates)
     inject_candidates = should_inject_npc_candidates(onstage, relevant, active_threads, recent_history, important_npcs, all_candidates)
     targets = profile_targets(onstage, relevant, active_threads, recent_history, important_npcs, limit=3)
-    event_hits = event_summary_hits(
-        event_summaries,
+    chunk_hits = summary_chunk_hits(
+        summary_chunks or [],
         recent_history=recent_history,
-        active_threads=active_threads,
-        important_npcs=important_npcs,
+        user_text=user_text,
         tracked_objects=state_json.get('tracked_objects', []),
-        carryover_clues=state_json.get('carryover_clues', []),
+        knowledge_records=state_json.get('knowledge_records', []),
     )
-    inject_summary = bool(event_hits) and any(hit.get('score', 0) >= 3 for hit in event_hits) and bool(str(summary_text or '').strip())
+    event_hits = []
+    inject_summary = bool(chunk_hits) and any(hit.get('score', 0) >= 2 for hit in chunk_hits)
     npc_roster = build_npc_roster(
         onstage=onstage,
         relevant=relevant,
@@ -211,6 +197,7 @@ def build_selector_decision(*, state_json: dict, recent_history: list[dict], kee
         'inject_npc_candidates': inject_candidates,
         'npc_profile_targets': targets,
         'event_hits': event_hits,
+        'summary_chunk_hits': chunk_hits,
         'inject_summary': inject_summary,
         'npc_roster': npc_roster,
     }

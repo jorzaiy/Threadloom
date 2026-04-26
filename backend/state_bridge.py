@@ -11,13 +11,11 @@ try:
     from .character_assets import load_system_npcs
     from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment
     from .card_hints import get_known_npc_role
-    from .thread_tracker import _should_override_main_label_with_event
 except ImportError:
     from continuity_hints import match_continuity_hint
     from character_assets import load_system_npcs
     from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment
     from card_hints import get_known_npc_role
-    from thread_tracker import _should_override_main_label_with_event
 
 
 STRUCTURED_NAME_RE = re.compile(r'[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?')
@@ -46,13 +44,6 @@ ENTITY_DESCRIPTOR_SUFFIXES = (
     '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
 )
 GENERIC_SHADOW_LABELS = {'暗影', '黑影', '影子', '人影'}
-
-
-def _thread_key_from_label(kind: str, label: str) -> str:
-    text = ' '.join(str(label or '').split()).strip()
-    text = re.sub(r'[，。、“”‘’！？：:；,.!?()（）\[\]{}<>/\\-]+', '', text)
-    text = text[:48] or 'unknown'
-    return f'{kind}:{text}'
 
 
 def extract_section_lines(text: str, section: str) -> list[str]:
@@ -1284,7 +1275,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             return True
         if field == 'immediate_goal' and len(text) <= 4:
             return True
-        if field != 'immediate_goal' and actor_names and not any(name in text for name in actor_names) and '，' in text:
+        if field not in {'main_event', 'immediate_goal'} and actor_names and not any(name in text for name in actor_names) and '，' in text:
             return True
         return False
 
@@ -1363,7 +1354,17 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         (current.get('scene_entities', []) if isinstance(current.get('scene_entities', []), list) else [])
         + (prev.get('scene_entities', []) if isinstance(prev.get('scene_entities', []), list) else [])
     )
-    valid_holders = set(current['onstage_npcs']) | set(current['relevant_npcs']) | protagonist_names() | set(early_holder_lookup.keys())
+    actor_name_lookup: dict[str, str] = {}
+    actor_source = current.get('actors', prev.get('actors', {}))
+    if isinstance(actor_source, dict):
+        for actor_id, actor in actor_source.items():
+            if not isinstance(actor, dict):
+                continue
+            for raw_name in [actor.get('name', '')] + list(actor.get('aliases', []) or []):
+                actor_name = sanitize_runtime_name(raw_name)
+                if actor_name:
+                    actor_name_lookup[actor_name] = str(actor_id)
+    valid_holders = set(current['onstage_npcs']) | set(current['relevant_npcs']) | protagonist_names() | set(early_holder_lookup.keys()) | set(actor_name_lookup.keys())
     for item in possession_state:
         if not isinstance(item, dict):
             continue
@@ -1379,13 +1380,17 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         if object_id not in object_index:
             continue
         seen_possession.add(object_id)
-        normalized_possession.append({
+        normalized_item = {
             'object_id': object_id,
             'holder': holder,
             'status': str(item.get('status', '') or 'carried').strip() or 'carried',
             'location': str(item.get('location', '') or '').strip(),
             'updated_by_turn': str(item.get('updated_by_turn', '') or '').strip(),
-        })
+        }
+        holder_actor_id = str(item.get('holder_actor_id', '') or '').strip() or actor_name_lookup.get(holder, '')
+        if holder_actor_id:
+            normalized_item['holder_actor_id'] = holder_actor_id
+        normalized_possession.append(normalized_item)
     current['possession_state'] = normalized_possession
 
     object_visibility = current.get('object_visibility', prev.get('object_visibility', []))
@@ -1402,12 +1407,27 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         if object_id not in object_index:
             continue
         seen_visibility.add(object_id)
-        normalized_visibility.append({
+        visibility = str(item.get('visibility', '') or 'private').strip() or 'private'
+        if visibility not in {'private', 'public'}:
+            visibility = 'private'
+        visibility_item = {
             'object_id': object_id,
-            'visibility': str(item.get('visibility', '') or 'private').strip() or 'private',
+            'visibility': visibility,
             'known_to': [sanitize_runtime_name(name) for name in (item.get('known_to', []) or []) if sanitize_runtime_name(name)][:6],
             'note': str(item.get('note', '') or '').strip(),
-        })
+        }
+        known_to_actor_ids = []
+        for actor_id in item.get('known_to_actor_ids', []) or []:
+            actor_id_text = str(actor_id or '').strip()
+            if actor_id_text and actor_id_text not in known_to_actor_ids:
+                known_to_actor_ids.append(actor_id_text)
+        for name in visibility_item['known_to']:
+            actor_id = actor_name_lookup.get(name, '')
+            if actor_id and actor_id not in known_to_actor_ids:
+                known_to_actor_ids.append(actor_id)
+        if known_to_actor_ids:
+            visibility_item['known_to_actor_ids'] = known_to_actor_ids[:6]
+        normalized_visibility.append(visibility_item)
     current['object_visibility'] = normalized_visibility
     object_ids_with_state = {item['object_id'] for item in normalized_possession} | {item['object_id'] for item in normalized_visibility}
     filtered_objects = []
@@ -1451,29 +1471,10 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     if not isinstance(active_threads, list):
         active_threads = prev.get('active_threads', []) if isinstance(prev.get('active_threads', []), list) else []
     current['active_threads'] = active_threads
-    actor_names = []
-    for item in current.get('active_threads', []) or []:
-        if not isinstance(item, dict):
-            continue
-        for actor in item.get('actors', []) or []:
-            actor_name = sanitize_runtime_name(actor)
-            if actor_name and not is_protagonist_name(actor_name) and actor_name not in actor_names:
-                actor_names.append(actor_name)
-    for actor_name in actor_names:
-        if actor_name not in current['onstage_npcs'] and actor_name not in current['relevant_npcs']:
-            current['relevant_npcs'].append(actor_name)
     current['relevant_npcs'] = dedupe_names(
         [name for name in current.get('relevant_npcs', []) if name not in current['onstage_npcs']],
         limit=6,
     )
-    if actor_names:
-        current['scene_entities'] = merge_scene_entities(
-            current.get('scene_entities', []),
-            fallback_scene_entities(current['onstage_npcs'] + current['relevant_npcs']),
-            current['onstage_npcs'],
-            current.get('important_npcs', prev.get('important_npcs', [])),
-            current.get('continuity_hints', prev.get('continuity_hints', [])),
-        )
     for item in current.get('scene_entities', []) or []:
         if not isinstance(item, dict):
             continue
@@ -1489,18 +1490,6 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             onstage=primary in set(current.get('onstage_npcs', []) or []),
             relevant=primary in set(current.get('relevant_npcs', []) or []),
         )
-    current_main_event = str(current.get('main_event', '') or '').strip()
-    if current_main_event:
-        for item in current['active_threads']:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get('kind', '') or '') != 'main':
-                continue
-            current_label = str(item.get('label', '') or '')
-            if _should_override_main_label_with_event(current_label, current_main_event):
-                item['label'] = current_main_event
-                item['key'] = _thread_key_from_label('main', current_main_event)
-            break
     important_npcs = current.get('important_npcs', prev.get('important_npcs', []))
     if not isinstance(important_npcs, list):
         important_npcs = prev.get('important_npcs', []) if isinstance(prev.get('important_npcs', []), list) else []

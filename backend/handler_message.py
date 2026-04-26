@@ -10,10 +10,10 @@ try:
     from .continuity_hints import normalized_hint_entries
     from .important_npc_tracker import update_important_npcs
     from .thread_tracker import apply_thread_tracker
-    from .runtime_store import append_event_summary, append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
-    from .event_ledger import build_event_ledger_with_llm, build_event_summary_item
-    from .event_status import apply_event_status_transitions
+    from .runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
+    from .actor_registry import update_actor_registry
     from .summary_updater import update_summary
+    from .summary_chunks import update_summary_chunks
     from .context_builder import build_runtime_context
     from .bootstrap_session import bootstrap_session
     from .opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
@@ -34,10 +34,10 @@ except ImportError:
     from continuity_hints import normalized_hint_entries
     from important_npc_tracker import update_important_npcs
     from thread_tracker import apply_thread_tracker
-    from runtime_store import append_event_summary, append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
-    from event_ledger import build_event_ledger_with_llm, build_event_summary_item
-    from event_status import apply_event_status_transitions
+    from runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
+    from actor_registry import update_actor_registry
     from summary_updater import update_summary
+    from summary_chunks import update_summary_chunks
     from context_builder import build_runtime_context
     from bootstrap_session import bootstrap_session
     from opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
@@ -229,7 +229,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     def finalize_opening_choice(choice: str) -> dict[str, Any]:
         state = initialize_opening_choice_state(session_id, choice)
         opening_prompt = build_opening_choice_reply(choice)
-        context = build_runtime_context(session_id)
+        context = build_runtime_context(session_id, user_text=opening_prompt)
         scene = context.get('scene_facts', {})
         arbiter = run_arbiter(opening_prompt, scene)
         arbiter_result = arbiter.get('results', []) if arbiter.get('arbiter_needed') else None
@@ -359,6 +359,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'narrator': {
                 'system_prompt': _trim_trace_text(system_prompt),
                 'user_prompt': _trim_trace_text(user_prompt),
+                'prompt_block_stats': copy.deepcopy(prompt_block_stats(system_prompt)),
+                'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
                 'reply': reply,
                 'usage': copy.deepcopy(usage),
                 'model_error': model_error,
@@ -489,7 +491,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         }
         return finalize_response(response, trace=trace)
 
-    context = build_runtime_context(session_id)
+    context = build_runtime_context(session_id, user_text=text)
     if not state:
         state = seed_default_state(session_id)
     scene = context.get('scene_facts', {})
@@ -637,7 +639,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state_keeper_diagnostics = None
     state_keeper_trace = {}
     cfg = load_runtime_config()
-    consolidate_every = cfg.get('memory', {}).get('consolidate_every_turns', 12)
+    consolidate_every = cfg.get('memory', {}).get('consolidate_every_turns', 3)
     is_consolidation_turn = consolidate_every > 0 and current_turn_num % consolidate_every == 0
 
     if is_first_turn or needs_keeper_bootstrap or is_consolidation_turn:
@@ -743,28 +745,17 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             current_user = None
     recent_pairs = recent_pairs[-3:]
 
-    summary_ledger = build_event_ledger_with_llm(
-        user_text=text,
+    state = update_actor_registry(
+        state,
         narrator_reply=reply,
-        prev_state=prev_state,
-        onstage_names=state.get('onstage_npcs', []),
-        location=state.get('location', ''),
+        turn_number=current_turn_num,
+        user_text=text,
         recent_pairs=recent_pairs,
-        current_state=state,
+        player_name=context.get('player_profile_json', {}).get('name', '') or context.get('player_profile_json', {}).get('courtesyName', ''),
     )
-    state = apply_event_status_transitions(state, summary_ledger)
     save_state(session_id, state)
-    should_generate_event_summary = current_turn_num <= 2 or current_turn_num % 3 == 0
+    summary_chunk_result = update_summary_chunks(session_id)
     event_summary_item = None
-    if should_generate_event_summary:
-        event_summary_item = build_event_summary_item(
-            turn_id=turn_id,
-            ledger=summary_ledger,
-            onstage_names=state.get('onstage_npcs', []),
-            tracked_objects=state.get('tracked_objects', []),
-            carryover_clues=state.get('carryover_clues', []),
-        )
-        append_event_summary(session_id, event_summary_item)
     summary_text = update_summary(session_id)
     persona_counts = update_persona(session_id, context.get('continuity_candidates', []))
 
@@ -831,6 +822,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'state_snapshot': build_state_snapshot(state),
         'summary_updated': True,
         'summary_text': summary_text,
+        'summary_chunks': copy.deepcopy(summary_chunk_result),
         'persona_counts': copy.deepcopy(persona_counts),
         'event_summary_item': copy.deepcopy(event_summary_item),
     }

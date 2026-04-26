@@ -139,6 +139,7 @@ def session_paths(session_id: str) -> dict:
         'canon': memory_dir / 'canon.md',
         'summary': memory_dir / 'summary.md',
         'event_summaries': memory_dir / 'event_summaries.json',
+        'summary_chunks': memory_dir / 'summary_chunks.json',
         'keeper_archive': memory_dir / 'keeper_record_archive.json',
         'context': session_dir / 'context.json',
         'meta': session_dir / 'meta.json',
@@ -201,6 +202,25 @@ def load_state(session_id: str) -> dict:
             'carryover_signals': [],
             'immediate_risks': [],
             'carryover_clues': [],
+            'actors': {
+                'protagonist': {
+                    'actor_id': 'protagonist',
+                    'kind': 'protagonist',
+                    'name': '主角',
+                    'aliases': ['你', '主角'],
+                    'personality': '',
+                    'appearance': '',
+                    'identity': '主角',
+                    'created_turn': 1,
+                },
+            },
+            'actor_context_index': {
+                'active_actor_ids': ['protagonist'],
+                'archived_actor_ids': [],
+                'last_mentioned_turn': {'protagonist': 1},
+                'archive_after_quiet_turns': 12,
+            },
+            'knowledge_records': [],
         }
     try:
         return json.loads(path.read_text(encoding='utf-8'))
@@ -220,6 +240,26 @@ def load_continuity_hints(session_id: str) -> list:
         items = data.get('entries', [])
         return items if isinstance(items, list) else []
     return data if isinstance(data, list) else []
+
+
+def load_summary_chunks(session_id: str) -> dict:
+    path = session_paths(session_id)['summary_chunks']
+    if not path.exists():
+        return {'version': 1, 'chunks': []}
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return {'version': 1, 'chunks': []}
+    chunks = data.get('chunks', []) if isinstance(data, dict) else []
+    return {'version': int(data.get('version', 1) or 1) if isinstance(data, dict) else 1, 'chunks': chunks if isinstance(chunks, list) else []}
+
+
+def save_summary_chunks(session_id: str, chunks: dict) -> None:
+    data = chunks if isinstance(chunks, dict) else {'version': 1, 'chunks': []}
+    if not isinstance(data.get('chunks', []), list):
+        data['chunks'] = []
+    data.setdefault('version', 1)
+    _atomic_write_json(session_paths(session_id)['summary_chunks'], data)
 
 
 def save_continuity_hints(session_id: str, items: list[dict]) -> None:
@@ -409,6 +449,9 @@ def build_state_snapshot(state: dict) -> dict:
         'tracked_objects': state.get('tracked_objects', []),
         'possession_state': state.get('possession_state', []),
         'object_visibility': state.get('object_visibility', []),
+        'actors': state.get('actors', {}),
+        'actor_context_index': state.get('actor_context_index', {}),
+        'knowledge_records': state.get('knowledge_records', []),
     }
 
 
@@ -579,6 +622,25 @@ def seed_default_state(session_id: str) -> dict:
         'tracked_objects': [],
         'possession_state': [],
         'object_visibility': [],
+        'actors': {
+            'protagonist': {
+                'actor_id': 'protagonist',
+                'kind': 'protagonist',
+                'name': '主角',
+                'aliases': ['你', '主角'],
+                'personality': '',
+                'appearance': '',
+                'identity': '主角',
+                'created_turn': 1,
+            },
+        },
+        'actor_context_index': {
+            'active_actor_ids': ['protagonist'],
+            'archived_actor_ids': [],
+            'last_mentioned_turn': {'protagonist': 1},
+            'archive_after_quiet_turns': 12,
+        },
+        'knowledge_records': [],
     }
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from card_hints import invalidate_card_hints_cache
 from card_importer import extract_card_json, import_card_to_target, load_raw_card
+from lorebook_distiller import rebuild_lorebook_distillation
 from player_profile import build_player_profile_override_draft, load_base_player_profile
 from paths import APP_ROOT, active_character_id, active_user_id, active_user_label, character_root, normalize_session_id, user_root
 from runtime_store import invalidate_history_cache
@@ -134,6 +135,25 @@ def delete_character_card(character_id: str) -> dict:
         'ok': True,
         'deleted_character_id': value,
         'active_character_id': get_active_character_id() if remaining else '',
+        'characters': list_character_cards(),
+    }
+
+
+def rebuild_character_lorebook(character_id: str) -> dict:
+    value = _slug(character_id)
+    target = current_user_character_root() / value
+    source = target / 'source'
+    if not target.exists() or not source.exists():
+        raise ValueError('character not found')
+    if not (source / 'lorebook.json').exists():
+        raise ValueError('lorebook not found')
+    report = rebuild_lorebook_distillation(source)
+    invalidate_card_hints_cache()
+    invalidate_history_cache()
+    return {
+        'ok': True,
+        'character_id': value,
+        'lorebook_distillation': report,
         'characters': list_character_cards(),
     }
 

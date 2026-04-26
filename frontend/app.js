@@ -783,6 +783,43 @@ function renderCharacterManageGrid() {
 
     const actions = document.createElement('div');
     actions.className = 'character-manage-actions';
+    const rebuildBtn = document.createElement('button');
+    rebuildBtn.type = 'button';
+    rebuildBtn.className = 'subtle-btn';
+    rebuildBtn.textContent = '重生成世界书';
+    rebuildBtn.addEventListener('click', async () => {
+      if (!window.confirm(`重新生成角色卡“${item.name || item.character_id}”的瘦身世界书吗？`)) return;
+      rebuildBtn.disabled = true;
+      const previousText = rebuildBtn.textContent;
+      rebuildBtn.textContent = '生成中...';
+      try {
+        if (characterManageNote) {
+          characterManageNote.textContent = `正在重新生成世界书：${item.name || item.character_id}`;
+          characterManageNote.dataset.kind = '';
+        }
+        const data = await apiJson('/api/character/rebuild-lorebook', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({character_id: item.character_id}),
+        });
+        characterItems = data.characters || characterItems;
+        renderCharacterSelect();
+        const report = data.lorebook_distillation || {};
+        if (characterManageNote) {
+          characterManageNote.textContent = `世界书已重生成：foundation ${report.foundation_rules ?? 0} 条，index ${report.index_items ?? 0} 条（${report.provider || 'unknown'}）`;
+          characterManageNote.dataset.kind = 'ok';
+        }
+      } catch (err) {
+        if (characterManageNote) {
+          characterManageNote.textContent = `世界书重生成失败：${err.message}`;
+          characterManageNote.dataset.kind = 'error';
+        }
+      } finally {
+        rebuildBtn.disabled = false;
+        rebuildBtn.textContent = previousText;
+      }
+    });
+    actions.appendChild(rebuildBtn);
     if (item.active) {
       const activeTag = document.createElement('span');
       activeTag.className = 'character-manage-active';

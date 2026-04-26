@@ -9,19 +9,22 @@
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照
 - `bootstrap_session.py`：新 session bootstrap
 - `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，不是只有 `recent window + keeper archive`
-- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界
+- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
 - `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；含 `_merge_knowledge_scope()` 增量合并
-- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 已扩展为同时提取 `knowledge_scope` 增量
+- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前只维护物品、持有关系、情报与信号，不再维护 NPC 基础设定
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
+- `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流
+- `lorebook_distiller.py`：角色卡导入 / 手动重建时把 `lorebook.json` 固化为 `lorebook-foundation.json` 与 `lorebook-index.json`
 - `persona_updater.py` / `persona_runtime.py`：session-local persona 流转与展示骨架
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档
-- `event_ledger.py` / `event_status.py`：事件账本与实验性状态转移合并；`event_ledger` 产出阶段事件摘要与 `status_transitions`，`event_status` 将明确的实体状态变化合并回 runtime state
+- `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`
+- `event_ledger.py`：事件账本；产出阶段事件摘要，不再负责人物短期状态写回
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器
 - `opening.py`：opening 菜单与开局状态机
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
@@ -40,13 +43,11 @@
 当前已经不是 stub backend，而是最小可运行主链：
 - narrator 已接上真实模型调用
 - 新 session 会继承 root `canon / summary / state`
-- state / summary / persona / threads / important NPC 都已接入 session-local 写回
-- narrator 当前的核心不是“只有两层上下文”，而是：
-  - 强约束层：`runtime_rules / preset / character_core / player_profile / canon / 当前硬锚点 / 知情边界 / recent window / state_fragment`
-  - 连续性层：`npc_roster / active_threads / objects / keeper archive / persona / 条件注入的 npc_profiles`
-  - 候选知识层：条件注入的系统级 NPC / 世界书 NPC / 世界书正文 / 长程阶段摘要
-- 最近 `12` 对 turn 仍是 narrator 的最核心近程上下文
-- 更早历史当前主要通过 keeper archive 命中回流，而不是自由 transcript 检索
+- state / summary / persona / threads / important NPC / actor registry 都已接入 session-local 写回
+- narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / items / knowledge / 最近 12 轮完整窗口 / user input`
+- `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近 12 轮为准
+- `event` 不再进入 narrator prompt，也不再写回 state；12 轮外历史改由固定 `summary_chunks` 通过 selector 条件召回
+- 世界书默认读取导入时蒸馏缓存：每轮常驻短 `foundation`，情境条目只在 selector / index 关键词命中时注入
 - `state_keeper` 优先，`state_updater` 兜底
 - arbiter 已接入主链，不再只是文档占位
 - partial reply 有独立处理路径，不再继续污染事实层
@@ -58,25 +59,29 @@
 - `state_fragment` 已前移到 narrator / state_keeper 主链，并在失败分支提供 `fragment-baseline`
 - `state_keeper_candidate` 当前可作为 `skeleton keeper` sidecar 先产出最小骨架，并并入 `state_fragment` 再交给完整 keeper
 - skeleton keeper 当前每个完整回复后都会运行，避免非合并轮长期沿用旧 `state_fragment` 造成硬锚点滞后；完整 fill keeper 仍按合并轮运行
-- 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补次级字段
+- 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补物品、情报与信号；默认每 3 轮运行一次，不再接管 `time / location / main_event / onstage_npcs / immediate_goal` 这类当前硬锚点
+- actor registry 当前在每个完整 narrator 回复后运行：narrator 后处理只允许创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份视为锁定，不允许后续覆盖；LLM 失败时不从旧 `scene_entities` fallback 建 actor，避免把旧污染写成不可变设定
+- actor registry 创建新 actor 时会读取最近 1~3 对 turn，因此上一轮 actor registry LLM 失败后，下一轮仍可从 recent window 补建，不需要依赖脏 fallback
+- actor registry 已内置 `protagonist`，物品持有和情报记录可统一绑定到 `actor_id`；`possession_state` 会补 `holder_actor_id`，`object_visibility` 会补 `known_to_actor_ids`，`knowledge_scope` 会派生 `knowledge_records`
+- 12 轮未被正文提及的 actor 会进入 `actor_context_index.archived_actor_ids`，只影响后续上下文注入，不修改 actor 基础设定；再次被正文提及时会回到 active
+- 每满 12 个完整 user/assistant pair 生成一个不可变 dense summary chunk，保存到 `memory/summary_chunks.json`；chunk 覆盖固定区间，不重叠、不滚动覆盖
 - opening-choice 分支现在不再“只生成正文然后直接返回”；首轮开局正文会进入 `state_fragment -> skeleton keeper -> fill keeper -> thread/important_npc` 写回链，避免正文与 state 从第一轮开始分叉。当前这条链通常能落下 `time/location/main_event/onstage/immediate_risks/carryover_clues`，但 `immediate_goal` 仍可能偏保守
 - `main_event` 与 `active_threads.main.label` 当前已改为条件同步：不再让较慢更新的 `main_event` 无条件覆盖主线程标签；只有当 `main_event` 质量明显更高，或主线程标签仍是占位值时，才允许它接管主线程标签
-- `active_threads` 当前已降为“state/debug 辅助层”的实验状态：数据结构仍保留，但不再默认进入 narrator prompt，也不再作为 selector 的主要命中依据；主导当前叙事方向的层次更偏向 `recent window / carryover_signals / event summaries`
+- `active_threads` 当前已降为“state/debug 辅助层”的实验状态：数据结构仍保留，但不再默认进入 narrator prompt，也不再作为 selector 的主要命中依据；归一化层也不再允许它反向补 `relevant_npcs / scene_entities / main_event`
 - `carryover_signals` 统一信号层已接入状态 schema并真实落盘：设计目标是让 keeper 优先维护“后续仍会影响局势的统一信号”，再由兼容层派生旧 `immediate_risks / carryover_clues`；当前真实回合里 keeper 仍常直接产出旧字段，但状态归一化层已会把旧字段反推回统一信号层并持久化
 - 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里存在；`thread_tracker / context_builder / state_snapshot` 等核心消费点已开始优先使用统一信号层，再兼容旧字段
-- `onstage_npcs` 当前已改为优先从 `scene_entities` 投影：对象层逐步收为 keeper 的主真相源，名字列表更多作为快照/UI 层派生字段保留；当前投影规则已在真实回合中生效
+- `onstage_npcs` 当前仍作为短期硬锚点 / UI 快照存在，但不再承载长期人物基础设定；长期人物基础设定进入不可变 `actors`
 - 当前目标分工草案：
 - `event`：中程检索层，服务于 recall / summary，不默认主导 narrator
 - `signal`：当前方向约束层，可直接进入 narrator / selector
 - `summary`：长程压缩层，只在 recent window 不足时条件回流
 - `thread`：state/debug 辅助层，当前实验中已去主导化
-- `status_transition`：实验性事件事实层，用于记录“同一实体本轮发生了会影响下一轮硬锚点的状态/位置/可互动性变化”；当前仍需重新设计防污染策略，不应无限扩展成关键词脚本
+- `actor registry`：长期人物基础设定层，只创建新 actor，不维护短期状态
 
 当前 `event` 链的实现边界：
 - event 当前已改为真正读取最近 `1~3` 对 `user/assistant` 窗口，而不是只摘要当前轮 narrator prose
 - `prev_state` 当前已在调用侧修正为“本轮前状态”，避免 event 用当前态伪装上一轮状态
-- event 当前可输出 `status_transitions`，由 `event_status.py` 合并回 `scene_entities / onstage_npcs / active_threads / main_event`，用于减少“旧动态称呼或旧位置关系”继续污染下一轮硬锚点
-- `status_transitions` 目前是临时实验接口：它比关键字兜底更数据驱动，但仍存在单轮 event 误判污染 state 的风险；后续应在 keeper 数据整理阶段决定是否保留、降级为 pending、或并入统一 signal 层
+- event 当前不再输出或合并 `status_transitions`；短期状态只保留在最近窗口 / 当前硬锚点，不写入长期 actor 基础设定
 - heuristic fallback 当前也按多回合窗口工作，不再优先挑天气/氛围句；当前仍可能不如 LLM 版本稳定，但 summary 已开始更像阶段事件压缩器
 - `state_updater` 已更偏保守继承，不轻易覆盖已有高信号状态
 - narrator 对“半句中止但 provider 未标 partial”的返回增加了不完整输出保护，避免坏回复继续污染事实层
@@ -87,19 +92,21 @@
 - 前端默认会话选择已改为最近更新会话优先
 - 角色卡信息当前会动态读取角色卡元数据和缩略封面图；角色卡切换与导入入口现已主要收进设置面板
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间私下信息自动外溢
-- NPC 间信息隔离已升级为结构化 `knowledge_scope` 系统：state 中追踪 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，keeper 按回合提取增量，`state_bridge.py` 合并去重，`narrator_input.py` 渲染为结构化知情边界
+- NPC 间信息隔离已升级为结构化 `knowledge_scope` 系统：state 中追踪 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，keeper 按回合提取增量，`state_bridge.py` 合并去重，`actor_registry.py` 派生 actor-id 版 `knowledge_records`，`narrator_input.py` 渲染为结构化知情边界
 - 所有文件写入已改为原子写入模式（`_atomic_write_text()` / `_atomic_write_json()`）：写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
 - 模型调用已加入 API 韧性层：`_retry_on_rate_limit` 装饰器在 429/503 错误时自动指数退避重试（最多 3 次），尊重 `Retry-After` 响应头；远端和本地模型调用均已覆盖
 - `summary` 与独立 `mid digest` 当前不再作为 narrator prompt 的主输入块
-- 世界书注入当前已改成预算驱动，避免 `alwaysOn` 与整段 lore 压过最近窗口
- - 世界书预算当前已细化到 `runtimeScope / entryType`：
-  - foundation 与 situational 分开限额
-  - `rule / world / faction / history / entry` 可分别限额
-  - `archive_only` 条目直接排除，不进入 narrator
+- 世界书注入当前已改成导入期蒸馏 + 运行期 selector：避免 `alwaysOn` 与整段 raw lore 压过最近窗口
+- 导入器会在写出 `lorebook.json` 后生成两个缓存文件：
+  - `lorebook-foundation.json`：每轮常驻的短世界基础 / 身份边界 / 规则口径
+  - `lorebook-index.json`：按关键词召回的情境 lore 摘要，条目保留 `source_entry_ids`
+- `lorebook_distiller.py` 默认尝试用 `state_keeper_candidate` LLM 蒸馏；当前用户配置建议使用 `deepseek-v4-flash` 这类稳定付费模型。蒸馏调用会覆盖普通 keeper 的输出预算（独立 `max_output_tokens`），遇到空回复或 JSON 解析失败会自动重试；仍失败时使用 heuristic fallback，并在产物 `provider` 字段标记
+- narrator prompt 中对应块为 `【世界书基础规则】` 和 `【情境世界书】`；旧 raw `【世界书】` 块不再作为默认入口
+- 情境世界书默认限额较小（当前默认 2 条 / 约 700 字），避免普通观察轮因 recent window 中出现世界名词而召回过多 lore
 - turn trace / debug 当前会自动记录：
   - 实际注入的 lorebook 条目列表
-  - 每条条目的 `entryType / runtimeScope / priority / injected_chars`
-  - `【世界书】` 总字符数
+  - 蒸馏 foundation 与 index 命中来源
+  - `【世界书基础规则】` / `【情境世界书】` 总字符数
   - prompt 各大区块字符占比
 
 ## 当前配置边界
@@ -119,7 +126,7 @@
 - 单用户当前可用，默认用户目录是主工作路径
 - 单站点是当前产品层简化，不是永久平台承诺
 - `Narrator / State Keeper` 已有用户级模型选择
-- `Analyzer / Arbiter / Skeleton Keeper` 这类高级角色当前不暴露给普通用户界面，但已可通过用户级 `model-runtime.json -> advanced_models` 做高级覆盖
+- `Analyzer / Arbiter / Skeleton Keeper / Lorebook Distiller` 这类高级角色当前不暴露给普通用户界面，但已可通过用户级 `model-runtime.json -> advanced_models` 做高级覆盖
 - 当前角色卡管理也已进入 Web UI：
   - 当前用户角色卡列表可枚举
   - 可切换当前活跃角色卡
@@ -127,16 +134,16 @@
   - 当前默认用户标签固定显示为 `default_user`
   - 当前阶段不做用户管理，产品面默认仍为单用户 `default-user`
   - 多用户相关底层代码已保留在 `user_manager.py`，但 `/api/users`、`/api/multi-user`、`/api/auth/login`、`/api/auth/logout` 当前统一视为实验态关闭
-  - `state_keeper_candidate` 现已提升至 800 max_output_tokens（原 280 导致 JSON 截断）
+  - `state_keeper_candidate` 当前建议绑定稳定模型；本地默认用户已切到 `deepseek-v4-flash`，避免世界书蒸馏阶段出现空回复 / 截断
   - 三条 bootstrap（NPC/物品/情报）均已通过 LLM 回合测试
 
 当前建议配模方向：
 - narrator 继续使用强远端模型
-- `state_keeper` 线上和线下均以 `gemma-4-31b-it` 为主力模型
+- `state_keeper` 与 `state_keeper_candidate` 当前建议使用稳定低温模型；默认用户当前使用 `deepseek-v4-flash`
 - skeleton keeper 和 fill keeper 均使用同一模型，通过 prompt 分工
 - 当前 keeper 主链路是：
-  - `skeleton keeper`（`gemma-4-31b-it`）→ 最小骨架
-  - `fill keeper`（`gemma-4-31b-it`）→ 补次级字段
+  - `skeleton keeper`（`deepseek-v4-flash`）→ 最小骨架
+  - `fill keeper`（`deepseek-v4-flash`）→ 补物品、情报与信号
   - `heuristic fallback` → 最终兜底
 - `fill keeper` 当前按增量 patch 思路运行：已有 NPC / 物件默认沿用，只在明确新增或明确变化时输出，避免低质量后抽取覆盖高质量旧状态
 - NPC 与物件绑定当前由 `possession_state` 驱动：标准化层会把 holder 对齐到稳定 NPC 主名，并自动写回 `tracked_objects[].owner / bound_entity_id` 与 `scene_entities[].owned_objects`
@@ -246,12 +253,12 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 
 ## 当前仍不稳定的部分
 
-- `state_keeper` 仍主要从 narrator prose 反提 state
-- keeper/event/signal/thread/summary 数据边界仍偏重叠，尤其是“事件事实”和“下一轮硬锚点”的关系需要重新整理
-- `status_transitions` 当前缺少防污染闸门；若继续保留，需要明确它是 suggestion、pending 还是可直接写回 state
+- `state_keeper` 仍主要从 narrator prose 反提物品、情报与信号，actor registry 也仍是 narrator 回复后的后处理调用，而不是同一次 narrator 输出中的原生 sidecar
+- keeper/event/signal/thread/summary 数据边界仍偏重叠，尤其是“事件事实”“当前方向信号”和“长期情报记录”的关系需要继续整理
+- actor registry 当前只保证基础设定不可覆盖；新 actor 创建质量仍依赖模型抽取，误建一次性 NPC 的风险仍存在，但 LLM 失败时不会从旧 `scene_entities` 自动补建
 - arbiter 仍主要覆盖少数高风险事件类型
 - analyzer / state keeper 虽已分模，但默认配置仍偏实验态
-- 主角 runtime 仍未独立落地
+- ~~主角 runtime 仍未独立落地~~ → 已在 `actors.protagonist` 中作为特殊 actor 落地
 - ~~NPC 间信息隔离仍未独立成结构化 knowledge scope 层~~ → 已补 `knowledge_scope`
 - ~~已解决事件归档层仍未独立落地~~ → 已补 `resolved_events`
 
@@ -270,9 +277,10 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 | ----              | ----                | ----               | ----     | ----                                  |
 | 启发式            | `state_updater.py`  | 每轮               | ~1KB     | 全字段（保守推理）                     |
 | Skeleton LLM      | `state_keeper.py`   | 每完整轮           | ~2KB     | time, location, main_event, onstage_npcs, immediate_goal |
-| Fill LLM          | `state_keeper.py`   | 每 N 轮（默认 12） | ~5KB     | carryover_signals, tracked_objects, knowledge_scope |
+| Fill LLM          | `state_keeper.py`   | 每 N 轮（默认 3）  | ~5KB     | carryover_signals, tracked_objects, knowledge_scope |
+| Actor Registry    | `actor_registry.py` | 每完整轮           | ~2KB     | actors, actor_context_index, actor-id bindings |
 
-- 读取 `config/runtime.json` 中 `memory.consolidate_every_turns`（默认 12）
+- 读取 `config/runtime.json` 中 `memory.consolidate_every_turns`（默认 3）
 - 非合并轮使用 skeleton + `build_state_from_fragment()` + `update_state()` 轻量更新
 - opening-choice 首轮当前是特殊链路：会先跑 skeleton + fill keeper，再接 thread/important_npc 写回，不直接复用普通非合并轮的 `update_state()` 路径
 - 诊断信息中 `provider` 标注为 `skeleton+fragment` 或 `full_fill`
@@ -345,3 +353,11 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - 设置面板重组为 `当前世界 / 导入资产 / 玩家设定 / 模型连接`：当前世界内直接列出角色卡管理、Session 管理和聊天记录导入；导入资产只处理角色卡导入。
 - 胶囊内 `Threadloom` 打开模型连接；当前用户/世界区域打开当前世界页签。窄屏与移动端隐藏胶囊。
 - Session 管理弹层已移出 composer 表单，新增关闭按钮，并修复点击快捷入口后被全局点击监听立刻关闭的问题；当前世界页签也内嵌会话列表，可直接切换、删除或新建会话。
+
+### 世界书蒸馏回归（v0.4.4）
+
+- `state_keeper / state_keeper_candidate` 默认用户配置已切到 `deepseek-v4-flash`，用于提高 keeper 与世界书蒸馏稳定性。
+- 四张当前角色卡均已重建 `lorebook-foundation.json` / `lorebook-index.json`，产物 `provider: llm`。
+- HTTP 3 轮回归从 `开始游戏` 开局验证通过：开局与后续 3 个正文回合均正常返回。
+- narrator prompt 注入审查结论：每轮均注入 `【世界书基础规则】`，普通正文轮情境世界书限制在约 2 条 / 700 字；旧 raw `【世界书】` 块不再出现。
+- turn trace 已补充 opening-choice 分支的 `prompt_block_stats` 与 `lorebook_injection`，便于直接审查每轮注入结构。

@@ -38,6 +38,7 @@ try:
         set_character_override_root,
         system_npcs_path,
     )
+    from .lorebook_distiller import rebuild_lorebook_distillation
 except ImportError:
     from card_hints import invalidate_card_hints_cache
     from character_assets import (
@@ -52,6 +53,7 @@ except ImportError:
         set_character_override_root,
         system_npcs_path,
     )
+    from lorebook_distiller import rebuild_lorebook_distillation
 
 logger = logging.getLogger(__name__)
 
@@ -1468,6 +1470,8 @@ def _write_manifest(card_json: dict, lorebook: dict, system_npcs: dict, openings
         'artifacts': {
             'character_core': str(character_core_path()),
             'lorebook': str(lorebook_path()),
+            'lorebook_foundation': str(character_source_base() / 'lorebook-foundation.json'),
+            'lorebook_index': str(character_source_base() / 'lorebook-index.json'),
             'openings': str(openings_path()),
             'system_npcs': str(system_npcs_path()),
             'raw_card': backups.get('raw_card_path', ''),
@@ -1609,6 +1613,7 @@ def import_card_bundle(card_json: dict, *, png_data: bytes | None = None) -> dic
     _write_json(lorebook_path(), lorebook)
     _write_json(openings_path(), openings)
     _write_json(system_npcs_path(), system_npcs)
+    distill_report = rebuild_lorebook_distillation(character_source_base())
     _write_runtime_baselines(core, lorebook, system_npcs)
 
     invalidate_card_hints_cache()
@@ -1622,6 +1627,7 @@ def import_card_bundle(card_json: dict, *, png_data: bytes | None = None) -> dic
         'cover_saved': bool(covers.get('cover_saved')),
         'raw_card_path': backups.get('raw_card_path', ''),
         'import_manifest_path': str(import_manifest_path()),
+        'lorebook_distillation': distill_report,
     }
 
 
