@@ -22,9 +22,8 @@ try:
     from .model_client import looks_incomplete_reply
     from .narrator_input import build_narrator_input, prompt_block_stats
     from .paths import normalize_session_id
-    from .state_fragment import build_state_fragment, build_state_from_fragment
-    from .state_keeper import call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
-    from .state_updater import update_state
+    from .state_fragment import build_state_fragment, build_state_from_fragment, merge_reply_skeleton
+    from .state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from .persona_updater import update_persona
     from .state_fragment import merge_state_skeleton
 except ImportError:
@@ -46,9 +45,8 @@ except ImportError:
     from model_client import looks_incomplete_reply
     from narrator_input import build_narrator_input, prompt_block_stats
     from paths import normalize_session_id
-    from state_fragment import build_state_fragment, build_state_from_fragment
-    from state_keeper import call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
-    from state_updater import update_state
+    from state_fragment import build_state_fragment, build_state_from_fragment, merge_reply_skeleton
+    from state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from persona_updater import update_persona
     from state_fragment import merge_state_skeleton
 
@@ -59,6 +57,43 @@ def _trim_trace_text(text: str, limit: int = TRACE_PROMPT_LIMIT) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + '\n...[truncated]'
+
+
+def _state_keeper_failure_diagnostics(err: Exception, state_error: str) -> dict:
+    usage = err.usage if isinstance(err, StateKeeperCallError) and isinstance(err.usage, dict) else None
+    raw_reply = err.raw_reply if isinstance(err, StateKeeperCallError) else ''
+    diagnostics = {
+        'provider_requested': 'llm',
+        'provider_used': 'fragment-baseline',
+        'model_usage': copy.deepcopy(usage),
+        'fallback_used': True,
+        'fallback_reason': state_error,
+    }
+    if isinstance(raw_reply, str):
+        diagnostics['raw_reply_empty'] = not raw_reply.strip()
+        diagnostics['raw_reply_excerpt'] = _trim_trace_text(raw_reply, 600)
+    return diagnostics
+
+
+def _keeper_fallback_bootstrapped(fragment_state: dict, skeleton_keeper_diagnostics: dict | None = None) -> bool:
+    """Treat fragment/skeleton state as enough to leave bootstrap retry mode.
+
+    A full keeper parse failure should not force every later turn back into full
+    bootstrap mode; that also skips skeleton keeper and amplifies missing writes.
+    """
+    if isinstance(skeleton_keeper_diagnostics, dict) and not skeleton_keeper_diagnostics.get('fallback_used'):
+        if skeleton_keeper_diagnostics.get('provider_used') in {'llm', 'skipped'}:
+            return True
+    if not isinstance(fragment_state, dict):
+        return False
+    usable_core = 0
+    for field in ('time', 'location', 'main_event', 'immediate_goal'):
+        value = str(fragment_state.get(field, '') or '').strip()
+        if value and not value.startswith('待确认'):
+            usable_core += 1
+    if fragment_state.get('onstage_npcs'):
+        usable_core += 1
+    return usable_core >= 2
 
 
 def _trace_context_excerpt(context: dict) -> dict:
@@ -298,21 +333,11 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception as err:
             state_error = str(err)
             fragment_state = build_state_from_fragment(state, state_fragment, session_id)
-            fragment_state['state_keeper_diagnostics'] = {
-                'provider_requested': 'llm',
-                'provider_used': 'fragment-baseline',
-                'model_usage': None,
-                'fallback_used': True,
-                'fallback_reason': state_error,
-                'bootstrap_turn': True,
-            }
-            fragment_state['state_keeper_bootstrapped'] = False
-            save_state(session_id, fragment_state)
-            try:
-                state = update_state(session_id)
-            except Exception:
-                state = fragment_state
-            state_keeper_diagnostics = state.get('state_keeper_diagnostics', fragment_state.get('state_keeper_diagnostics', {}))
+            fragment_state['state_keeper_diagnostics'] = _state_keeper_failure_diagnostics(err, state_error)
+            fragment_state['state_keeper_diagnostics']['bootstrap_turn'] = True
+            fragment_state['state_keeper_bootstrapped'] = _keeper_fallback_bootstrapped(fragment_state, skeleton_keeper_diagnostics)
+            state = fragment_state
+            state_keeper_diagnostics = fragment_state.get('state_keeper_diagnostics', {})
             state['state_keeper_diagnostics'] = state_keeper_diagnostics
 
         append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
@@ -550,6 +575,11 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     is_first_turn = current_turn_num == 1
     needs_keeper_bootstrap = bool(state.get('opening_resolved')) and bool(state.get('opening_started')) and not bool(state.get('state_keeper_bootstrapped'))
     skeleton_every = 1
+    if completion_status == 'complete':
+        state_fragment = merge_reply_skeleton(state_fragment, reply)
+        context = dict(context)
+        context['state_fragment'] = state_fragment
+        turn_trace['runtime']['state_fragment_reply_skeleton'] = copy.deepcopy(state_fragment)
     should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and (not is_first_turn) and (not needs_keeper_bootstrap)
     if should_run_skeleton:
         try:
@@ -658,49 +688,10 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception as err:
             state_error = str(err)
             fragment_state = build_state_from_fragment(state, state_fragment, session_id)
-            fragment_state['state_keeper_diagnostics'] = {
-                'provider_requested': 'llm',
-                'provider_used': 'fragment-baseline',
-                'model_usage': None,
-                'fallback_used': True,
-                'fallback_reason': state_error,
-            }
-            fragment_state['state_keeper_bootstrapped'] = False
-            save_state(session_id, fragment_state)
-            try:
-                state = update_state(session_id)
-            except Exception as fallback_err:
-                turn_trace['runtime']['state_keeper'] = {
-                    'diagnostics': {
-                        'provider_requested': 'llm',
-                        'provider_used': 'fragment-baseline',
-                        'model_usage': None,
-                        'fallback_used': True,
-                        'fallback_reason': state_error,
-                    },
-                    'trace': copy.deepcopy(state_keeper_trace),
-                    'state_error': state_error,
-                    'fallback_update_error': str(fallback_err),
-                }
-                turn_trace['post_turn'] = {
-                    'state': copy.deepcopy(fragment_state),
-                    'state_snapshot': build_state_snapshot(fragment_state),
-                }
-                turn_trace['failure'] = {
-                    'type': type(fallback_err).__name__,
-                    'message': str(fallback_err),
-                    'stage': 'state_updater_fallback',
-                }
-                _save_turn_trace_safe(session_id, turn_id, turn_trace)
-                raise
-            state_keeper_diagnostics = {
-                'provider_requested': 'llm',
-                'provider_used': 'fragment+heuristic-fallback',
-                'model_usage': None,
-                'fallback_used': True,
-            'fallback_reason': state_error,
-        }
-        state['state_keeper_diagnostics'] = state_keeper_diagnostics
+            fragment_state['state_keeper_diagnostics'] = _state_keeper_failure_diagnostics(err, state_error)
+            fragment_state['state_keeper_bootstrapped'] = _keeper_fallback_bootstrapped(fragment_state, skeleton_keeper_diagnostics)
+            state = fragment_state
+            state_keeper_diagnostics = fragment_state['state_keeper_diagnostics']
     else:
         state_keeper_trace = {}
         fragment_state = build_state_from_fragment(state, state_fragment, session_id)
@@ -712,11 +703,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'fallback_used': False,
             'skipped_reason': f'non-consolidation turn ({current_turn_num}/{consolidate_every}), skeleton keeper provides core fields',
         }
-        save_state(session_id, fragment_state)
-        try:
-            state = update_state(session_id)
-        except Exception:
-            state = fragment_state
+        state = fragment_state
         state_keeper_diagnostics = fragment_state.get('state_keeper_diagnostics', {})
         state['state_keeper_diagnostics'] = state_keeper_diagnostics
         if 'state_keeper_bootstrapped' not in state:

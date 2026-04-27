@@ -1,12 +1,114 @@
 #!/usr/bin/env python3
 import unittest
+from unittest.mock import patch
 
-from backend.state_fragment import merge_state_skeleton
+from backend.state_fragment import extract_reply_skeleton, merge_reply_skeleton, merge_state_skeleton
 from backend.state_bridge import normalize_state_dict
 from backend.actor_registry import update_actor_registry
+from backend.arbiter_state import merge_arbiter_state
+from backend.state_keeper import _call_state_keeper_llm, _merge_keeper_fill
+from backend.handler_message import _keeper_fallback_bootstrapped
 
 
 class StateFragmentTest(unittest.TestCase):
+    def test_normalize_state_does_not_inherit_stale_arbiter_signals(self):
+        prev = {
+            'time': '夜里',
+            'location': '巷口',
+            'main_event': '旧潜行风险仍未裁定。',
+            'arbiter_signals': {
+                'events': [{'event_id': 'event-stealth-001', 'result': 'stealth_risk_needs_resolution', 'dice_needed': True}],
+                'flags': {'stealth_risk': 'elevated'},
+            },
+        }
+        current = {'time': '后半夜', 'location': '空屋', 'main_event': '主角睡下。'}
+
+        normalized = normalize_state_dict(current, prev_state=prev)
+
+        self.assertEqual(normalized['arbiter_signals'], {})
+
+    def test_merge_arbiter_state_clears_signals_when_not_needed(self):
+        state = {
+            'immediate_risks': ['当前潜行或压低动静的动作存在暴露风险。', '年轻男子伤势仍需看护。'],
+            'carryover_clues': ['潜行是否已经惊动观察者，仍需在后续回合继续确认。', '纸封是围杀关键物证。'],
+            'arbiter_signals': {
+                'events': [{'event_id': 'event-stealth-001', 'result': 'stealth_risk_needs_resolution', 'dice_needed': True}],
+                'flags': {'stealth_risk': 'elevated'},
+            },
+        }
+
+        merged = merge_arbiter_state(state, {'arbiter_needed': False, 'results': []})
+
+        self.assertEqual(merged['arbiter_signals'], {'events': [], 'flags': {}})
+        self.assertEqual(merged['immediate_risks'], ['年轻男子伤势仍需看护。'])
+        self.assertEqual(merged['carryover_clues'], ['纸封是围杀关键物证。'])
+
+    def test_extract_reply_skeleton_uses_scene_header_and_first_sentence(self):
+        reply = '【清早，医馆门前】\n\n陆小环拎着医箱跨过门槛，扬声招呼东家。\n\n屋里药气未散。'
+
+        skeleton = extract_reply_skeleton(reply)
+
+        self.assertEqual(skeleton['time'], '清早')
+        self.assertEqual(skeleton['location'], '医馆门前')
+        self.assertEqual(skeleton['main_event'], '陆小环拎着医箱跨过门槛，扬声招呼东家。')
+
+    def test_merge_reply_skeleton_advances_stale_fragment_without_llm(self):
+        fragment = {
+            'time': '后半夜',
+            'location': '坊署偏东空屋',
+            'main_event': '陆小环在偏东空屋内沐浴驱寒。',
+            'immediate_goal': '起身擦干。',
+        }
+        reply = '【清早，医馆门前】\n\n陆小环拎着医箱跨过门槛，声音先一步进了屋。'
+
+        merged = merge_reply_skeleton(fragment, reply)
+
+        self.assertEqual(merged['time'], '清早')
+        self.assertEqual(merged['location'], '医馆门前')
+        self.assertEqual(merged['main_event'], '陆小环拎着医箱跨过门槛，声音先一步进了屋。')
+
+    def test_state_keeper_llm_retries_once_on_empty_output(self):
+        usage = {'model': 'test-model', 'finish_reason': 'stop'}
+        with patch('backend.state_keeper.call_role_llm', side_effect=[('', dict(usage)), ('{"carryover_signals": []}', dict(usage))]) as mocked:
+            reply, final_usage, attempts = _call_state_keeper_llm('prompt')
+
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(reply, '{"carryover_signals": []}')
+        self.assertEqual(final_usage['retry_count'], 1)
+
+    def test_state_keeper_llm_does_not_retry_non_empty_output(self):
+        usage = {'model': 'test-model', 'finish_reason': 'stop'}
+        with patch('backend.state_keeper.call_role_llm', return_value=('not json', dict(usage))) as mocked:
+            reply, final_usage, attempts = _call_state_keeper_llm('prompt')
+
+        self.assertEqual(mocked.call_count, 1)
+        self.assertEqual(attempts, 1)
+        self.assertEqual(reply, 'not json')
+        self.assertEqual(final_usage['retry_count'], 0)
+
+    def test_keeper_fallback_with_usable_fragment_exits_bootstrap_mode(self):
+        fragment_state = {
+            'time': '近午',
+            'location': '医馆前堂',
+            'main_event': '坊署跑腿来医馆对昨夜伤者账目。',
+            'immediate_goal': '把账对清。',
+            'onstage_npcs': ['莫大夫', '跑腿汉子'],
+        }
+
+        self.assertTrue(_keeper_fallback_bootstrapped(fragment_state, None))
+
+    def test_keeper_fallback_with_pending_fragment_stays_unbootstrapped(self):
+        fragment_state = {
+            'time': '待确认',
+            'location': '待确认',
+            'main_event': '',
+            'immediate_goal': '',
+            'onstage_npcs': [],
+        }
+
+        self.assertFalse(_keeper_fallback_bootstrapped(fragment_state, None))
+
     def test_merge_state_skeleton_updates_scene_entity_onstage_flags(self):
         fragment = {
             'onstage_npcs': ['旧人物'],
@@ -231,6 +333,19 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertEqual([actor_id for actor_id in updated['actors'] if actor_id != 'protagonist'], [])
 
+    def test_actor_registry_parse_failure_preserves_usage_and_raw_reply_diagnostics(self):
+        usage = {'model': 'test-model', 'input_tokens': 10, 'output_tokens': 0}
+
+        with patch('backend.actor_registry.call_role_llm', return_value=('', usage)):
+            updated = update_actor_registry({}, narrator_reply='雨声淹没了长街。', turn_number=3, use_llm=True)
+
+        diagnostics = updated['actor_registry_diagnostics']
+        self.assertTrue(diagnostics['fallback_used'])
+        self.assertEqual(diagnostics['model_usage'], usage)
+        self.assertTrue(diagnostics['raw_reply_empty'])
+        self.assertEqual(diagnostics['raw_reply_excerpt'], '')
+        self.assertIn('Failed to parse JSON', diagnostics['error'])
+
     def test_normalize_state_keeps_archived_actor_possession_holder(self):
         state = {
             'onstage_npcs': [],
@@ -300,6 +415,84 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertEqual(normalized['main_event'], '陆小环转入药铺试探昨夜伤客线索，门外有人驻足窃听。')
 
+    def test_normalize_state_preserves_actor_registry_from_previous_state(self):
+        prev = {
+            'time': '雨夜',
+            'location': '神都东坊外巷',
+            'main_event': '受伤男子被皂衣人围捕。',
+            'actors': {
+                'protagonist': {'actor_id': 'protagonist', 'kind': 'protagonist', 'name': '陆小环'},
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '提灯皂衣首领',
+                    'aliases': ['提灯汉子'],
+                    'personality': '沉稳果断',
+                    'appearance': '皂衣提灯',
+                    'identity': '自称官差，身份可疑',
+                    'created_turn': 4,
+                },
+                'npc_002': {
+                    'actor_id': 'npc_002',
+                    'kind': 'npc',
+                    'name': '年轻男子',
+                    'aliases': ['墙边那年轻男子'],
+                    'personality': '坚韧隐忍',
+                    'appearance': '深色衣袍，肩侧有伤',
+                    'identity': '',
+                    'created_turn': 4,
+                },
+            },
+            'actor_context_index': {
+                'active_actor_ids': ['protagonist', 'npc_001', 'npc_002'],
+                'archived_actor_ids': [],
+                'last_mentioned_turn': {'protagonist': 4, 'npc_001': 4, 'npc_002': 4},
+            },
+            'knowledge_records': [{'holder_actor_id': 'npc_002', 'text': '皂衣人身份可疑', 'source_turn': 4}],
+        }
+        candidate = {
+            'time': '雨夜',
+            'location': '神都东坊外巷',
+            'main_event': '陆小环扬声喊人，皂衣人急欲收尾。',
+            'onstage_npcs': [],
+            'scene_entities': [],
+            'relevant_npcs': [],
+            'actors': {
+                'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '错误覆盖'},
+            },
+        }
+
+        normalized = normalize_state_dict(candidate, prev_state=prev)
+
+        self.assertEqual(normalized['actors']['npc_001']['name'], '提灯皂衣首领')
+        self.assertEqual(normalized['actors']['npc_002']['name'], '年轻男子')
+        self.assertEqual(normalized['actor_context_index']['active_actor_ids'], ['protagonist', 'npc_001', 'npc_002'])
+        self.assertEqual(normalized['knowledge_records'], [{'holder_actor_id': 'npc_002', 'text': '皂衣人身份可疑', 'source_turn': 4}])
+
+    def test_keeper_fill_empty_lists_do_not_clear_existing_records(self):
+        baseline = {
+            'immediate_risks': ['门外有人盯梢'],
+            'carryover_clues': ['铜牌来自旧案'],
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '铜牌', 'kind': 'key_item'}],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '顾青衣', 'status': 'held'}],
+            'object_visibility': [{'object_id': 'obj_01', 'visibility': 'private', 'known_to': ['顾青衣']}],
+        }
+        payload = {
+            'immediate_risks': [],
+            'carryover_clues': [],
+            'tracked_objects': [],
+            'possession_state': [],
+            'object_visibility': [],
+        }
+
+        merged = _merge_keeper_fill(baseline, payload)
+
+        self.assertEqual(merged['immediate_risks'], baseline['immediate_risks'])
+        self.assertEqual(merged['carryover_clues'], baseline['carryover_clues'])
+        self.assertEqual(merged['tracked_objects'], baseline['tracked_objects'])
+        self.assertEqual(merged['possession_state'], baseline['possession_state'])
+        self.assertEqual(merged['object_visibility'], baseline['object_visibility'])
+
     def test_actor_registry_binds_items_and_knowledge_to_actor_ids(self):
         state = {
             'actors': {
@@ -328,6 +521,80 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(updated['object_visibility'][0]['known_to_actor_ids'], ['npc_001', 'protagonist'])
         self.assertIn({'holder_actor_id': 'npc_001', 'text': '铜牌来自旧案', 'source_turn': 2}, updated['knowledge_records'])
         self.assertIn({'holder_actor_id': 'protagonist', 'text': '铜牌上有残纹', 'source_turn': 2}, updated['knowledge_records'])
+
+    def test_knowledge_scope_is_per_turn_delta(self):
+        prev = {
+            'knowledge_scope': {'protagonist': {'learned': ['旧情报']}},
+            'knowledge_records': [{'holder_actor_id': 'protagonist', 'text': '旧情报', 'source_turn': 1}],
+        }
+
+        normalized = normalize_state_dict({}, prev_state=prev)
+
+        self.assertEqual(normalized['knowledge_scope'], {})
+        self.assertEqual(normalized['knowledge_records'], prev['knowledge_records'])
+
+    def test_actor_registry_dedupes_similar_knowledge_records(self):
+        state = {
+            'knowledge_records': [{'holder_actor_id': 'protagonist', 'text': '主角知道村长是卧底', 'source_turn': 1}],
+            'knowledge_scope': {'protagonist': {'learned': ['主角了解到村长的卧底身份']}},
+        }
+
+        updated = update_actor_registry(state, narrator_reply='村长的身份再次被提起。', turn_number=2, use_llm=False)
+
+        self.assertEqual(updated['knowledge_records'], [{'holder_actor_id': 'protagonist', 'text': '主角知道村长是卧底', 'source_turn': 1}])
+
+    def test_possession_new_valid_holder_overrides_old_holder(self):
+        prev = {
+            'actors': {
+                'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '顾青衣', 'aliases': []},
+                'npc_002': {'actor_id': 'npc_002', 'kind': 'npc', 'name': '林越', 'aliases': []},
+            },
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '铜牌', 'kind': 'key_item'}],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '顾青衣', 'status': 'held'}],
+        }
+        state = {
+            **prev,
+            'onstage_npcs': ['林越'],
+            'possession_state': prev['possession_state'] + [{'object_id': 'obj_01', 'holder': '林越', 'status': 'held'}],
+        }
+
+        normalized = normalize_state_dict(state, prev_state=prev)
+
+        self.assertEqual(normalized['possession_state'][0]['holder'], '林越')
+        self.assertEqual(normalized['possession_state'][0]['holder_actor_id'], 'npc_002')
+
+    def test_possession_invalid_holder_does_not_override_old_holder(self):
+        prev = {
+            'actors': {'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '顾青衣', 'aliases': []}},
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '铜牌', 'kind': 'key_item'}],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '顾青衣', 'status': 'held'}],
+        }
+        state = {
+            **prev,
+            'possession_state': prev['possession_state'] + [{'object_id': 'obj_01', 'holder': '幻觉人物', 'status': 'held'}],
+        }
+
+        normalized = normalize_state_dict(state, prev_state=prev)
+
+        self.assertEqual(normalized['possession_state'][0]['holder'], '顾青衣')
+
+    def test_destroyed_object_moves_to_graveyard(self):
+        prev = {
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '纸条', 'kind': 'document'}],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '主角', 'status': 'held'}],
+            'object_visibility': [{'object_id': 'obj_01', 'visibility': 'private', 'known_to': ['主角']}],
+        }
+        state = {
+            **prev,
+            'tracked_objects': prev['tracked_objects'] + [{'object_id': 'obj_01', 'label': '纸条', 'kind': 'document', 'lifecycle_status': 'destroyed', 'lifecycle_reason': '被烧毁'}],
+        }
+
+        normalized = normalize_state_dict(state, prev_state=prev)
+
+        self.assertEqual(normalized['tracked_objects'], [])
+        self.assertEqual(normalized['possession_state'], [])
+        self.assertEqual(normalized['object_visibility'], [])
+        self.assertEqual(normalized['graveyard_objects'][0]['lifecycle_status'], 'destroyed')
 
 
 if __name__ == '__main__':
