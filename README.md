@@ -306,13 +306,10 @@ http://127.0.0.1:8765
 - 停止后端：`backend/stop.sh`
 - 导入角色卡：`backend/import_character_card.py`
 - 导入 SillyTavern 聊天：`backend/import_sillytavern_chat.py`
-- 单回合精确回放：`backend/replay_turn_trace.py`
-- 从历史重建副本 session：`backend/rebuild_session_from_history.py`
+- 单回合精确回放：`backend/tools/replay_turn_trace.py`
+- 从历史重建副本 session：`backend/tools/rebuild_session_from_history.py`
 
-历史迁移 / 实验脚本：
-
-- 已统一归档到 `backend/legacy_tools/`
-- 这类脚本不属于当前日常运行入口，使用前先确认路径假设仍和现状一致
+历史迁移 / 实验脚本已清理；当前只保留仍用于调试的 `backend/tools/` 工具。
 
 配置模板：
 

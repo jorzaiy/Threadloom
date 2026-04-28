@@ -31,12 +31,12 @@
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
 - `session_lifecycle.py`：new game / delete / session list
 - `regenerate_turn.py`：partial 回复回滚与重试
+- `tools/replay_turn_trace.py` / `tools/rebuild_session_from_history.py`：当前调试工具，用于单回合精确回放与从历史重建副本 session
 - `user_manager.py`：多用户管理底层保留模块（bcrypt 密码认证、session token 管理），当前产品面默认关闭
 - `object_bootstrap_agent.py`：物品抽取 bootstrap（四策略启发式→LLM判定→merge）
 - `clue_bootstrap_agent.py`：情报抽取 bootstrap（模式匹配→LLM分类→merge）
 - `npc_bootstrap_agent.py`：NPC抽取 bootstrap（对话启发式→LLM分类→merge）
 - `import_sillytavern_chat.py`：SillyTavern JSONL 聊天记录导入（CLI + API）
-- `legacy_tools/`：历史迁移 / 实验脚本归档目录，不属于当前主链运行时
 
 ## 当前主策略
 
@@ -198,7 +198,7 @@
   - lorebook 顶层保留 `description`、`scan_depth`、`token_budget`、
     `recursive_scanning`、`extensions`
   - 仅触发用的 keyword-only 条目（content 为空但 keywords 非空）也会保留
-  - 历史上曾提供过 metadata 回填脚本；这类一次性迁移工具现已归档到 `backend/legacy_tools/`
+  - 历史上曾提供过 metadata 回填脚本；这类一次性迁移工具已删除，不再作为当前维护入口
 - `openings.json`
   - 开局模式、开局 bootstrap、开局选项
   - `mode: direct` 表示单一开局，运行时直接展示 `menu_intro`，不追加“可用开局 / 随机开局 / 报数字”菜单提示

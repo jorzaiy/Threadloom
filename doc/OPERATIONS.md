@@ -11,16 +11,11 @@
 - `backend/stop.sh`：停止后端
 - `backend/import_character_card.py`：导入角色卡到当前角色 source
 - `backend/import_sillytavern_chat.py`：导入 SillyTavern JSONL 聊天
-- `backend/replay_turn_trace.py`：单回合精确回放
-- `backend/rebuild_session_from_history.py`：从历史重建副本 session
+- `backend/tools/replay_turn_trace.py`：单回合精确回放
+- `backend/tools/rebuild_session_from_history.py`：从历史重建副本 session
 
-已归档脚本：
-- `backend/legacy_tools/`：历史迁移、审计、实验脚本归档目录
-- 当前已归档：
-  - `audit_legacy_sessions.py`
-  - `migrate_storage_layout.py`
-  - `migrate_lorebook_metadata.py`
-  - `experiment_entity_candidate_judge.py`
+已清理脚本：
+- 旧历史迁移、审计与实验脚本已从仓库移除；当前不再保留 `backend/legacy_tools/`。
 
 ## 当前建议工作流
 
@@ -347,13 +342,13 @@ http://127.0.0.1:8765
 回放脚本：
 
 - 当前仓库已不再保留旧的 `scripts/replay-runtime-web.py`。
-- 单回合或副本重放，当前以 `backend/replay_turn_trace.py` 与 `backend/rebuild_session_from_history.py` 为主。
+- 单回合或副本重放，当前以 `backend/tools/replay_turn_trace.py` 与 `backend/tools/rebuild_session_from_history.py` 为主。
 
 单回合精确回放：
 
 ```bash
 cd /Threadloom
-python3 backend/replay_turn_trace.py --source-session story-live --turn-id turn-0012 --target-session replay-story-live-turn-0012
+python3 backend/tools/replay_turn_trace.py --source-session story-live --turn-id turn-0012 --target-session replay-story-live-turn-0012
 ```
 
 说明：
@@ -382,7 +377,7 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
 - 后续仍建议再接一次 replay / state 重建，把 `state / summary / persona / threads` 真正建起来
 
 当前 history-only 重建链补充：
-- `backend/rebuild_session_from_history.py` 现在支持：
+- `backend/tools/rebuild_session_from_history.py` 现在支持：
   - `--target-session`
   - `--force-recreate`
 - 推荐总是在副本 session 上做离线重建测试，不直接覆盖原始导入档。
@@ -406,7 +401,7 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
 - 新路径模型已能描述用户层 / 角色卡层 / session 层的目标目录，而不是只靠旧的平铺 `sources` 字符串路径。
 - 当前兼容层仍保留 legacy root 路径解析，但主工作路径已经切到 `runtime-data/<user>/characters/<character_id>/sessions/`
 - 当前结论：暂不急着上数据库记录元数据；先把目录分层、显式来源解析和迁移链做稳，再评估是否需要 SQLite 之类的元数据层。
-- 旧 `backend/legacy_tools/audit_legacy_sessions.py` / `backend/legacy_tools/migrate_storage_layout.py` 仍保留为历史迁移工具，但当前不属于日常运维主路径。
+- 旧历史迁移、审计与实验脚本已删除；当前只保留仍用于调试的 `backend/tools/replay_turn_trace.py` 与 `backend/tools/rebuild_session_from_history.py`。
 
 四要素现状：
 - 时间：已接近可用，优先吃场景头与显式时间推进，稳定度较高。
