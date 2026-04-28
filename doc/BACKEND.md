@@ -198,8 +198,12 @@
   - 仅触发用的 keyword-only 条目（content 为空但 keywords 非空）也会保留
   - 历史上曾提供过 metadata 回填脚本；这类一次性迁移工具现已归档到 `backend/legacy_tools/`
 - `openings.json`
-  - 开局菜单、开局 bootstrap、开局选项
+  - 开局模式、开局 bootstrap、开局选项
+  - `mode: direct` 表示单一开局，运行时直接展示 `menu_intro`，不追加“可用开局 / 随机开局 / 报数字”菜单提示
+  - `mode: menu` 表示确实存在多个开局候选，运行时才消费 `options` 并进入 opening choice 分支
+  - 单 `first_mes` 角色卡会导入为 `direct`，不会再被误当作多开局；`alternate_greetings` / `group_only_greetings` 等多个候选才会保留为 `options`
   - 每个 option 带 `kind`：`first_mes` / `alternate_greeting` / `group_only_greeting`（v3）
+  - 导入期会对开局文本做基础 SillyTavern 占位符替换：`{{char}}` → 角色名，`{{user}}` → `玩家`；运行时展示旧导入文件前也会兜底替换一次
 - `system-npcs.json`
   - 从导入卡中明确提取出的系统级 NPC
   - 当前分成：

@@ -281,6 +281,20 @@ def _extract_menu_options(first_message: str) -> list[dict]:
     return options
 
 
+def _replace_sillytavern_placeholders(text: str, *, char_name: str = '', user_name: str = '玩家') -> str:
+    value = str(text or '')
+    replacements = {
+        'char': str(char_name or '').strip() or '角色',
+        'user': str(user_name or '').strip() or '玩家',
+    }
+
+    def _replace(match: re.Match) -> str:
+        key = match.group(1).strip().lower()
+        return replacements.get(key, match.group(0))
+
+    return re.sub(r'\{\{\s*(char|user)\s*\}\}', _replace, value, flags=re.IGNORECASE)
+
+
 def _extract_character_core(card_json: dict) -> dict:
     payload = _extract_card_payload(card_json)
     name = _clean_text(payload.get('name') or card_json.get('name'))
@@ -1379,11 +1393,24 @@ def _extract_system_npcs(lorebook: dict, card_json: dict | None = None) -> dict:
 def _extract_openings_payload(card_json: dict) -> dict:
     payload = _extract_card_payload(card_json)
     core = _extract_character_core(card_json)
+    char_name = str(core.get('name', '') or '').strip()
     first_message = _clean_text(payload.get('first_mes', ''))
     options = _extract_opening_options(payload)
+    for item in options:
+        if not isinstance(item, dict):
+            continue
+        for key in ('title', 'prompt', 'full_text'):
+            item[key] = _replace_sillytavern_placeholders(item.get(key, ''), char_name=char_name)
+    mode = 'menu' if len(options) > 1 else 'direct'
+    if mode == 'direct' and options:
+        menu_intro = str(options[0].get('full_text', '') or options[0].get('prompt', '') or first_message).strip()
+        options = []
+    else:
+        menu_intro = _replace_sillytavern_placeholders(first_message, char_name=char_name)
     return {
         'version': 1,
-        'menu_intro': first_message[:1200] if first_message else str(core.get('opening', '') or '故事将从这里开始。').strip(),
+        'mode': mode,
+        'menu_intro': menu_intro[:1200] if menu_intro else str(core.get('opening', '') or '故事将从这里开始。').strip(),
         'bootstrap': {
             'time': '待确认',
             'location': '待确认',

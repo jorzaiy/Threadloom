@@ -313,6 +313,17 @@ def test_openings_includes_group_only_greetings():
     assert 'group_only_greeting' in kinds
 
 
+def test_single_first_mes_imports_as_direct_opening():
+    payload = {
+        'name': '维克托·奥古斯特',
+        'first_mes': '{{char}} stands at the edge of the training field.',
+    }
+    openings = ci._extract_openings_payload(_wrap_v2(payload))
+    assert openings['mode'] == 'direct'
+    assert openings['options'] == []
+    assert openings['menu_intro'] == '维克托·奥古斯特 stands at the edge of the training field.'
+
+
 def test_openings_alternate_greeting_split_safe_when_colon_in_body():
     """Old behavior: 'a: b: c' was split on first ':' and lost both halves
     of the body. Now we only split when the head is a short title."""

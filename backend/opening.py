@@ -11,6 +11,18 @@ from character_assets import load_character_core, load_openings
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def render_opening_text(text: str) -> str:
+    char = load_character_core()
+    char_name = str(char.get('name', '') or char.get('title', '') or '').strip() or '角色'
+    replacements = {'char': char_name, 'user': '玩家'}
+
+    def _replace(match: re.Match) -> str:
+        key = match.group(1).strip().lower()
+        return replacements.get(key, match.group(0))
+
+    return re.sub(r'\{\{\s*(char|user)\s*\}\}', _replace, str(text or ''), flags=re.IGNORECASE)
+
+
 def opening_bootstrap() -> dict:
     openings = load_openings()
     data = openings.get('bootstrap', {}) if isinstance(openings, dict) else {}
@@ -19,17 +31,21 @@ def opening_bootstrap() -> dict:
 
 def opening_hooks() -> list[str]:
     openings = load_openings()
+    if isinstance(openings, dict) and openings.get('mode') == 'direct':
+        return []
     options = openings.get('options', []) if isinstance(openings, dict) else []
+    if len(options) < 2:
+        return []
     hooks = []
     for item in options:
         if not isinstance(item, dict):
             continue
-        full_text = str(item.get('full_text', '') or '').strip()
+        full_text = render_opening_text(str(item.get('full_text', '') or '')).strip()
         if full_text:
             hooks.append(full_text)
             continue
-        title = str(item.get('title', '') or '').strip()
-        prompt = str(item.get('prompt', '') or '').strip()
+        title = render_opening_text(str(item.get('title', '') or '')).strip()
+        prompt = render_opening_text(str(item.get('prompt', '') or '')).strip()
         if title and prompt:
             hooks.append(f'{title}：{prompt}')
         elif title:
@@ -51,7 +67,7 @@ def is_opening_command(text: str) -> bool:
 def build_opening_reply(user_text: str) -> str:
     char = load_character_core()
     openings = load_openings()
-    opening = str(openings.get('menu_intro', '') or char.get('opening', '') or '故事将从这里开始。').strip()
+    opening = render_opening_text(str(openings.get('menu_intro', '') or char.get('opening', '') or '故事将从这里开始。')).strip()
     hooks = opening_hooks()
     t = (user_text or '').strip()
 

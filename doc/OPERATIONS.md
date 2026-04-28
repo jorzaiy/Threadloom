@@ -126,7 +126,10 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 
 - `character-data.json` 只保留角色核心
 - `lorebook.json` 只保留世界知识
-- `openings.json` 单独保存开局菜单与 bootstrap
+- `openings.json` 单独保存开局模式、开局文本/菜单与 bootstrap
+- 单 `first_mes` 卡导入为 `mode: direct`，运行时直接展示开局，不显示“可用开局 / 随机开局 / 报数字”提示
+- 多个 `alternate_greetings` / `group_only_greetings` 候选才导入为菜单开局
+- 开局文本里的 SillyTavern 基础占位符会被替换：`{{char}}` 为角色名，`{{user}}` 为 `玩家`
 - `system-npcs.json` 单独保存系统级 NPC：
   - `core`
   - `faction_named`

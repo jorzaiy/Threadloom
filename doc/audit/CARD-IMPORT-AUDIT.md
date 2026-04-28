@@ -93,6 +93,8 @@ were silently skipped.
 | Downstream | `context_builder.extract_system_npc_candidates` now falls back through `core → faction_named → roster`. `persona_updater._infer_candidate_identity` accepts any `system_npc*` source. |
 | Bug A | `_classify_lorebook_entry` now treats `'重要人物条目X'` titles the same as `'重要人物表-N'` and `'总结条目-N'` — i.e. ACU runtime cache, classified `archive_only` and filtered out of the runtime lorebook.json. Caught when re-importing 维克托·奥古斯特.png: SillyTavern Cyborg framework writes its in-session NPC dump back to `character_book.entries`, polluting the imported lorebook with 12 stale entries. |
 | Bug D | `_extract_template_relationship_npcs` now skips names equal to the card name or the lorebook name. Caught when re-importing 血蚀纪.png: the card name `血蚀纪` was being surfaced as an NPC because `[EVENT]meet`-style templates reference the card name in their wrapping JSON. |
+| Bug E | Single-`first_mes` cards now import as `openings.mode: direct` with empty `options`, so runtime no longer appends the multi-opening “随机开局 / 报数字 / 开局名字” instructions. `opening.py` also ignores legacy one-option files as menu candidates. |
+| Bug F | Opening text now applies basic SillyTavern placeholder replacement: `{{char}}` becomes the imported character name and `{{user}}` becomes `玩家`; runtime applies the same replacement as a fallback for older imported cards. Caught when re-importing 维克托·奥古斯特.png. |
 
 ## Deferred (P2)
 
@@ -123,3 +125,7 @@ The single-unit suite covers each fix point individually; the E2E suite
 imports a synthetic v3 card with all v2/v3 fields populated, asserts every
 output JSON is field-complete, and verifies the importer is idempotent on
 re-import.
+
+2026-04-28 sanity check: re-imported `维克托·奥古斯特` from its backed-up PNG.
+The generated `openings.json` is `mode: direct`, `opening_options_count: 0`,
+and its `menu_intro` contains `维克托·奥古斯特` instead of raw `{{char}}`.
