@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 
 try:
     from .arbiter_state import merge_arbiter_state
@@ -127,6 +128,54 @@ def build_state_from_fragment(prev_state: dict, state_fragment: dict, session_id
             next_state[field] = deepcopy(value)
 
     return normalize_state_dict(next_state, prev_state=prev, session_id=session_id)
+
+
+def extract_reply_skeleton(narrator_reply: str) -> dict:
+    """Extract a minimal scene skeleton directly from narrator prose.
+
+    This is a deterministic fallback for turns where the LLM skeleton/full keeper
+    fails. It intentionally only trusts the explicit scene header and first
+    narrative sentence, so it cannot invent state beyond the current reply.
+    """
+    text = str(narrator_reply or '').strip()
+    if not text:
+        return {}
+
+    skeleton: dict = {}
+    header_match = re.search(r'【([^】\n]{2,80})】', text)
+    body = text
+    if header_match:
+        header = header_match.group(1).strip()
+        body = (text[:header_match.start()] + text[header_match.end():]).strip()
+        parts = [part.strip() for part in re.split(r'[，,、]', header) if part.strip()]
+        if len(parts) >= 2:
+            skeleton['time'] = parts[0]
+            skeleton['location'] = parts[-1]
+        elif parts:
+            token = parts[0]
+            if any(marker in token for marker in ('晨', '早', '午', '暮', '夜', '更', '黄昏', '黎明', '天明')):
+                skeleton['time'] = token
+            else:
+                skeleton['location'] = token
+
+    paragraphs = [line.strip() for line in body.splitlines() if line.strip()]
+    first = ''
+    for paragraph in paragraphs:
+        if paragraph.startswith(('[fallback]', '#')):
+            continue
+        first = paragraph
+        break
+    if first:
+        sentence_match = re.match(r'(.{8,120}?[。！？!?])', first)
+        main_event = sentence_match.group(1).strip() if sentence_match else first[:100].strip()
+        if main_event:
+            skeleton['main_event'] = main_event
+    return skeleton
+
+
+def merge_reply_skeleton(state_fragment: dict, narrator_reply: str) -> dict:
+    skeleton = extract_reply_skeleton(narrator_reply)
+    return merge_state_skeleton(state_fragment, skeleton) if skeleton else deepcopy(state_fragment or {})
 
 
 def merge_state_skeleton(state_fragment: dict, skeleton_fragment: dict) -> dict:

@@ -100,14 +100,22 @@ def _extract_chat_content(data: dict) -> str:
     message = choice.get('message', {})
     content = message.get('content', '')
     if isinstance(content, str):
-        return content.strip()
+        stripped = content.strip()
+        if stripped:
+            return stripped
     if isinstance(content, list):
         parts = []
         for item in content:
             if isinstance(item, dict):
                 if item.get('type') in {'text', 'output_text'} and isinstance(item.get('text'), str):
                     parts.append(item['text'])
-        return '\n'.join(parts).strip()
+        joined = '\n'.join(parts).strip()
+        if joined:
+            return joined
+    for key in ('text', 'reasoning_content'):
+        value = choice.get(key) if key == 'text' else message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return ''
 
 
@@ -192,6 +200,9 @@ def call_model(config: dict, system_prompt: str, user_prompt: str) -> tuple[str,
         'temperature': config['temperature'],
         'max_tokens': config['max_output_tokens'],
     }
+    response_format = config.get('response_format')
+    if response_format:
+        payload['response_format'] = response_format
     if config.get('stream'):
         payload['stream'] = True
         try:

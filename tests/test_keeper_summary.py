@@ -107,6 +107,9 @@ def test_keeper_archive(session_id: str, timeout_seconds: int = 30):
         return False
 
 
+test_keeper_archive.__test__ = False
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='测试 keeper summary 生成')

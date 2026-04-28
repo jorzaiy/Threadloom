@@ -55,6 +55,70 @@ def _archive_needs_refresh(archive: dict, records: list[dict], *, current_pair_c
     return archived_pair_count + refresh_stride <= current_pair_count
 
 
+def _prune_future_records(archive: dict, *, current_pair_count: int) -> tuple[dict, bool]:
+    if not isinstance(archive, dict) or current_pair_count <= 0:
+        return archive, False
+    records = archive.get('records', []) if isinstance(archive.get('records', []), list) else []
+    kept = []
+    changed = False
+    for record in records:
+        if not isinstance(record, dict):
+            changed = True
+            continue
+        try:
+            end_pair_index = int((record.get('window', {}) or {}).get('end_pair_index', 0) or 0)
+        except (TypeError, ValueError):
+            end_pair_index = 0
+        if end_pair_index > current_pair_count:
+            changed = True
+            continue
+        kept.append(record)
+    if not changed:
+        return archive, False
+    next_archive = dict(archive)
+    next_archive['records'] = kept
+    next_archive['source_pair_count'] = min(int(next_archive.get('source_pair_count', current_pair_count) or current_pair_count), current_pair_count)
+    return next_archive, True
+
+
+def _record_key(record: dict) -> int:
+    try:
+        return int((record.get('window', {}) or {}).get('end_pair_index', 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _preserve_protected_records(previous: dict, refreshed: dict) -> dict:
+    if not isinstance(previous, dict) or not isinstance(refreshed, dict):
+        return refreshed
+    previous_records = previous.get('records', []) if isinstance(previous.get('records', []), list) else []
+    protected = {
+        _record_key(record): record
+        for record in previous_records
+        if isinstance(record, dict) and record.get('provider') == 'manual-cleanup' and _record_key(record) > 0
+    }
+    if not protected:
+        return refreshed
+    merged_records = []
+    seen = set()
+    for record in refreshed.get('records', []) if isinstance(refreshed.get('records', []), list) else []:
+        key = _record_key(record) if isinstance(record, dict) else 0
+        if key in protected:
+            merged_records.append(protected[key])
+            seen.add(key)
+        elif isinstance(record, dict):
+            merged_records.append(record)
+            if key > 0:
+                seen.add(key)
+    for key, record in sorted(protected.items()):
+        if key not in seen:
+            merged_records.append(record)
+    next_archive = dict(refreshed)
+    next_archive['records'] = sorted(merged_records, key=_record_key)
+    next_archive['manual_cleanup_preserved'] = True
+    return next_archive
+
+
 def _meaningful_location_tokens(text: str) -> set[str]:
     value = _normalize_text(text)
     if not value:
@@ -186,13 +250,18 @@ def retrieve_keeper_records(
     refresh_use_llm: bool = False,
 ) -> dict:
     archive = load_keeper_record_archive(session_id, skip_bootstrap=refresh_skip_bootstrap, use_llm=refresh_use_llm)
+    archive, pruned = _prune_future_records(archive, current_pair_count=max(0, int(current_pair_count or 0)))
+    if pruned:
+        save_keeper_record_archive(session_id, archive)
     records = archive.get('records', []) if isinstance(archive.get('records', []), list) else []
     if _archive_needs_refresh(archive, records, current_pair_count=current_pair_count, recent_window_pairs=recent_window_pairs):
+        previous_archive = archive
         archive = build_keeper_record_archive(
             session_id,
             skip_bootstrap=refresh_skip_bootstrap,
             use_llm=refresh_use_llm,
         )
+        archive = _preserve_protected_records(previous_archive, archive)
         save_keeper_record_archive(session_id, archive)
         records = archive.get('records', []) if isinstance(archive.get('records', []), list) else []
 

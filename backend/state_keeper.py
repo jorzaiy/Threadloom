@@ -49,6 +49,13 @@ LIST_FIELDS = ('onstage_npcs', 'relevant_npcs', 'carryover_signals', 'immediate_
 LOW_SIGNAL_TOKENS = ('待确认', '暂无', 'unknown', '未明', '不明')
 
 
+class StateKeeperCallError(RuntimeError):
+    def __init__(self, message: str, *, usage: dict | None = None, raw_reply: str = ''):
+        super().__init__(message)
+        self.usage = usage if isinstance(usage, dict) else None
+        self.raw_reply = raw_reply if isinstance(raw_reply, str) else ''
+
+
 
 STATE_KEEPER_SYSTEM = """你是 RP 结构化状态提取器，只做事实提取，不写叙事。
 
@@ -136,7 +143,7 @@ time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架�
   - 只记录本轮叙事中明确发生的信息获取（看到、听到、被告知、发现）
   - 不要推测、不要编造；"可能知道"不算
   - 主角和NPC的信息获取必须分开；主角看到的不等于NPC也看到
-  - 如果本轮无新信息获取，可以省略整个字段
+  - 如果本轮无新信息获取，或只是再次提及已知信息，必须省略整个字段
 
 规则：
 1. 若字段无需修改，直接省略，不要输出空话。
@@ -154,6 +161,7 @@ time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架�
 13. 不要把动作词、策略词或复合短语里截出来的一部分误当物件标签；例如不能把某个词组中的局部字面片段当成 `tracked_objects[].label`。
 14. 一次性付款、零散货币、临时消耗品，默认不要进入 `tracked_objects`；只有当它们变成明确证物、持续持有物、关键交易物或后续还会被追踪时，才写入物件层。
 15. 若物件既没有明确持有者，也没有明确场景落点（如桌上、柜台上、地上、床边、窗边、桶里、门后），默认不要写入物件层。
+16. 若物件被明确消耗、摧毁、遗失或退出追踪，在 tracked_objects 中输出原 object_id/label，并写 lifecycle_status: consumed|destroyed|lost|archived；不要直接删除。
 """
 
 
@@ -318,6 +326,66 @@ def _extract_string_list_field(text: str, field: str) -> list[str] | None:
     return values
 
 
+def _extract_json_field_value(text: str, field: str):
+    match = re.search(rf'"{re.escape(field)}"\s*:', text, re.S)
+    if not match:
+        return None
+    idx = match.end()
+    while idx < len(text) and text[idx].isspace():
+        idx += 1
+    if idx >= len(text):
+        return None
+
+    opener = text[idx]
+    if opener == '"':
+        end = idx + 1
+        escaped = False
+        while end < len(text):
+            ch = text[end]
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == '"':
+                try:
+                    return json.loads(text[idx:end + 1])
+                except Exception:
+                    return None
+            end += 1
+        return None
+
+    pairs = {'[': ']', '{': '}'}
+    if opener not in pairs:
+        return None
+    stack = [pairs[opener]]
+    end = idx + 1
+    in_string = False
+    escaped = False
+    while end < len(text):
+        ch = text[end]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch in pairs:
+                stack.append(pairs[ch])
+            elif stack and ch == stack[-1]:
+                stack.pop()
+                if not stack:
+                    try:
+                        return json.loads(text[idx:end + 1])
+                    except Exception:
+                        return None
+        end += 1
+    return None
+
+
 def _parse_fill_payload(text: str) -> dict:
     try:
         payload = parse_json_response(text)
@@ -333,6 +401,13 @@ def _parse_fill_payload(text: str) -> dict:
         carryover_clues = _extract_string_list_field(text, 'carryover_clues')
         if carryover_clues:
             fallback['carryover_clues'] = carryover_clues
+        for field in ('tracked_objects', 'possession_state', 'object_visibility'):
+            value = _extract_json_field_value(text, field)
+            if isinstance(value, list) and value:
+                fallback[field] = value
+        knowledge_scope = _extract_json_field_value(text, 'knowledge_scope')
+        if isinstance(knowledge_scope, (dict, str)):
+            fallback['knowledge_scope'] = knowledge_scope
         if fallback:
             return fallback
         raise
@@ -444,12 +519,19 @@ def _coerce_tracked_object_item(item, idx: int) -> dict | None:
     label = str(item.get('label', item.get('name', '')) or '').strip()
     if not object_id or not label:
         return None
-    return {
+    lifecycle_status = str(item.get('lifecycle_status', item.get('status', 'active')) or 'active').strip() or 'active'
+    if lifecycle_status not in {'active', 'consumed', 'destroyed', 'lost', 'archived'}:
+        lifecycle_status = 'active'
+    out = {
         'object_id': object_id,
         'label': label,
         'kind': str(item.get('kind', '') or 'item').strip() or 'item',
         'story_relevant': bool(item.get('story_relevant', True)),
     }
+    if lifecycle_status != 'active':
+        out['lifecycle_status'] = lifecycle_status
+        out['lifecycle_reason'] = str(item.get('lifecycle_reason', item.get('reason', '')) or '').strip()
+    return out
 
 
 def _build_object_index_from_baseline(state: dict) -> tuple[dict[str, dict], int]:
@@ -538,8 +620,10 @@ def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> 
     normalized = dict(payload or {})
     baseline = baseline_state if isinstance(baseline_state, dict) else {}
     objects_by_label, max_idx = _build_object_index_from_baseline(baseline)
+    baseline_labels = set(objects_by_label.keys())
     known_holders = _known_holders_from_baseline(baseline)
     object_fields_used = False
+    explicit_objects_by_label: dict[str, dict] = {}
 
     tracked_objects = normalized.get('tracked_objects')
     if isinstance(tracked_objects, list):
@@ -550,6 +634,7 @@ def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> 
                 continue
             coerced['label'] = _normalize_object_label(coerced.get('label', ''))
             objects_by_label[coerced['label']] = coerced
+            explicit_objects_by_label[coerced['label']] = coerced
             object_id = str(coerced.get('object_id', '') or '').strip()
             if object_id.startswith('obj_'):
                 try:
@@ -579,6 +664,8 @@ def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> 
                 obj, max_idx = _ensure_object_for_label(normalized_label, objects_by_label, max_idx)
                 if not obj:
                     continue
+                if normalized_label not in baseline_labels:
+                    explicit_objects_by_label[normalized_label] = obj
                 coerced_possession.append({
                     'object_id': obj['object_id'],
                     'holder': holder_text,
@@ -604,6 +691,8 @@ def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> 
             obj, max_idx = _ensure_object_for_label(normalized_label, objects_by_label, max_idx)
             if not obj:
                 continue
+            if normalized_label not in baseline_labels:
+                explicit_objects_by_label[normalized_label] = obj
             if isinstance(vis, dict):
                 coerced = _coerce_object_visibility_item({'object_id': obj['object_id'], **vis})
             else:
@@ -616,9 +705,58 @@ def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> 
     if coerced_visibility:
         normalized['object_visibility'] = coerced_visibility
 
-    if object_fields_used:
-        normalized['tracked_objects'] = list(objects_by_label.values())
+    if object_fields_used and explicit_objects_by_label:
+        normalized['tracked_objects'] = list(explicit_objects_by_label.values())
     return normalized
+
+
+def _coerce_knowledge_scope(value) -> dict:
+    if isinstance(value, str):
+        text = value.strip()
+        return {'protagonist': {'learned': [text]}} if text else {}
+    if not isinstance(value, dict):
+        return {}
+    result: dict = {}
+    protagonist = value.get('protagonist', {})
+    if isinstance(protagonist, str):
+        protagonist = {'learned': [protagonist]}
+    if isinstance(protagonist, dict):
+        learned = protagonist.get('learned', [])
+        if isinstance(learned, str):
+            learned = [learned]
+        cleaned = []
+        if isinstance(learned, list):
+            for item in learned:
+                text = str(item or '').strip()
+                if text and text not in cleaned:
+                    cleaned.append(text)
+        if cleaned:
+            result['protagonist'] = {'learned': cleaned[:10]}
+    npc_local_raw = value.get('npc_local', {})
+    npc_local: dict = {}
+    if isinstance(npc_local_raw, dict):
+        for name, data in npc_local_raw.items():
+            holder = str(name or '').strip()
+            if not holder:
+                continue
+            if isinstance(data, str):
+                data = {'learned': [data]}
+            if not isinstance(data, dict):
+                continue
+            learned = data.get('learned', [])
+            if isinstance(learned, str):
+                learned = [learned]
+            cleaned = []
+            if isinstance(learned, list):
+                for item in learned:
+                    text = str(item or '').strip()
+                    if text and text not in cleaned:
+                        cleaned.append(text)
+            if cleaned:
+                npc_local[holder] = {'learned': cleaned[:10]}
+    if npc_local:
+        result['npc_local'] = npc_local
+    return result
 
 
 def _coerce_possession_item(item, known_holders: set[str] | None = None, objects_by_label: dict[str, dict] | None = None, next_idx: int = 0) -> tuple[dict | None, int]:
@@ -708,7 +846,8 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
             if not text or text in cleaned:
                 continue
             cleaned.append(text)
-        merged[field] = cleaned[:6]
+        if cleaned:
+            merged[field] = cleaned[:6]
 
     signals = _normalize_carryover_signals(payload)
     if not signals:
@@ -719,9 +858,15 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
         merged['immediate_risks'] = derived_risks
         merged['carryover_clues'] = derived_clues
 
+    if 'knowledge_scope' in payload:
+        scope = _coerce_knowledge_scope(payload.get('knowledge_scope'))
+        if scope:
+            merged['knowledge_scope'] = scope
+
     for field in ('tracked_objects', 'possession_state', 'object_visibility'):
-        if field in payload and isinstance(payload.get(field), list):
-            merged[field] = payload.get(field, [])[:8]
+        if field in payload and isinstance(payload.get(field), list) and payload.get(field):
+            base_items = baseline_state.get(field, []) if isinstance(baseline_state.get(field, []), list) else []
+            merged[field] = (base_items + payload.get(field, []))[-16:]
 
     return merged
 
@@ -784,6 +929,39 @@ def _validate_scene_entities(payload: dict) -> None:
             raise ValueError(f'scene_entities[{idx}].onstage must be a boolean')
 
 
+def _validate_knowledge_scope(payload: dict) -> None:
+    value = payload.get('knowledge_scope')
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise ValueError('state field knowledge_scope must be an object')
+    protagonist = value.get('protagonist')
+    if protagonist is not None:
+        if not isinstance(protagonist, dict):
+            raise ValueError('knowledge_scope.protagonist must be an object')
+        learned = protagonist.get('learned', [])
+        if learned is not None and not isinstance(learned, list):
+            raise ValueError('knowledge_scope.protagonist.learned must be a list')
+        for idx, item in enumerate(learned or []):
+            if not isinstance(item, str):
+                raise ValueError(f'knowledge_scope.protagonist.learned[{idx}] must be a string')
+    npc_local = value.get('npc_local')
+    if npc_local is not None:
+        if not isinstance(npc_local, dict):
+            raise ValueError('knowledge_scope.npc_local must be an object')
+        for name, data in npc_local.items():
+            if not str(name or '').strip():
+                raise ValueError('knowledge_scope.npc_local key must be non-empty')
+            if not isinstance(data, dict):
+                raise ValueError(f'knowledge_scope.npc_local.{name} must be an object')
+            learned = data.get('learned', [])
+            if learned is not None and not isinstance(learned, list):
+                raise ValueError(f'knowledge_scope.npc_local.{name}.learned must be a list')
+            for idx, item in enumerate(learned or []):
+                if not isinstance(item, str):
+                    raise ValueError(f'knowledge_scope.npc_local.{name}.learned[{idx}] must be a string')
+
+
 def _coerce_scene_entity_item(item, idx: int) -> dict | None:
     if isinstance(item, str):
         text = item.strip()
@@ -843,6 +1021,8 @@ def _coerce_state_payload(payload: dict, baseline_state: dict | None = None) -> 
             normalized['immediate_risks'] = derived_risks
         if derived_clues:
             normalized['carryover_clues'] = derived_clues
+    if 'knowledge_scope' in normalized:
+        normalized['knowledge_scope'] = _coerce_knowledge_scope(normalized.get('knowledge_scope'))
     return _coerce_object_layers(normalized, baseline_state)
 
 
@@ -1245,6 +1425,9 @@ def validate_state_payload(payload: dict, prev_state: dict | None = None) -> Non
     if 'scene_entities' in payload:
         recognized += 1
         _validate_scene_entities(payload)
+    if 'knowledge_scope' in payload:
+        recognized += 1
+        _validate_knowledge_scope(payload)
 
     if recognized < 5:
         raise ValueError('state payload contains too few recognized fields')
@@ -1269,6 +1452,25 @@ def _with_diagnostics(state: dict, *, provider_requested: str, provider_used: st
     return output
 
 
+def _call_state_keeper_llm(user_prompt: str, *, max_attempts: int = 2) -> tuple[str, dict, int]:
+    reply_text = ''
+    usage: dict | None = None
+    attempts = 0
+    for attempt in range(1, max(1, max_attempts) + 1):
+        attempts = attempt
+        reply_text, usage = call_role_llm('state_keeper', STATE_KEEPER_FILL_SYSTEM, user_prompt)
+        if not isinstance(usage, dict):
+            usage = {}
+        usage['prompt_chars'] = len(STATE_KEEPER_FILL_SYSTEM) + len(user_prompt)
+        if str(reply_text or '').strip():
+            break
+        if attempt == 1:
+            logger.warning('State-keeper returned empty output; retrying once')
+    final_usage = usage if isinstance(usage, dict) else {}
+    final_usage['retry_count'] = max(0, attempts - 1)
+    return str(reply_text or ''), final_usage, attempts
+
+
 def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Optional[dict] = None, *, user_text: str = '', return_trace: bool = False):
     """调用模型提取状态。
 
@@ -1284,11 +1486,11 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
     baseline_state = build_state_from_fragment(prev_state, state_fragment, session_id)
     user_prompt = _fill_user_prompt(baseline_state, narrator_reply, user_text=user_text)
 
+    reply_text = ''
+    usage: dict | None = None
+    attempts = 0
     try:
-        reply_text, usage = call_role_llm('state_keeper', STATE_KEEPER_FILL_SYSTEM, user_prompt)
-        if not isinstance(usage, dict):
-            usage = {}
-        usage['prompt_chars'] = len(STATE_KEEPER_FILL_SYSTEM) + len(user_prompt)
+        reply_text, usage, attempts = _call_state_keeper_llm(user_prompt)
         payload = _coerce_state_payload(_parse_fill_payload(reply_text), baseline_state=baseline_state)
         new_state = _merge_keeper_fill(baseline_state, payload)
         new_state = _semantic_cleanup(new_state, prev_state, state_fragment)
@@ -1303,7 +1505,13 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
         )
     except Exception as err:
         logger.warning('State-keeper extraction failed: %s', err)
-        raise RuntimeError(f'state_keeper_failed: {err}') from err
+        if isinstance(usage, dict):
+            usage['retry_count'] = max(usage.get('retry_count', 0), max(0, attempts - 1))
+        raise StateKeeperCallError(
+            f'state_keeper_failed: {err}',
+            usage=usage,
+            raw_reply=reply_text,
+        ) from err
 
     new_state = normalize_state_dict(new_state, prev_state=prev_state, session_id=session_id)
     diagnostics = new_state.pop('diagnostics', None)
@@ -1322,5 +1530,6 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
             'user_prompt': user_prompt,
             'raw_reply': reply_text,
             'payload': payload,
+            'retry_count': max(0, attempts - 1),
         }
     return new_state

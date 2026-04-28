@@ -188,11 +188,27 @@ archive = build_keeper_record_archive(
 1. **监控LLM调用成功率**：在日志中记录LLM digest成功/失败比例
 2. **考虑添加配置项**：在runtime.json中添加全局配置控制是否使用LLM
 3. **优化heuristic算法**：持续改进_heuristic_digest的质量
-4. **添加缓存**：对相同窗口的digest结果进行缓存，避免重复计算
+4. **保持窗口稳定**：archive refresh 应优先按窗口 upsert，不应反复重写已稳定的旧窗口
+5. **处理撤回/重试**：refresh 前需要按当前有效 pair count prune `end_pair_index` 更大的未来 records，避免 undo / regenerate 后旧分支污染召回
+
+## 当前追加的写入质量约束
+
+本修复文档最初只覆盖 keeper archive records 生成问题。当前 keeper 写入质量链路又补充了以下约束：
+
+- `knowledge_scope` 只保留本轮新增知情 delta，不再长期合并旧 scope。
+- 长期知识由 actor-id 版 `knowledge_records` 保存，并在同一 holder 下做轻量相似去重。
+- keeper object patch 不应因为更新 possession / visibility 而回填 baseline 全量对象。
+- 物件消耗、摧毁、遗失或归档通过 `lifecycle_status` 表达，并写入 `graveyard_objects`。
+- `possession_state` / `object_visibility` 允许本轮合法新状态覆盖旧状态；非法 holder 不覆盖旧合法归属。
+- `keeper_record_archive.json` 是派生缓存，刷新前会 prune rollback 后的未来 records。
 
 ## 相关文件
 
-- `backend/keeper_archive.py` - 主要修复
+- `backend/keeper_archive.py` - archive 构建
+- `backend/keeper_record_retriever.py` - archive 刷新、safe-mode 默认值与 rollback prune
+- `backend/state_keeper.py` - fill-mode prompt、knowledge/object patch 清洗
+- `backend/state_bridge.py` - state 标准化、object lifecycle、holder 合法覆盖、knowledge delta
+- `backend/actor_registry.py` - actor-id 绑定与 `knowledge_records` 相似去重
 - `backend/mid_context_agent.py` - LLM调用和heuristic fallback
 - `backend/summary_updater.py` - Summary文本生成
 - `test_keeper_summary.py` - 测试脚本

@@ -866,6 +866,10 @@ def _merge_tracked_objects(prev_objects: list[dict], candidate_objects: list[dic
         if matched_idx is not None:
             used_prev.add(matched_idx)
         if prev:
+            candidate_lifecycle = str(candidate.get('lifecycle_status', '') or '').strip()
+            prev_lifecycle = str(prev.get('lifecycle_status', '') or '').strip()
+            if not candidate_lifecycle and prev_lifecycle in {'consumed', 'destroyed', 'lost', 'archived'}:
+                continue
             stable_id = str(prev.get('object_id', '') or '').strip() or object_id
             stable_label = _prefer_stable_object_label(label, str(prev.get('label', '') or ''))
             merged_item = dict(prev)
@@ -873,24 +877,37 @@ def _merge_tracked_objects(prev_objects: list[dict], candidate_objects: list[dic
             merged_item['label'] = stable_label
             merged_item['kind'] = _prefer_stable_object_kind(candidate.get('kind'), prev.get('kind'))
             merged_item['story_relevant'] = bool(candidate.get('story_relevant', prev.get('story_relevant', True)))
+            lifecycle_status = str(candidate.get('lifecycle_status', prev.get('lifecycle_status', 'active')) or 'active').strip() or 'active'
+            if lifecycle_status in {'consumed', 'destroyed', 'lost', 'archived'}:
+                merged_item['lifecycle_status'] = lifecycle_status
+                merged_item['lifecycle_reason'] = str(candidate.get('lifecycle_reason', candidate.get('reason', prev.get('lifecycle_reason', ''))) or '').strip()
             merged.append(merged_item)
             continue
         if not object_id:
             max_id += 1
             object_id = f'obj_{max_id:02d}'
-        merged.append({
+        lifecycle_status = str(candidate.get('lifecycle_status', 'active') or 'active').strip() or 'active'
+        if lifecycle_status not in {'active', 'consumed', 'destroyed', 'lost', 'archived'}:
+            lifecycle_status = 'active'
+        next_item = {
             **candidate,
             'object_id': object_id,
             'label': label,
             'kind': _meaningful_text(candidate.get('kind')) or 'item',
             'story_relevant': bool(candidate.get('story_relevant', True)),
-        })
+        }
+        if lifecycle_status != 'active':
+            next_item['lifecycle_status'] = lifecycle_status
+            next_item['lifecycle_reason'] = str(candidate.get('lifecycle_reason', candidate.get('reason', '')) or '').strip()
+        merged.append(next_item)
 
     for idx, prev in enumerate(prev_items):
         if idx in used_prev:
             continue
         label = str(prev.get('label', '') or '').strip()
         object_id = str(prev.get('object_id', '') or '').strip()
+        if any(str(item.get('object_id', '') or '').strip() == object_id for item in merged):
+            continue
         if not label or not object_id or _looks_like_bad_object_label(label):
             continue
         merged.append(dict(prev))
@@ -1194,9 +1211,68 @@ def _merge_knowledge_scope(prev_scope: dict, new_scope: dict) -> dict:
     return result
 
 
+def _coerce_knowledge_scope_delta(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    result: dict = {}
+    protagonist = value.get('protagonist', {})
+    if isinstance(protagonist, str):
+        protagonist = {'learned': [protagonist]}
+    if isinstance(protagonist, dict):
+        learned = protagonist.get('learned', [])
+        if isinstance(learned, str):
+            learned = [learned]
+        cleaned = []
+        if isinstance(learned, list):
+            for item in learned:
+                text = str(item or '').strip()
+                if text and text not in cleaned:
+                    cleaned.append(text)
+        if cleaned:
+            result['protagonist'] = {'learned': cleaned[:10]}
+    npc_local_raw = value.get('npc_local', {})
+    npc_local: dict = {}
+    if isinstance(npc_local_raw, dict):
+        for name, data in npc_local_raw.items():
+            holder = sanitize_runtime_name(name)
+            if not holder:
+                continue
+            if isinstance(data, str):
+                data = {'learned': [data]}
+            if not isinstance(data, dict):
+                continue
+            learned = data.get('learned', [])
+            if isinstance(learned, str):
+                learned = [learned]
+            cleaned = []
+            if isinstance(learned, list):
+                for item in learned:
+                    text = str(item or '').strip()
+                    if text and text not in cleaned:
+                        cleaned.append(text)
+            if cleaned:
+                npc_local[holder] = {'learned': cleaned[:10]}
+    if npc_local:
+        result['npc_local'] = npc_local
+    return result
+
+
 def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id: str | None = None) -> dict:
     prev = prev_state or {}
     current = dict(state or {})
+    prev_actors = prev.get('actors', {}) if isinstance(prev.get('actors', {}), dict) else {}
+    current_actors = current.get('actors', {}) if isinstance(current.get('actors', {}), dict) else {}
+    current['actors'] = {**current_actors, **prev_actors}
+    for key in ('actor_context_index',):
+        value = current.get(key, prev.get(key, {}))
+        if not isinstance(value, dict):
+            value = prev.get(key, {}) if isinstance(prev.get(key, {}), dict) else {}
+        current[key] = value
+    for key in ('knowledge_records',):
+        value = current.get(key, prev.get(key, []))
+        if not isinstance(value, list):
+            value = prev.get(key, []) if isinstance(prev.get(key, []), list) else []
+        current[key] = value
 
     def _derive_names_from_scene_entities(items: list[dict], *, onstage_only: bool = False) -> list[str]:
         out: list[str] = []
@@ -1325,11 +1401,19 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     tracked_objects = _merge_tracked_objects(prev_tracked_objects, tracked_objects)
     normalized_objects = []
     seen_object_ids: set[str] = set()
+    retired_candidates = {
+        str(item.get('object_id', '') or '').strip()
+        for item in tracked_objects
+        if isinstance(item, dict) and str(item.get('lifecycle_status', '') or '').strip() in {'consumed', 'destroyed', 'lost', 'archived'}
+    }
     for idx, item in enumerate(tracked_objects):
         if not isinstance(item, dict):
             continue
         object_id = str(item.get('object_id', '') or f'obj_{idx + 1:02d}').strip()
         label = str(item.get('label', '') or '').strip()
+        lifecycle_status = str(item.get('lifecycle_status', 'active') or 'active').strip() or 'active'
+        if object_id in retired_candidates and lifecycle_status not in {'consumed', 'destroyed', 'lost', 'archived'}:
+            continue
         if label == object_id:
             continue
         if _looks_like_bad_object_label(label):
@@ -1337,13 +1421,39 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         if not object_id or not label or object_id in seen_object_ids:
             continue
         seen_object_ids.add(object_id)
-        normalized_objects.append({
+        normalized_item = {
             'object_id': object_id,
             'label': label,
             'kind': str(item.get('kind', '') or 'item').strip() or 'item',
             'story_relevant': bool(item.get('story_relevant', True)),
-        })
+        }
+        if lifecycle_status in {'consumed', 'destroyed', 'lost', 'archived'}:
+            normalized_item['lifecycle_status'] = lifecycle_status
+            normalized_item['lifecycle_reason'] = str(item.get('lifecycle_reason', '') or '').strip()
+        normalized_objects.append(normalized_item)
     object_index = {item['object_id']: item for item in normalized_objects}
+    graveyard_objects = [dict(item) for item in current.get('graveyard_objects', prev.get('graveyard_objects', [])) if isinstance(item, dict)]
+    graveyard_by_id = {
+        str(item.get('object_id', '') or '').strip(): item
+        for item in graveyard_objects
+        if str(item.get('object_id', '') or '').strip()
+    }
+    retired_object_ids: set[str] = set()
+    for item in list(object_index.values()):
+        lifecycle_status = str(item.get('lifecycle_status', 'active') or 'active').strip() or 'active'
+        if lifecycle_status not in {'consumed', 'destroyed', 'lost', 'archived'}:
+            continue
+        object_id = item['object_id']
+        retired_object_ids.add(object_id)
+        graveyard_by_id[object_id] = {
+            **graveyard_by_id.get(object_id, {}),
+            'object_id': object_id,
+            'label': item.get('label', ''),
+            'kind': item.get('kind', 'item'),
+            'lifecycle_status': lifecycle_status,
+            'lifecycle_reason': str(item.get('lifecycle_reason', '') or '').strip(),
+        }
+        object_index.pop(object_id, None)
 
     possession_state = current.get('possession_state', prev.get('possession_state', []))
     if not isinstance(possession_state, list):
@@ -1365,6 +1475,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
                 if actor_name:
                     actor_name_lookup[actor_name] = str(actor_id)
     valid_holders = set(current['onstage_npcs']) | set(current['relevant_npcs']) | protagonist_names() | set(early_holder_lookup.keys()) | set(actor_name_lookup.keys())
+    possession_by_object: dict[str, dict] = {}
     for item in possession_state:
         if not isinstance(item, dict):
             continue
@@ -1373,13 +1484,12 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         holder_entity = early_holder_lookup.get(holder)
         if holder_entity:
             holder = sanitize_runtime_name(holder_entity.get('primary_label', '')) or holder
-        if not object_id or not holder or object_id in seen_possession:
+        if not object_id or not holder:
             continue
         if valid_holders and holder not in valid_holders:
             continue
-        if object_id not in object_index:
+        if object_id not in object_index or object_id in retired_object_ids:
             continue
-        seen_possession.add(object_id)
         normalized_item = {
             'object_id': object_id,
             'holder': holder,
@@ -1390,7 +1500,12 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         holder_actor_id = str(item.get('holder_actor_id', '') or '').strip() or actor_name_lookup.get(holder, '')
         if holder_actor_id:
             normalized_item['holder_actor_id'] = holder_actor_id
-        normalized_possession.append(normalized_item)
+        possession_by_object[object_id] = normalized_item
+    for object_id, item in possession_by_object.items():
+        if object_id in seen_possession:
+            continue
+        seen_possession.add(object_id)
+        normalized_possession.append(item)
     current['possession_state'] = normalized_possession
 
     object_visibility = current.get('object_visibility', prev.get('object_visibility', []))
@@ -1398,15 +1513,15 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         object_visibility = prev.get('object_visibility', []) if isinstance(prev.get('object_visibility', []), list) else []
     normalized_visibility = []
     seen_visibility: set[str] = set()
+    visibility_by_object: dict[str, dict] = {}
     for item in object_visibility:
         if not isinstance(item, dict):
             continue
         object_id = str(item.get('object_id', '') or '').strip()
-        if not object_id or object_id in seen_visibility:
+        if not object_id:
             continue
-        if object_id not in object_index:
+        if object_id not in object_index or object_id in retired_object_ids:
             continue
-        seen_visibility.add(object_id)
         visibility = str(item.get('visibility', '') or 'private').strip() or 'private'
         if visibility not in {'private', 'public'}:
             visibility = 'private'
@@ -1427,7 +1542,12 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
                 known_to_actor_ids.append(actor_id)
         if known_to_actor_ids:
             visibility_item['known_to_actor_ids'] = known_to_actor_ids[:6]
-        normalized_visibility.append(visibility_item)
+        visibility_by_object[object_id] = visibility_item
+    for object_id, item in visibility_by_object.items():
+        if object_id in seen_visibility:
+            continue
+        seen_visibility.add(object_id)
+        normalized_visibility.append(item)
     current['object_visibility'] = normalized_visibility
     object_ids_with_state = {item['object_id'] for item in normalized_possession} | {item['object_id'] for item in normalized_visibility}
     filtered_objects = []
@@ -1443,6 +1563,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             filtered_objects.append(item)
             continue
     current['tracked_objects'] = filtered_objects
+    current['graveyard_objects'] = list(graveyard_by_id.values())[-40:]
 
     candidate_entities = current.get('scene_entities', [])
     if isinstance(candidate_entities, list):
@@ -1459,9 +1580,9 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         current.get('continuity_hints', prev.get('continuity_hints', [])),
     )
     current['scene_entities'] = _repair_existing_degraded_entities(current.get('scene_entities', []), prev)
-    arbiter_signals = current.get('arbiter_signals', prev.get('arbiter_signals', {}))
+    arbiter_signals = current.get('arbiter_signals', {})
     if not isinstance(arbiter_signals, dict):
-        arbiter_signals = prev.get('arbiter_signals', {}) if isinstance(prev.get('arbiter_signals', {}), dict) else {}
+        arbiter_signals = {}
     current['arbiter_signals'] = arbiter_signals
     state_keeper_diagnostics = current.get('state_keeper_diagnostics', prev.get('state_keeper_diagnostics', {}))
     if not isinstance(state_keeper_diagnostics, dict):
@@ -1549,11 +1670,8 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     elif prev.get('session_id'):
         current['session_id'] = prev['session_id']
 
-    # knowledge_scope 合并：增量追加到 prev 上
-    current['knowledge_scope'] = _merge_knowledge_scope(
-        prev.get('knowledge_scope', {}),
-        current.get('knowledge_scope', {}),
-    )
+    # knowledge_scope is a per-turn delta; long-term knowledge lives in knowledge_records.
+    current['knowledge_scope'] = _coerce_knowledge_scope_delta(current.get('knowledge_scope', {}))
 
     current = _apply_object_entity_bindings(current)
 

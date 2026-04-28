@@ -13,8 +13,8 @@
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
-- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；含 `_merge_knowledge_scope()` 增量合并
-- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前只维护物品、持有关系、情报与信号，不再维护 NPC 基础设定
+- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、object lifecycle、possession/visibility 合法覆盖与 `knowledge_scope` 本轮 delta 标准化
+- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前只维护物品、持有关系、情报与信号，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
 - `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流
@@ -23,7 +23,7 @@
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档
-- `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`
+- `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重
 - `event_ledger.py`：事件账本；产出阶段事件摘要，不再负责人物短期状态写回
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器
 - `opening.py`：opening 菜单与开局状态机
@@ -59,10 +59,10 @@
 - `state_fragment` 已前移到 narrator / state_keeper 主链，并在失败分支提供 `fragment-baseline`
 - `state_keeper_candidate` 当前可作为 `skeleton keeper` sidecar 先产出最小骨架，并并入 `state_fragment` 再交给完整 keeper
 - skeleton keeper 当前每个完整回复后都会运行，避免非合并轮长期沿用旧 `state_fragment` 造成硬锚点滞后；完整 fill keeper 仍按合并轮运行
-- 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补物品、情报与信号；默认每 3 轮运行一次，不再接管 `time / location / main_event / onstage_npcs / immediate_goal` 这类当前硬锚点
+- 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补物品、情报与信号；默认每 2 轮运行一次，不再接管 `time / location / main_event / onstage_npcs / immediate_goal` 这类当前硬锚点
 - actor registry 当前在每个完整 narrator 回复后运行：narrator 后处理只允许创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份视为锁定，不允许后续覆盖；持续承担行动链、关系压力或信息承载功能的匿名个体也可用正文稳定称呼建 actor；LLM 失败时不从旧 `scene_entities` fallback 建 actor，避免把旧污染写成不可变设定
 - actor registry 创建新 actor 时会读取最近 1~3 对 turn，因此上一轮 actor registry LLM 失败后，下一轮仍可从 recent window 补建，不需要依赖脏 fallback
-- actor registry 已内置 `protagonist`，物品持有和情报记录可统一绑定到 `actor_id`；`possession_state` 会补 `holder_actor_id`，`object_visibility` 会补 `known_to_actor_ids`，`knowledge_scope` 会派生 `knowledge_records`
+- actor registry 已内置 `protagonist`，物品持有和情报记录可统一绑定到 `actor_id`；`possession_state` 会补 `holder_actor_id`，`object_visibility` 会补 `known_to_actor_ids`，本轮 `knowledge_scope` 会派生长期 `knowledge_records`
 - 12 轮未被正文提及的 actor 会进入 `actor_context_index.archived_actor_ids`，只影响后续上下文注入，不修改 actor 基础设定；再次被正文提及时会回到 active
 - 每满 12 个完整 user/assistant pair 生成一个不可变 dense summary chunk，保存到 `memory/summary_chunks.json`；chunk 覆盖固定区间，不重叠、不滚动覆盖
 - opening-choice 分支现在不再“只生成正文然后直接返回”；首轮开局正文会进入 `state_fragment -> skeleton keeper -> fill keeper -> thread/important_npc` 写回链，避免正文与 state 从第一轮开始分叉。当前这条链通常能落下 `time/location/main_event/onstage/immediate_risks/carryover_clues`，但 `immediate_goal` 仍可能偏保守
@@ -93,7 +93,7 @@
 - 前端默认会话选择已改为最近更新会话优先
 - 角色卡信息当前会动态读取角色卡元数据和缩略封面图；角色卡切换与导入入口现已主要收进设置面板
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间私下信息自动外溢
-- NPC 间信息隔离已升级为结构化 `knowledge_scope` 系统：state 中追踪 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，keeper 按回合提取增量，`state_bridge.py` 合并去重，`actor_registry.py` 派生 actor-id 版 `knowledge_records`，`narrator_input.py` 渲染为结构化知情边界
+- NPC 间信息隔离已升级为结构化知识系统：keeper 每轮只提取本轮新增 `knowledge_scope` delta，`state_bridge.py` 只保留本轮 delta 不再长期合并，`actor_registry.py` 派生 actor-id 版长期 `knowledge_records` 并做轻量相似去重，`narrator_input.py` 渲染为结构化知情边界
 - 所有文件写入已改为原子写入模式（`_atomic_write_text()` / `_atomic_write_json()`）：写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
 - 模型调用已加入 API 韧性层：`_retry_on_rate_limit` 装饰器在 429/503 错误时自动指数退避重试（最多 3 次），尊重 `Retry-After` 响应头；远端和本地模型调用均已覆盖
 - `summary` 与独立 `mid digest` 当前不再作为 narrator prompt 的主输入块
@@ -147,7 +147,8 @@
   - `fill keeper`（`deepseek-v4-flash`）→ 补物品、情报与信号
   - `heuristic fallback` → 最终兜底
 - `fill keeper` 当前按增量 patch 思路运行：已有 NPC / 物件默认沿用，只在明确新增或明确变化时输出，避免低质量后抽取覆盖高质量旧状态
-- NPC 与物件绑定当前由 `possession_state` 驱动：标准化层会把 holder 对齐到稳定 NPC 主名，并自动写回 `tracked_objects[].owner / bound_entity_id` 与 `scene_entities[].owned_objects`
+- NPC 与物件绑定当前由 `possession_state` 驱动：标准化层会把 holder 对齐到稳定 NPC 主名，并自动写回 `tracked_objects[].owner / bound_entity_id` 与 `scene_entities[].owned_objects`；新 holder 必须来自当前人物、scene entity、actor registry 或 protagonist aliases，非法 holder 不覆盖旧合法归属
+- object 层支持 `lifecycle_status: active | consumed | destroyed | lost | archived`；非 active 物件会从 active `tracked_objects / possession_state / object_visibility` 退出，并写入 `graveyard_objects` 防止后续幻觉复活
 - turn_analyzer 可在 narrator 不变前提下评估是否跟着切本地
 
 当前 keeper 调教样本分工：

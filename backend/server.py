@@ -480,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
                 result['web'] = web_runtime_settings()
                 return self._send(200, result)
 
-            if parsed.path == '/api/characters/profile-override':
+            if parsed.path in {'/api/character/profile-override', '/api/characters/profile-override'}:
                 override = payload.get('override')
                 if not isinstance(override, dict):
                     return self._invalid_input('override must be an object')

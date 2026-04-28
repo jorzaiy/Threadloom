@@ -11,10 +11,19 @@ except ImportError:
 
 def merge_arbiter_state(state: dict, arbiter: dict | None) -> dict:
     if not arbiter or not arbiter.get('arbiter_needed'):
-        return dict(state or {})
+        next_state = dict(state or {})
+        next_state['arbiter_signals'] = {'events': [], 'flags': {}}
+        next_state['immediate_risks'] = _remove_arbiter_derived_text(next_state.get('immediate_risks', []))
+        next_state['carryover_clues'] = _remove_arbiter_derived_text(next_state.get('carryover_clues', []))
+        return next_state
 
     next_state = deepcopy(state or {})
     results = arbiter.get('results', []) or []
+    if not results:
+        next_state['arbiter_signals'] = {'events': [], 'flags': {}}
+        next_state['immediate_risks'] = _remove_arbiter_derived_text(next_state.get('immediate_risks', []))
+        next_state['carryover_clues'] = _remove_arbiter_derived_text(next_state.get('carryover_clues', []))
+        return next_state
     signals = {
         'events': [],
         'flags': {},
@@ -52,3 +61,22 @@ def merge_arbiter_state(state: dict, arbiter: dict | None) -> dict:
     next_state['immediate_risks'] = normalize_text_list(immediate_risks, limit=6)
     next_state['carryover_clues'] = normalize_text_list(carryover_clues, limit=6)
     return next_state
+
+
+def _remove_arbiter_derived_text(items) -> list[str]:
+    blocked_parts = (
+        '当前潜行或压低动静的动作存在暴露风险',
+        '潜行是否已经惊动观察者',
+        '身份识别与知情扩散必须继续检查信息来源',
+        '本轮涉及的信息扩散仍需区分私密、小范围共享与公开流通',
+        '前方或附近存在观察、试探或接触风险，但尚未坐实为精准堵截',
+        '可疑观察者的知情范围与停留目的仍未确定',
+        '外部追索或搜索压力正在上升，但尚未形成精确锁定',
+    )
+    cleaned = []
+    for item in items or []:
+        text = str(item or '').strip()
+        if not text or any(part in text for part in blocked_parts):
+            continue
+        cleaned.append(text)
+    return normalize_text_list(cleaned, limit=6)

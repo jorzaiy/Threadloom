@@ -8,12 +8,12 @@ from pathlib import Path
 try:
     from .character_assets import resolve_character_cover_path
     from .persona_runtime import infer_persona_traits
-    from .name_sanitizer import sanitize_runtime_name
+    from .name_sanitizer import sanitize_runtime_name, looks_like_bad_entity_fragment
     from .paths import APP_ROOT, SHARED_ROOT, active_character_id, active_user_label, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
 except ImportError:
     from character_assets import resolve_character_cover_path
     from persona_runtime import infer_persona_traits
-    from name_sanitizer import sanitize_runtime_name
+    from name_sanitizer import sanitize_runtime_name, looks_like_bad_entity_fragment
     from paths import APP_ROOT, SHARED_ROOT, active_character_id, active_user_label, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
 
 ROOT = SHARED_ROOT
@@ -401,7 +401,13 @@ def load_turn_trace(session_id: str, turn_id: str) -> dict:
 
 
 def build_state_snapshot(state: dict) -> dict:
-    scene_entities = state.get('scene_entities', []) if isinstance(state.get('scene_entities', []), list) else []
+    raw_scene_entities = state.get('scene_entities', []) if isinstance(state.get('scene_entities', []), list) else []
+    scene_entities = [
+        item for item in raw_scene_entities
+        if isinstance(item, dict)
+        and sanitize_runtime_name(item.get('primary_label', ''))
+        and not looks_like_bad_entity_fragment(item.get('primary_label', ''))
+    ]
     entity_index = {
         sanitize_runtime_name(item.get('primary_label', '')): item
         for item in scene_entities
@@ -563,9 +569,51 @@ def build_entity_map(state: dict, session_id: str | None = None) -> dict:
         }
 
     out = {}
+    for actor_id, actor in (state.get('actors', {}) or {}).items():
+        if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
+            continue
+        primary = sanitize_runtime_name(actor.get('name', '') or (actor.get('aliases') or [''])[0])
+        if not primary or looks_like_bad_entity_fragment(primary):
+            continue
+        out[actor_id] = {
+            'entity_id': actor_id,
+            'actor_id': actor_id,
+            'primary_label': primary,
+            'aliases': actor.get('aliases', []),
+            'role_label': actor.get('identity') or 'actor registry',
+            'collective': False,
+            'count_hint': None,
+            'onstage': actor_id in set((state.get('actor_context_index', {}) or {}).get('active_actor_ids', []) or []),
+            'relevant': False,
+            'possible_links': [],
+            'runtime_state': {
+                'status': '当前在场并直接牵动局势' if actor_id in set((state.get('actor_context_index', {}) or {}).get('active_actor_ids', []) or []) else '当前未必在场，但仍与局势直接相关',
+                'attitude_to_protagonist': '待确认',
+                'relation_to_scene': actor.get('personality') or actor.get('appearance') or '长期角色账本中的稳定人物',
+            },
+            'persona': {
+                'seed_layer': 'actor_registry',
+                'seed_confidence_tier': 'medium',
+                'mbti': '待确认',
+                'archetype': actor.get('identity') or '待确认',
+                'runtime_hooks': {
+                    'decision_style': actor.get('personality') or '待确认',
+                    'social_strategy': '待确认',
+                    'conflict_style': '待确认',
+                    'speech_rhythm': '待确认',
+                    'stress_response': '待确认',
+                },
+            },
+            'debug': {
+                'source': 'actor_registry',
+                'last_updated_at': None,
+                'reasons': [],
+            },
+        }
+
     for entity in scene_entities:
         primary = sanitize_runtime_name(entity.get('primary_label', ''))
-        if not primary:
+        if not primary or looks_like_bad_entity_fragment(primary):
             continue
         persona = persona_by_name.get(primary, {})
         hooks = persona.get('persona_seed', {}).get('runtime_hooks', {})

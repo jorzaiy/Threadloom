@@ -57,6 +57,7 @@ DEFAULT_ADVANCED_MODELS = {
         'temperature': 0.0,
         'max_output_tokens': 800,
         'stream': False,
+        'response_format': {'type': 'json_object'},
     },
 }
 SYSTEM_ROLE_DEFAULTS = {
@@ -500,10 +501,14 @@ def load_runtime_config() -> dict:
         'temperature': float(state_keeper_defaults.get('temperature', 0.1) or 0.1),
         'max_output_tokens': int(state_keeper_defaults.get('max_output_tokens', 480) or 480),
         'stream': bool(state_keeper_defaults.get('stream', False)),
+        'response_format': {'type': 'json_object'},
     }
     models['state_keeper_candidate'] = {
-        **copy.deepcopy(advanced.get('state_keeper_candidate', DEFAULT_ADVANCED_MODELS['state_keeper_candidate'])),
+        **copy.deepcopy(DEFAULT_ADVANCED_MODELS['state_keeper_candidate']),
+        **copy.deepcopy(advanced.get('state_keeper_candidate', {})),
     }
+    if not isinstance(models['state_keeper_candidate'].get('response_format'), dict):
+        models['state_keeper_candidate']['response_format'] = {'type': 'json_object'}
     if not models['state_keeper_candidate'].get('model'):
         models['state_keeper_candidate']['model'] = state_keeper.get('model', '') or narrator.get('model', '')
     for role_name in ('turn_analyzer', 'arbiter'):
@@ -583,6 +588,7 @@ def resolve_provider_model(role: str = 'narrator') -> dict:
         'temperature': role_cfg.get('temperature', 0.9),
         'max_output_tokens': max_output_tokens,
         'stream': stream,
+        'response_format': copy.deepcopy(role_cfg.get('response_format')) if isinstance(role_cfg.get('response_format'), dict) else None,
         'is_local': False,
     }
 

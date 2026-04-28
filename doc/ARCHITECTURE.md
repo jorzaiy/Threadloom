@@ -103,6 +103,13 @@
   - 最近 `12` 对 turn 的 rolling window
   - 命中的 keeper archive 结构记录
 
+当前 keeper 写回质量边界：
+- `skeleton keeper` 只维护 `time / location / main_event / onstage_npcs / immediate_goal` 最小骨架。
+- `fill keeper` 只输出本轮增量 patch，主要补 `carryover_signals / tracked_objects / possession_state / object_visibility / knowledge_scope`。
+- `knowledge_scope` 是本轮新增知情 delta，不是长期知识库；长期知识只写入 actor-id 版 `knowledge_records`，并做轻量相似去重。
+- object patch 不应携带 baseline 全量对象；物件消耗、摧毁、遗失或归档通过 `lifecycle_status` 表达，并进入 `graveyard_objects`。
+- `keeper_record_archive.json` 是派生缓存；刷新前会 prune 超过当前有效 pair count 的未来 records，避免 undo / regenerate 后召回坏档。
+
 当前已落地的 persona 责任：
 - 维护 session-local `scene/archive/longterm` persona 层
 - 用保守门槛控制哪些 NPC 值得拥有运行时人格骨架
@@ -202,6 +209,11 @@
 - 重要物件与持有关系
 - 情报账本
 - 召回的固定 summary chunk
+
+写回边界：
+- `knowledge_scope` 只代表本轮新增知情，不作为长期连续性层直接累积；长期连续性消费 `knowledge_records`。
+- `tracked_objects` 只保留 active 物件；`consumed / destroyed / lost / archived` 物件进入 `graveyard_objects`。
+- `possession_state` 与 `object_visibility` 允许本轮合法新状态覆盖旧状态，但非法 holder 或非法 object id 不覆盖旧正常数据。
 
 候选知识层：
 - 系统级 NPC

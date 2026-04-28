@@ -201,8 +201,9 @@
 已完成：
 - state 中新增 `knowledge_scope` 字段，独立追踪 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`
 - fill prompt 已指导 keeper 按回合提取知识增量
-- `state_bridge.py` 中的 `_merge_knowledge_scope()` 负责增量合并（去重，主角上限 30 条，单 NPC 上限 15 条）
-- `narrator_input.py` 中的 `_format_knowledge_scope()` 将结构化知情边界渲染为 narrator 可消费的格式
+- `state_bridge.py` 只保留本轮 `knowledge_scope` delta，不再长期合并旧 scope
+- `actor_registry.py` 将本轮 `knowledge_scope` 派生为 actor-id 版长期 `knowledge_records`，并做轻量相似去重
+- `narrator_input.py` 将结构化知情边界渲染为 narrator 可消费的格式
 - 已从纯文本知情边界规则升级为结构化 + 文本混合方案
 
 影响：
@@ -219,4 +220,4 @@
 2. ~~**实时消息处理添加 429 重试**~~ — ✅ 已完成：`model_client.py` 和 `local_model_client.py` 均已加入 `_retry_on_rate_limit` 装饰器（429/503 指数退避，最多 3 次，尊重 `Retry-After`）
 3. **世界书预算参数暴露到 runtime.example.json** — 让用户可配置
 4. **keeper archive 反向引用** — keeper 决策时参考历史 archive 记录
-5. ~~**knowledge scope 系统**~~ — ✅ 已完成：`knowledge_scope` 字段已落地到 state，含 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，并已接入 keeper 提取、state_bridge 合并和 narrator_input 渲染
+5. ~~**knowledge scope 系统**~~ — ✅ 已完成：`knowledge_scope` 字段已落地到 state，含 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`；当前语义为本轮 delta，长期知识由 `knowledge_records` 保存并去重，再由 narrator_input 渲染

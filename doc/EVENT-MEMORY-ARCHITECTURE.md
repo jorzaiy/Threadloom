@@ -3,13 +3,13 @@
 这份说明专门澄清当前系统里两类“记忆整理层”的职责：
 
 1. 细粒度事件索引层：`event_summaries`
-2. 粗粒度状态整理层：12 轮一次的 `state_keeper` consolidation
+2. 状态整理层：按配置周期运行的 `state_keeper` consolidation
 
 它们都在描述“发生了什么”，但时间尺度、用途和服务对象不同。
 
 ## 一、当前结论
 
-当前 narrator **还吃不到** `event_summaries`。
+当前 narrator **不直接读取** `event_summaries` 文件。
 
 当前 narrator 主链主要吃的是：
 
@@ -20,8 +20,8 @@
 - `canon`
 - 当前硬锚点（time / location / main_event / onstage / relevant）
 - 最近 12 轮
-- active_threads
 - selector 命中的候选知识块（如 lorebook / NPC candidates / npc profiles）
+- actor registry、active 物件、`knowledge_records` 等连续性层
 
 其中：
 
@@ -65,13 +65,13 @@
 - 它不直接写最终 state
 - 它更像“近程事件索引”
 
-## 三、粗粒度状态整理层：12 轮 state consolidation
+## 三、状态整理层：keeper consolidation
 
 ### 触发
 
-- 首轮 bootstrap：完整 `state_keeper`
-- 高频 skeleton：每 2 轮一次
-- 完整 consolidation：每 12 轮一次
+- 首轮 / bootstrap：完整 `state_keeper`
+- 高频 skeleton：完整回复后产出最小骨架
+- 完整 fill keeper：按 consolidation 配置周期运行，当前默认偏增量 patch
 
 ### 当前用途
 
@@ -84,6 +84,7 @@
   - `possession_state`
   - `object_visibility`
   - `knowledge_scope`
+  - `graveyard_objects`
 - 并在 merge 后影响：
   - `main_event`
   - `onstage_npcs`
@@ -94,13 +95,14 @@
 ### 当前边界
 
 - 这是 keeper 的长期 state 整理层
-- 粒度更粗
-- 频率更低
+- skeleton 层维护当前骨架，fill 层维护增量信号、物件和本轮知情 delta
+- `knowledge_scope` 不长期累积；长期知识由 `knowledge_records` 保存
+- active object 不直接删除，消耗/摧毁/遗失/归档会进入 `graveyard_objects`
 - 它不是“短事件索引”
 
 ## 四、为什么它们不能互相替代
 
-### event_summaries 不能替代 12 轮 consolidation
+### event_summaries 不能替代 keeper consolidation
 
 因为它只记录：
 
@@ -112,12 +114,13 @@
 - 全局 state 收束
 - 关系统一
 - 物件与 knowledge_scope 的系统整理
+- 物件生命周期、holder 合法性和长期 knowledge_records 去重
 
-### 12 轮 consolidation 不能替代 event_summaries
+### keeper consolidation 不能替代 event_summaries
 
-因为它太粗：
+因为它职责不同：
 
-- 频率低
+- 默认每 2 轮运行一次，仍不是每轮事件索引
 - 不是索引层
 - 不适合回答“最近哪一轮开始发生这件事”
 
@@ -125,7 +128,7 @@
 
 ```text
 细粒度 event_summaries -> 服务 selector / 近程事件检索
-粗粒度 12-turn state consolidation -> 服务 keeper / 长程 state 稳定
+keeper consolidation -> 服务 keeper / state 稳定
 ```
 
 它们：
@@ -211,6 +214,7 @@
   - 由 `keeper_archive` 从 history 的 user/assistant 对构建中程 archive。
   - `retrieve_keeper_records()` 在 archive 缺失、损坏或落后时刷新；刷新默认使用 `skip_bootstrap=True, use_llm=False`，避免读取链触发额外 LLM/bootstrap 写入。
   - archive 窗口会排除最近 overlap pairs，避免把近程窗口和中程 archive 重叠注入。
+  - refresh / upsert 前会删除 `end_pair_index > current_pair_count` 的未来 records，避免 undo / regenerate 后旧分支污染召回。
 
 - `persona/*`
   - `update_persona()` 会按候选连续性信息更新 session-local persona 文件。
@@ -226,7 +230,7 @@
   - 该分支可能先保存 opening state，再保存 keeper 合并后的最终 state。
 
 - runtime complete
-  - 跑 narrator、可选 skeleton keeper、按首轮/bootstrapped/12 轮 consolidation 规则跑完整 state keeper 或 fragment baseline。
+  - 跑 narrator、完整回复后跑 skeleton keeper、按首轮/bootstrapped/2 轮 consolidation 规则跑完整 state keeper 或 fragment baseline。
   - 完整回合追加 history，再合并 arbiter/thread/important NPC，最后覆盖 `state.json` 并更新 event summary / summary / persona / meta / trace。
 
 - runtime partial
@@ -238,7 +242,7 @@
 - 未发现 `client_turn_id` 重复请求会重复追加 history 或 event summary；重复请求命中 `meta.processed_client_turn_ids` 后直接返回缓存 response。
 - `state.json` 的多次保存是同轮覆盖型写入，不会制造重复记录，但要关注后写阶段是否用旧字段覆盖新 keeper 结果。
 - `event_summaries.json` 是追加型文件，目前按 turn 频率追加；如果未来引入重试/再生成，需要以 `turn_id` 做去重保护。
-- `keeper_record_archive.json` 是派生缓存，刷新会覆盖整份 archive；它不应反向写 state/history。
+- `keeper_record_archive.json` 是派生缓存；刷新会先 prune 未来 records，再按窗口补齐，不应反向写 state/history。
 - 当前主要污染链风险来自结构化抽取质量：噪声 object label、畸形 NPC 名称或片段化 main_event 进入 `state.json` 后，会被 selector/narrator 作为上下文继续消费。
 
 ### Keeper 实体与物件合并规则
@@ -251,12 +255,15 @@
 - 已存在的关键物件优先保留 `object_id`、更具体的 `label` 与非泛化 `kind`。
 - 后续抽取如果把 `来福客栈账册` 退化成 `账册`，不会覆盖旧标签。
 - 噪声物件标签，例如动作残片或 `的包` 这类局部短语，会在标准化时过滤。
+- `tracked_objects` 只保留 active 物件；`lifecycle_status=consumed/destroyed/lost/archived` 的物件会退出 active 层并写入 `graveyard_objects`。
+- keeper object patch 只表达本轮明确变化，不应把 baseline 全量对象重新写回 payload。
 
 ### NPC 与物件双向绑定
 
 当前物件归属以 `possession_state` 为事实来源，标准化层会自动把它回写成 NPC 与物件的双向绑定：
 
 - `possession_state[].holder` 会按 `scene_entities[].primary_label / aliases` 对齐到稳定主名。
+- 新 holder 必须能在当前人物、scene entities、actor registry 或 protagonist aliases 中找到；凭空 holder 不覆盖旧合法归属。
 - `tracked_objects[]` 会派生：
   - `owner`
   - `owner_type`

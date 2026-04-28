@@ -168,11 +168,12 @@ async function saveCharacterProfileDraft() {
     override = JSON.parse(sourceInput.value || '{}');
   } catch (err) {
     const targetNote = profileEditorMode === 'override' ? profileEditorNote : characterProfileDraftNote;
+    const message = `JSON 解析失败：${err.message}`;
     if (targetNote) {
-      targetNote.textContent = `JSON 解析失败：${err.message}`;
+      targetNote.textContent = message;
       targetNote.dataset.kind = 'error';
     }
-    return;
+    throw new Error(message);
   }
   const data = await apiJson('/api/characters/profile-override', {
     method: 'POST',
@@ -1229,7 +1230,7 @@ function renderState(state) {
         th.textContent = `${idx + 1}`;
         const td = document.createElement('td');
         const name = item?.name || '待确认';
-        const entityId = item?.entity_id || null;
+        const entityId = item?.entity_id || item?.actor_id || null;
         const roleLabel = item?.role_label || '';
         const ambiguous = Boolean(item?.ambiguous);
         const label = roleLabel ? `${name} / ${roleLabel}` : name;
@@ -1282,7 +1283,8 @@ function renderState(state) {
     seenNpcNames.add(name);
     npcRows.push({
       name,
-      entity_id: null,
+      entity_id: actorId,
+      actor_id: actorId,
       role_label: actor.identity || 'actor registry',
       ambiguous: false,
     });
@@ -1994,6 +1996,7 @@ profileEditorSaveBtn?.addEventListener('click', async () => {
     } else if (profileEditorMode === 'override') {
       await saveCharacterProfileDraft();
       await loadCharacterProfileOverride();
+      setStatus('当前卡强化设定已保存', 'ok');
       if (userProfileNote) {
         userProfileNote.textContent = '当前卡强化设定已保存';
         userProfileNote.dataset.kind = 'ok';

@@ -55,6 +55,50 @@ def _clean_text(value: object, limit: int = 120) -> str:
     return text[:limit]
 
 
+def _knowledge_tokens(value: str) -> set[str]:
+    text = _clean_text(value, 200)
+    text = re.sub(r'[，。！？、；：,.!?;:\s"“”‘’（）()【】\[\]]+', '', text)
+    for token in ('知道', '得知', '了解到', '了解', '发现', '看出', '获知', '意识到'):
+        text = text.replace(token, '')
+    tokens = set(re.findall(r'[\u4e00-\u9fff]{2,4}|[A-Za-z][A-Za-z0-9_-]{1,20}', text))
+    if not tokens and text:
+        tokens = {text[idx:idx + 2] for idx in range(max(0, len(text) - 1))}
+    return {token for token in tokens if token}
+
+
+def _knowledge_bigrams(value: str) -> set[str]:
+    text = _clean_text(value, 200)
+    text = re.sub(r'[，。！？、；：,.!?;:\s"“”‘’（）()【】\[\]]+', '', text)
+    for token in ('知道', '得知', '了解到', '了解', '发现', '看出', '获知', '意识到', '主角'):
+        text = text.replace(token, '')
+    return {text[idx:idx + 2] for idx in range(max(0, len(text) - 1)) if text[idx:idx + 2]}
+
+
+def _knowledge_similar(left: str, right: str) -> bool:
+    left_text = _clean_text(left, 200)
+    right_text = _clean_text(right, 200)
+    if not left_text or not right_text:
+        return False
+    if left_text == right_text:
+        return True
+    if left_text in right_text or right_text in left_text:
+        return min(len(left_text), len(right_text)) >= 6
+    left_tokens = _knowledge_tokens(left_text)
+    right_tokens = _knowledge_tokens(right_text)
+    if left_tokens and right_tokens:
+        intersection = len(left_tokens & right_tokens)
+        union = len(left_tokens | right_tokens)
+        if union > 0 and intersection / union >= 0.6:
+            return True
+    left_bigrams = _knowledge_bigrams(left_text)
+    right_bigrams = _knowledge_bigrams(right_text)
+    if not left_bigrams or not right_bigrams:
+        return False
+    intersection = len(left_bigrams & right_bigrams)
+    union = len(left_bigrams | right_bigrams)
+    return union > 0 and intersection / union >= 0.25
+
+
 def _actor_name(actor: dict) -> str:
     return sanitize_runtime_name(actor.get('name', ''))
 
@@ -142,7 +186,7 @@ def _valid_actor_candidate(item: dict) -> dict | None:
     }
 
 
-def _extract_actor_candidates_with_llm(existing_actors: dict, narrator_reply: str, *, user_text: str = '', recent_pairs: list[tuple[str, str]] | None = None) -> tuple[list[dict], dict | None, str | None]:
+def _extract_actor_candidates_with_llm(existing_actors: dict, narrator_reply: str, *, user_text: str = '', recent_pairs: list[tuple[str, str]] | None = None) -> tuple[list[dict], dict | None, dict | None]:
     existing = []
     for actor in existing_actors.values():
         if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
@@ -163,11 +207,21 @@ def _extract_actor_candidates_with_llm(existing_actors: dict, narrator_reply: st
             'narrator_reply': narrator_reply,
         },
     }, ensure_ascii=False, indent=2)
+    reply = ''
+    usage = None
     try:
         reply, usage = call_role_llm('state_keeper_candidate', ACTOR_REGISTRY_SYSTEM, user_prompt)
+    except Exception as err:
+        return [], usage if isinstance(usage, dict) else None, {'error': str(err)}
+    try:
         payload = parse_json_response(reply)
     except Exception as err:
-        return [], None, str(err)
+        raw_reply = str(reply or '')
+        return [], usage if isinstance(usage, dict) else None, {
+            'error': str(err),
+            'raw_reply_empty': not bool(raw_reply.strip()),
+            'raw_reply_excerpt': raw_reply[:500],
+        }
     raw_items = payload.get('new_actors', []) if isinstance(payload, dict) else []
     candidates = []
     for item in raw_items if isinstance(raw_items, list) else []:
@@ -281,15 +335,15 @@ def _bind_actor_ids(state: dict, actors: dict, *, turn_number: int) -> None:
             if value:
                 records.append({'holder_actor_id': actor_id, 'text': value})
     if records:
-        seen = set()
         merged = []
         for item in (state.get('knowledge_records', []) or []) + records:
             if not isinstance(item, dict):
                 continue
             key = (item.get('holder_actor_id'), item.get('text'))
-            if not key[0] or not key[1] or key in seen:
+            if not key[0] or not key[1]:
                 continue
-            seen.add(key)
+            if any(existing.get('holder_actor_id') == key[0] and _knowledge_similar(existing.get('text', ''), key[1]) for existing in merged):
+                continue
             source_turn = item.get('source_turn') or turn_number
             merged.append({'holder_actor_id': key[0], 'text': key[1], 'source_turn': int(source_turn or turn_number)})
         state['knowledge_records'] = merged[-80:]
@@ -306,7 +360,10 @@ def update_actor_registry(state: dict, *, narrator_reply: str, turn_number: int,
     if use_llm:
         candidates, usage, error = _extract_actor_candidates_with_llm(actors, narrator_reply, user_text=user_text, recent_pairs=recent_pairs)
         diagnostics['model_usage'] = usage
-        diagnostics['error'] = error
+        if isinstance(error, dict):
+            diagnostics.update(error)
+        else:
+            diagnostics['error'] = error
         if error:
             diagnostics['fallback_used'] = True
             candidates = _fallback_actor_candidates(current)

@@ -239,7 +239,7 @@ http://127.0.0.1:8765
 - `state_fragment` 现在会先作为结构化锚点进入 narrator 与 state_keeper
 - `state_keeper_candidate` 当前默认使用 `kimi-k2-0905-preview`
 - `state_keeper` 当前默认使用 `kimi-k2-0905-preview`
-- `state_keeper_candidate` 现在可以作为 `skeleton keeper` sidecar 先产出最小骨架，再并入 `state_fragment`；当前默认频率是每 2 轮一次
+- `state_keeper_candidate` 现在可以作为 `skeleton keeper` sidecar 先产出最小骨架，再并入 `state_fragment`；当前每个完整回复后都会运行。它只维护 `time / location / main_event / onstage_npcs / immediate_goal` 五个骨架字段
 - 首轮 bootstrap 不跑 skeleton，直接走一次完整 `state_keeper` 定底
 - opening-choice 的首轮正文当前例外：会先跑一次 skeleton keeper 定骨架，再跑 fill keeper 补风险/线索/物件，避免首轮正文写出来但 state 仍停在开局壳；这条链当前不等同于普通非合并轮的 `update_state()` 路径
 - 当前 keeper 相关模型已统一到 `Kimi`，不再维护多模型分工
@@ -295,7 +295,7 @@ http://127.0.0.1:8765
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间自动共享私下信息
 - 所有文件写入（`runtime_store.py`、`keeper_archive.py`）已改为原子写入：先写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
 - 模型调用层（`model_client.py`、`local_model_client.py`）已加入 `_retry_on_rate_limit` 装饰器：429/503 错误自动指数退避重试（最多 3 次），尊重 `Retry-After` 头
-- state 中新增 `knowledge_scope` 字段：独立追踪 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，由 keeper 按回合提取增量，`state_bridge.py` 合并去重（主角上限 30，单 NPC 上限 15），`narrator_input.py` 渲染为结构化知情边界
+- state 中的 `knowledge_scope` 字段只保留本轮新增知情 delta：包含 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，由 keeper 按回合提取增量，`state_bridge.py` 清洗但不长期合并；长期知识由 `actor_registry.py` 派生到 actor-id 版 `knowledge_records`，并做轻量相似去重，`narrator_input.py` 渲染为结构化知情边界
 - state 中新增 `resolved_events[]` 字段：线程经 `active → watch → cooling_down → resolved` 状态机过渡后归档（最多 20 条）
 - thread tracker 已改用按类型分级的保留策略 `THREAD_RETENTION_CONFIG`（main:4, risk:3, clue:2, arbiter:1），替代旧的统一 `THREAD_RETENTION_TURNS`
 

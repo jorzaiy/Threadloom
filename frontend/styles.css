@@ -840,22 +840,6 @@ button:active {
   border-top: 1px solid rgba(195, 200, 193, 0.35);
 }
 
-.session-dock-separator {
-  font-family: 'Inter', sans-serif;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--text-muted);
-  padding: 8px 6px 4px;
-  border-top: 1px solid rgba(195, 200, 193, 0.3);
-  margin-top: 4px;
-}
-
-.session-dock-archived .session-dock-open {
-  opacity: 0.6;
-  font-style: italic;
-}
-
 .session-dock-new-btn {
   width: 100%;
   justify-content: center;

@@ -138,6 +138,9 @@ def test_e2e_keeper_summary(session_id: str, num_turns: int = 15):
         return False
 
 
+test_e2e_keeper_summary.__test__ = False
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='端到端测试 keeper summary')

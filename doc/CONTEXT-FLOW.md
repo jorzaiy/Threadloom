@@ -25,7 +25,7 @@ web input
   -> runtime rules
   -> card / preset / lore / canon / state / persona / recent window / keeper archive
   -> narrator
-  -> state keeper
+  -> skeleton keeper / state keeper fill
   -> optional summary writer
   -> session-local state / summary / history
 ```
@@ -35,6 +35,9 @@ web input
 - `history` 只保留最近窗口承接，不再承担完整骨架职责。
 - 更早历史优先收敛成 keeper archive，而不是自由摘要层。
 - 写回时先收口到结构化状态；`summary` 可继续保留为调试/运维产物，但不再主导 narrator。
+- keeper 写回按增量 patch 执行：骨架字段由 skeleton keeper 维护，fill keeper 只补信号、物件、持有关系、可见性和本轮知情 delta。
+- `knowledge_scope` 是本轮 delta，长期知识落到 `knowledge_records`；物件退出 active 状态通过 `lifecycle_status` 和 `graveyard_objects` 表达。
+- keeper archive 是派生缓存，刷新时会清理超过当前有效 pair index 的未来 records，避免撤回/重试后的旧分支污染召回。
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。
@@ -47,6 +50,8 @@ web input
 - selector 主导“这一轮要不要把旧东西拿回来”，优先参考 `recent window + state + signals + event recall`。
 - keeper 主导“后台结构化维护世界状态”，其中：
   - `signals` 负责“当前还没消失、会继续影响下一拍”的东西；
+  - `knowledge_scope` 只负责本轮新增知情 delta，长期情报由 `knowledge_records` 承担；
+  - `objects` 负责 active 物件、持有关系、可见性和生命周期退出；
   - `event` 负责“前几轮到底发生了什么值得检索”；
   - `summary` 负责“更长阶段该如何压缩”；
   - `thread` 若保留，也更偏 debug/state 辅助，而不是 steering 层。

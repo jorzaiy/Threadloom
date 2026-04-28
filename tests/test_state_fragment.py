@@ -6,7 +6,7 @@ from backend.state_fragment import extract_reply_skeleton, merge_reply_skeleton,
 from backend.state_bridge import normalize_state_dict
 from backend.actor_registry import update_actor_registry
 from backend.arbiter_state import merge_arbiter_state
-from backend.state_keeper import _call_state_keeper_llm, _merge_keeper_fill
+from backend.state_keeper import _call_state_keeper_llm, _merge_keeper_fill, _parse_fill_payload
 from backend.handler_message import _keeper_fallback_bootstrapped
 
 
@@ -108,6 +108,30 @@ class StateFragmentTest(unittest.TestCase):
         }
 
         self.assertFalse(_keeper_fallback_bootstrapped(fragment_state, None))
+
+    def test_parse_fill_payload_salvages_object_and_knowledge_from_bad_json(self):
+        text = '''{
+          "tracked_objects": [
+            {"object_id":"obj_06","label":"纸封","kind":"evidence","story_relevant":true}
+          ],
+          "possession_state": [
+            {"object_id":"obj_06","holder":"巡捕","status":"evidence","location":"神都坊署"}
+          ],
+          "object_visibility": [
+            {"object_id":"obj_06","visibility":"private","known_to":["巡捕","文吏"]}
+          ],
+          "knowledge_scope": {
+            "protagonist": {"learned": ["纸封内容未公开"]}
+          },
+          "broken": [
+        '''
+
+        payload = _parse_fill_payload(text)
+
+        self.assertEqual(payload['tracked_objects'][0]['label'], '纸封')
+        self.assertEqual(payload['possession_state'][0]['holder'], '巡捕')
+        self.assertEqual(payload['object_visibility'][0]['visibility'], 'private')
+        self.assertEqual(payload['knowledge_scope']['protagonist']['learned'], ['纸封内容未公开'])
 
     def test_merge_state_skeleton_updates_scene_entity_onstage_flags(self):
         fragment = {

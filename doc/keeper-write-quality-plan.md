@@ -35,6 +35,40 @@ PYTHONPATH="/root/Threadloom:/root/Threadloom/backend" pytest tests/test_model_c
 - 模型返回 `message.content` 为空时，会继续尝试 `reasoning_content` 和 `choice.text`，避免把可用 JSON 丢弃。
 - keeper 解析失败时保留真实 `usage`、`raw_reply_empty`、`raw_reply_excerpt`，fallback 诊断不再误导为“模型没有调用”。
 - full keeper 失败后，若 fragment/skeleton fallback 已经给出可用核心骨架，不再把 `state_keeper_bootstrapped` 强制置回 `false`，避免每轮进入 bootstrap retry 并跳过 skeleton keeper。
+- full keeper 的 JSON 整包解析失败时，会尝试从坏 JSON 中局部 salvage `tracked_objects / possession_state / object_visibility / knowledge_scope`，减少物件和知情 delta 因尾部截断或局部坏字段而整包丢失。
+- full keeper consolidation 默认频率从每 3 轮改为每 2 轮，降低非合并轮发生物件/知识变化后漏写的窗口。
+
+## 2026-04-27 object/knowledge salvage 与 consolidation 频率调整
+
+### 问题
+
+旧的 `_parse_fill_payload()` 在 JSON 整包解析失败时，只会尝试 salvage `carryover_signals / immediate_risks / carryover_clues`。如果模型正文里已经包含可用的 `tracked_objects / possession_state / object_visibility / knowledge_scope`，但尾部 JSON 截断或另一个字段坏掉，物件和知情 delta 仍会随整包失败一起丢失。
+
+同时 full keeper 默认每 3 轮运行一次，非 consolidation 回合只依赖 skeleton + fragment。skeleton keeper 只维护 `time / location / main_event / onstage_npcs / immediate_goal` 五个骨架字段，不负责 object、signal、knowledge。因此物件转移或新增知情发生在非合并轮时，漏写窗口偏长。
+
+### 修复
+
+修改点：
+
+- `backend/state_keeper.py`
+- `config/runtime.json`
+- `config/runtime.example.json`
+- `tests/test_state_fragment.py`
+
+修复内容：
+
+- 新增局部 JSON 字段提取逻辑，用于从坏 JSON 中提取完整的数组/对象字段。
+- `_parse_fill_payload()` 在整包解析失败后，除 signals 外继续 salvage：
+- `tracked_objects`
+- `possession_state`
+- `object_visibility`
+- `knowledge_scope`
+- consolidation 默认频率从 `3` 改为 `2`。
+- 补充测试覆盖坏 JSON 中 object 与 knowledge 可被 salvage。
+
+### 边界
+
+salvage 只处理字段自身是完整 JSON 数组或对象的情况。如果该字段内部本身也被截断或格式损坏，仍会被丢弃，避免把半截坏结构写入 state。
 
 ## 2026-04-27 bootstrap fallback 循环修复
 
