@@ -69,10 +69,10 @@
 
 当前 preset 定位：
 
-- 默认 preset 已收成单一主版本：`runtime-data/default-user/presets/world-sim-core.json`
-- preset 现在主要负责：节奏、镜头重心、外部推进倾向、注入预算
-- 世界真相、主角控制权、知情边界、世界自主流转等长期规则，优先由 `prompts/runtime-rules.md` 负责
-- 旧 preset 已归档到：`runtime-data/default-user/presets/legacy/`
+- 默认 preset 名称由 `config/runtime.json -> sources.active_preset` 指定；当前主配置为 `world-sim-core`。
+- preset 文件经 `backend/paths.py` 的分层路径解析加载，不再承诺固定存在于 `runtime-data/default-user/presets/`。
+- preset 现在主要负责：节奏、镜头重心、外部推进倾向、注入预算。
+- 世界真相、主角控制权、知情边界、世界自主流转等长期规则，优先由 `prompts/runtime-rules.md` 负责。
 
 当前 `config/runtime.json` 已收回到最小主链用途：
 
@@ -139,13 +139,13 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 推荐：
 
 ```bash
-cp /Threadloom/.env.local.example /Threadloom/.env.local
-cd /Threadloom/backend
+cp /root/Threadloom/.env.local.example /root/Threadloom/.env.local
+cd /root/Threadloom/backend
 ./start.sh
 ```
 
 说明：
-- `backend/start.sh` 会自动加载 `/Threadloom/.env.local`
+- `backend/start.sh` 会自动加载 `/root/Threadloom/.env.local`
 - 推荐把真实密钥只放在 `.env.local`，`config/*.json` 中使用 `env:VAR` 引用
 - 当前用户自己的站点与模型配置会写到 `runtime-data/<user>/config/`
 - `config/runtime.json` 继续承载共享内容层与全局策略，不再作为用户站点管理的主存储
@@ -169,14 +169,14 @@ cd /Threadloom/backend
 也可以直接：
 
 ```bash
-cd /Threadloom/backend
+cd /root/Threadloom/backend
 python3 server.py
 ```
 
 停止：
 
 ```bash
-cd /Threadloom/backend
+cd /root/Threadloom/backend
 ./stop.sh
 ```
 
@@ -237,12 +237,11 @@ http://127.0.0.1:8765
 - `state_keeper` 优先，`state_updater` 兜底
 - `state_keeper` 现在会拒收明显低信号或相对上一轮明显退化的 state
 - `state_fragment` 现在会先作为结构化锚点进入 narrator 与 state_keeper
-- `state_keeper_candidate` 当前默认使用 `kimi-k2-0905-preview`
-- `state_keeper` 当前默认使用 `kimi-k2-0905-preview`
+- `state_keeper_candidate` 与 `state_keeper` 的实际模型以 `runtime-data/default-user/config/model-runtime.json` 为准；当前不在文档中写死具体模型名。
 - `state_keeper_candidate` 现在可以作为 `skeleton keeper` sidecar 先产出最小骨架，再并入 `state_fragment`；当前每个完整回复后都会运行。它只维护 `time / location / main_event / onstage_npcs / immediate_goal` 五个骨架字段
 - 首轮 bootstrap 不跑 skeleton，直接走一次完整 `state_keeper` 定底
 - opening-choice 的首轮正文当前例外：会先跑一次 skeleton keeper 定骨架，再跑 fill keeper 补风险/线索/物件，避免首轮正文写出来但 state 仍停在开局壳；这条链当前不等同于普通非合并轮的 `update_state()` 路径
-- 当前 keeper 相关模型已统一到 `Kimi`，不再维护多模型分工
+- 当前 keeper 相关模型使用同一站点配置，可在设置页或 `model-runtime.json` 中切换，不再在代码中维护固定模型分工。
 - 完整 `state_keeper` 当前已切到 `fill-mode`：默认只在骨架状态上补 `immediate_risks / carryover_clues / tracked_objects / knowledge_scope` 这类次级字段，而不再整份重写 state
 - `carryover_signals` 统一信号层现已真实落盘到 state：用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号；旧 `immediate_risks / carryover_clues` 仍保留兼容，并优先从统一信号层派生
 - 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里出现；快照层与部分消费点已开始优先使用统一信号层，再兼容旧风险/线索字段
@@ -347,7 +346,7 @@ http://127.0.0.1:8765
 单回合精确回放：
 
 ```bash
-cd /Threadloom
+cd /root/Threadloom
 python3 backend/tools/replay_turn_trace.py --source-session story-live --turn-id turn-0012 --target-session replay-story-live-turn-0012
 ```
 
@@ -359,7 +358,7 @@ python3 backend/tools/replay_turn_trace.py --source-session story-live --turn-id
 SillyTavern 聊天导入：
 
 ```bash
-cd /Threadloom
+cd /root/Threadloom
 python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的聊天记录.jsonl' --target-session import-your-chat-001
 ```
 
@@ -467,19 +466,15 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
 ## 当前配模建议
 
 当前更推荐的分工是：
-- narrator：继续使用更强的远端模型
-- state_keeper：`gemma-4-31b-it` 同时承担 skeleton keeper 和 fill keeper
-- turn_analyzer：若需要进一步降本，可在 narrator 不变的前提下跟着切到本地模型
-
-当前 keeper 组合已经变成：
-- `gemma-4-31b-it`：skeleton keeper（骨架字段）
-- `gemma-4-31b-it`：fill-mode keeper（补次级字段）
-- heuristic：最终兜底
+- narrator：继续使用更强的远端模型。
+- state_keeper：使用设置页选中的 State Keeper 模型，同时承担 skeleton keeper 与 fill keeper。
+- narrator 失败重试后会使用 State Keeper 模型作为副 LLM 兜底生成正文。
+- heuristic：仅作为结构化写回的最终兜底。
 
 原因：
-- narrator 是中文长上下文 RP 质量的上限，不适合轻易降到小模型
-- `gemma-4-31b-it` 在结构化提取任务上已验证足够稳定，跨多个题材长记录测试均能保持高质量
-- skeleton keeper `max_output_tokens` 已调高到 280，配合截断 JSON 补全 fallback，成功率 93%+
+- narrator 是中文长上下文 RP 质量的上限，不适合轻易降到小模型。
+- keeper 任务更偏结构化提取，通常可以选择比 narrator 更便宜、更快的模型。
+- skeleton keeper 与 fill keeper 均复用 State Keeper 模型配置，输出上限由角色模型配置和 `config/runtime.json -> model_defaults.state_keeper` 控制。
 
 ## 运行原则
 

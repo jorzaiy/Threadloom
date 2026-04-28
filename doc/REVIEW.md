@@ -1,5 +1,7 @@
 # Threadloom Review
 
+> 历史评审快照：本文记录 2026-04-16 左右的质量判断与阶段性配置，不保证所有模型名、默认 preset 或运行参数仍等同于当前 live 配置。当前运行入口以 `README.md`、`doc/API.md`、`doc/BACKEND.md`、`doc/OPERATIONS.md` 和实际配置文件为准。
+
 ## 当前判断
 
 `Threadloom` 现在已经具备最小闭环，不再只是设计稿：

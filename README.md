@@ -114,13 +114,13 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 当前主链已经是：
 
 1. narrator 生成正文
-2. `gemma-4-31b-it` 作为 skeleton keeper 提取最小骨架：
+2. `state_keeper.model` 作为 skeleton keeper 提取最小骨架：
    - `time`
    - `location`
    - `main_event`
    - `onstage_npcs`
    - `immediate_goal`
-3. `gemma-4-31b-it` 作为 fill-mode keeper，在骨架上补：
+3. `state_keeper.model` 作为 fill-mode keeper，在骨架上补：
    - `immediate_risks`
    - `carryover_clues`
    - `tracked_objects`
@@ -267,7 +267,7 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 4. 启动：
 
 ```bash
-cd /Threadloom/backend
+cd /root/Threadloom/backend
 ./start.sh
 ```
 
@@ -276,7 +276,7 @@ cd /Threadloom/backend
 前台启动：
 
 ```bash
-cd /Threadloom/backend
+cd /root/Threadloom/backend
 python3 server.py
 ```
 
@@ -327,12 +327,6 @@ http://127.0.0.1:8765
 ## 📚 相关文档
 
 ### 核心文档
-- **[KEEPER_SUMMARY_FIX.md](KEEPER_SUMMARY_FIX.md)** - Keeper Summary修复详情（12轮总结生成）
-- **[PERFORMANCE_OPTIMIZATION.md](PERFORMANCE_OPTIMIZATION.md)** - 性能优化总结（Skeleton Keeper优化）
-
-### 测试报告
-- **[doc/test-reports/TEST_RESULTS.md](doc/test-reports/TEST_RESULTS.md)** - 15轮完整回归测试报告
-- **[doc/test-reports/SELECTOR_TEST_REPORT.md](doc/test-reports/SELECTOR_TEST_REPORT.md)** - Selector质量和相关性测试
-
-### 文档审查
-- **[DOC_AUDIT_REPORT.md](DOC_AUDIT_REPORT.md)** - 文档一致性审查报告
+- **[doc/audit/KEEPER_SUMMARY_FIX.md](doc/audit/KEEPER_SUMMARY_FIX.md)** - Keeper Summary 修复详情
+- **[doc/audit/PERFORMANCE_OPTIMIZATION.md](doc/audit/PERFORMANCE_OPTIMIZATION.md)** - 性能优化总结
+- **[doc/audit/DOC_AUDIT_REPORT.md](doc/audit/DOC_AUDIT_REPORT.md)** - 文档一致性审查报告

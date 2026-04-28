@@ -166,7 +166,7 @@
     - 长文探险线物件/线程稳定性
     - keeper archive 延续性
   - 当前已经证明：
-    - `gemma-4-31b-it` 可以在中等窗口长跑中稳定保住人物、主事件、线程
+    - State Keeper 模型可以在中等窗口长跑中稳定保住人物、主事件、线程；具体模型由设置页或 `runtime-data/<user>/config/model-runtime.json` 决定
     - 弱语义 `role_label` 已开始生效，不再长期全部停在 `待确认`
 
 - `血蚀纪`
@@ -284,10 +284,10 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 | ----              | ----                | ----               | ----     | ----                                  |
 | 启发式            | `state_updater.py`  | 每轮               | ~1KB     | 全字段（保守推理）                     |
 | Skeleton LLM      | `state_keeper.py`   | 每完整轮           | ~2KB     | time, location, main_event, onstage_npcs, immediate_goal |
-| Fill LLM          | `state_keeper.py`   | 每 N 轮（默认 3）  | ~5KB     | carryover_signals, tracked_objects, knowledge_scope |
+| Fill LLM          | `state_keeper.py`   | 每 N 轮（默认 2）  | ~5KB     | carryover_signals, tracked_objects, knowledge_scope |
 | Actor Registry    | `actor_registry.py` | 每完整轮           | ~2KB     | actors, actor_context_index, actor-id bindings |
 
-- 读取 `config/runtime.json` 中 `memory.consolidate_every_turns`（默认 3）
+- 读取 `config/runtime.json` 中 `memory.consolidate_every_turns`（当前默认 2）
 - 非合并轮使用 skeleton + `build_state_from_fragment()` + `update_state()` 轻量更新
 - opening-choice 首轮当前是特殊链路：会先跑 skeleton + fill keeper，再接 thread/important_npc 写回，不直接复用普通非合并轮的 `update_state()` 路径
 - 诊断信息中 `provider` 标注为 `skeleton+fragment` 或 `full_fill`
@@ -298,12 +298,12 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 **修改前**：
 - `recent_history_turns`: 12 轮
 - `narrator.max_output_tokens`: 1200
-- `lorebookStrategy.maxTotalChars`: 2200（world-sim-balanced 预设）
+- `lorebookStrategy.maxTotalChars`: 2200（旧 world-sim-balanced 预设）
 
 **修改后**：
-- `recent_history_turns`: **8 轮**（`config/runtime.json`）— 减少约 30% 上下文注入量
+- `recent_history_turns`: **12 轮**（`config/runtime.json`）— 保持完整 recent window 连续性
 - `narrator.max_output_tokens`: **1000** — 降低每轮生成的 token 消耗
-- `lorebookStrategy.maxTotalChars`: **1500**（`character/presets/world-sim-balanced.json`）— 减少世界书注入上限
+- `lorebookStrategy.maxTotalChars`: **1500**（当前 active preset）— 减少世界书注入上限
 
 单轮总上下文约从 30KB 降至 22-25KB。
 

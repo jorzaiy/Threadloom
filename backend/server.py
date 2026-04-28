@@ -564,7 +564,7 @@ class Handler(BaseHTTPRequestHandler):
                 except RuntimeError as err:
                     return self._invalid_input(str(err))
                 sessions = list_sessions()
-                return self._send(200, {'report': report, 'sessions': sessions['sessions']})
+                return self._send(200, {'report': report, 'sessions': sessions})
 
             if parsed.path == '/api/providers':
                 try:

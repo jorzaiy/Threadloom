@@ -9,35 +9,19 @@
     "active_preset": "world-sim-balanced",
     "canon": "examples/memory/canon.md",
     "state": "examples/memory/state.md",
-    "summary": "examples/memory/summary.md",
     "history": "examples/memory/history.jsonl",
     "npc_profiles_dir": "examples/memory/npcs",
     "persona_seeds_dir": "examples/runtime/persona-seeds"
   },
-  "bootstrap": {
-    "must_load_runtime_rules_first": true
-  },
   "memory": {
     "recent_history_turns": 12,
-    "recent_summary_blocks": 3,
     "consolidate_every_turns": 2,
-    "auto_save_every_turns": 20
-  },
-  "refresh_policy": {
-    "runtime_rules_every_turn": true,
-    "preset_every_turn": true,
-    "state_every_turn": true,
-    "scene_persona_every_turn": true,
-    "recent_history_turns": 12,
-    "summary_refresh_every_turns": 12,
-    "deep_refresh_every_turns": 20,
-    "deep_refresh_on_scene_change": true,
-    "deep_refresh_on_onstage_shift": true
+    "skeleton_keeper_enabled": true
   },
   "model_defaults": {
     "narrator": {
       "temperature": 0.9,
-      "max_output_tokens": 1200,
+      "max_output_tokens": 1000,
       "stream": true
     },
     "state_keeper": {
@@ -45,18 +29,6 @@
       "max_output_tokens": 480,
       "stream": false
     }
-  },
-  "state_policy": {
-    "max_onstage_npcs": 6,
-    "max_relevant_npcs": 6,
-    "max_open_questions": 6,
-    "carryover_clues_max": 4
-  },
-  "persona_policy": {
-    "seed_window_turns": 12,
-    "scene_seed_limit": 6,
-    "longterm_min_score": 5,
-    "scene_seed_allow_low_confidence": true
   },
   "entity_recovery": {
     "use_candidate_judge": true,

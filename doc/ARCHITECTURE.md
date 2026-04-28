@@ -273,9 +273,9 @@
 - thread 若保留，也尽量不要再承担 steering 职责
 
 当前 preset 已重新定位为“节奏 / 镜头 / 注入预算调制器”，而不是世界真相或事实边界的主来源：
-- 默认 preset：`runtime-data/default-user/presets/world-sim-core.json`
+- 默认 preset 名称由 `config/runtime.json -> sources.active_preset` 指定；当前主配置为 `world-sim-core`
+- preset 文件通过 `backend/paths.py` 的分层路径解析加载，不再承诺固定用户目录路径
 - 主角控制权、知情边界、世界自主流转等长期规则，应放在 `runtime-rules.md`
-- 旧 preset 已归档到 `runtime-data/default-user/presets/legacy/`，不再作为当前主链默认选择
 
 不应成为主真相源：
 - 超长聊天 transcript

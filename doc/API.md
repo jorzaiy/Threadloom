@@ -8,6 +8,10 @@
 - `GET /api/site-config`
 - `POST /api/site-config`
 - `POST /api/site-models/discover`
+- `GET /api/providers`
+- `POST /api/providers`
+- `POST /api/providers/discover`
+- `DELETE /api/providers`
 - `GET /api/model-config`
 - `POST /api/model-config`
 - `GET /api/sessions`
@@ -20,6 +24,17 @@
 - `POST /api/regenerate-last`
 - `GET /api/characters`
 - `POST /api/character/select`
+- `POST /api/character/delete`
+- `POST /api/character/rebuild-lorebook`
+- `GET /api/user-profile`
+- `POST /api/user-profile`
+- `GET /api/character/profile-override`
+- `POST /api/character/profile-override`
+- `POST /api/characters/profile-override`（兼容别名）
+- `POST /api/user-avatar`
+- `POST /api/user-avatar/delete`
+- `GET /user-avatar`
+- `GET /character-cover`
 - `POST /api/characters/import`
 - `POST /api/chat/preview`
 - `POST /api/chat/import`
@@ -28,6 +43,7 @@
 - `POST /api/admin/adjust`
 
 当前存在但默认视为实验态关闭的接口：
+- `GET /api/auth/me`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
 - `GET/POST /api/users`
@@ -106,6 +122,7 @@
 - 组装 runtime context
 - 运行最小 arbiter
 - 调 narrator 模型
+- narrator 主模型最多重试 3 次；全部失败后使用 State Keeper 模型作为副 LLM 最多再重试 3 次
 - 完整回复才继续写回 `state / summary / persona / threads / important_npcs`
 
 当前 state 写回还有两层额外约束：
@@ -123,6 +140,7 @@ partial 相关行为：
 - 若 narrator 返回的正文明显停在半句中间，即使 provider 没给 `finish_reason`，当前也会按 `partial` 处理
 - partial 回复会保留在历史里显示
 - 但不会继续污染 `state / summary / threads / important_npcs`
+- 若主/副 narrator 全部失败，返回空 `reply` 与 `NARRATOR_UNAVAILABLE`，本轮不写历史、不递增 turn、不更新 state；详情见响应里的 `narrator_retry`
 
 ### Success Response
 
@@ -178,7 +196,7 @@ partial 相关行为：
     "arbiter_analysis": {},
     "arbiter_results": [],
     "active_persona": ["师兄"],
-    "loaded_preset": "world-sim-balanced",
+    "loaded_preset": "world-sim-core",
     "loaded_onstage": ["师兄", "皂衣人"],
     "state_keeper_diagnostics": {},
     "retained_threads": [],
@@ -213,6 +231,7 @@ partial 相关行为：
 - `ENTITY_NOT_FOUND`
 - `SESSION_NOT_FOUND`
 - `NO_PARTIAL_TURN`
+- `NARRATOR_UNAVAILABLE`
 - `INTERNAL_ERROR`
 
 ## GET /api/state
@@ -355,9 +374,8 @@ partial 相关行为：
   "sessions": [
     {
       "session_id": "story-live-20260406-203000",
-      "archived": false,
       "replay": false,
-      "active_preset": "world-sim-balanced",
+      "active_preset": "world-sim-core",
       "bootstrapped_main_event": "开局：雨夜逢杀。"
     }
   ]
@@ -366,7 +384,7 @@ partial 相关行为：
 
 ## POST /api/new-game
 
-归档当前 session，并新建一个新的 session。
+新建一个新的 session。当前不会归档或移动旧 session。
 
 ### Request
 
@@ -382,7 +400,6 @@ partial 相关行为：
 {
   "session_id": "story-live-20260407-120000",
   "previous_session_id": "story-live",
-  "archived_to": "sessions/archive-20260407-120000-story-live",
   "reply": "这是碎影江湖。雾未散，刀已出鞘。你要从哪一步踏入这片江湖？",
   "state_snapshot": {
     "time": "待确认",
