@@ -58,6 +58,18 @@ web input
   - `thread` 若保留，也更偏 debug/state 辅助，而不是 steering 层。
 - 当前 event 链已开始按这个方向实现：事件总结默认读取最近 `1~3` 对 turn 窗口，并在 selector 判断需要时作为 recall / summary 的前置材料使用，而不是把 event 当当前 narrator 的常驻 steering 块。
 
+## 2026-04-28 Keeper / Selector 稳定性修复
+
+针对 `维克托奥古斯特-20260428-f773f2` 的检查结果，已收紧以下运行链路：
+
+- 用户继续输入时，若 history 尾部仍是 `completion_status=partial` 的 assistant 回复，会先移除该半截回复再追加新 user turn，避免 partial 文本污染 keeper / selector。
+- keeper archive 构建 turn pairs 时只接受 complete assistant 回复；partial assistant 会关闭当前 pair，不进入 archive 统计和摘要。
+- state keeper fill 的用户提示明确要求输出必须以 `{` 开头、以 `}` 结尾；非空但不可解析的输出会自动重试一次，并在重试提示中禁止解释、代码块和 JSON 前后文字。
+- selector 现在会基于 state、recent window、user text 对 `event_summaries` 做 topic/actor overlap 命中，`event_hits` 不再固定为空。
+- summary chunk 命中增加轻量 topic overlap 兜底，并在命中结果里保留 `keyword_hits` 便于 trace 诊断。
+
+这组修复的目标不是扩大 narrator 输入，而是保证 recall 层只带入可用、完整、与当前 query 相关的历史材料。
+
 ## 当前 Threadloom 的建议优先级
 
 1. 先稳 `state`。

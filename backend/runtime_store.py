@@ -178,6 +178,9 @@ def is_complete_assistant_item(item: dict) -> bool:
 
 def append_history(session_id: str, item: dict) -> None:
     items = load_history(session_id)
+    if isinstance(item, dict) and item.get('role') == 'user':
+        while items and isinstance(items[-1], dict) and items[-1].get('role') == 'assistant' and not is_complete_assistant_item(items[-1]):
+            items.pop()
     items.append(item)
     save_history(session_id, items)
 

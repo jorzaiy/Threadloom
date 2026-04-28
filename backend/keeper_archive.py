@@ -50,8 +50,10 @@ def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overl
         role = item.get('role')
         if role == 'user':
             current_user = item
-        elif role == 'assistant' and current_user is not None:
+        elif role == 'assistant' and current_user is not None and item.get('completion_status', 'complete') == 'complete':
             pairs.append((current_user, item))
+            current_user = None
+        elif role == 'assistant' and current_user is not None:
             current_user = None
 
     records = []

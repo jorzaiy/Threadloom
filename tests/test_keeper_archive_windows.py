@@ -18,6 +18,13 @@ def _history(pair_count: int) -> list[dict]:
     return items
 
 
+def _history_with_partial() -> list[dict]:
+    items = _history(12)
+    items.append({'role': 'user', 'content': '触发半截回复的动作'})
+    items.append({'role': 'assistant', 'content': '半截回复', 'completion_status': 'partial'})
+    return items
+
+
 class KeeperArchiveWindowTests(unittest.TestCase):
     def test_mid_digest_can_digest_explicit_archive_window_without_dropping_tail(self):
         digest = build_mid_window_digest(
@@ -54,6 +61,22 @@ class KeeperArchiveWindowTests(unittest.TestCase):
         self.assertEqual(record['window']['to_turn'], 'turn-0010')
         self.assertEqual(record['window']['end_pair_index'], 10)
         self.assertIn('第10轮', record['history_digest'][-1]['user'])
+
+    def test_keeper_archive_ignores_partial_assistant_pairs(self):
+        with patch.object(keeper_archive, 'load_history', return_value=_history_with_partial()), \
+                patch.object(keeper_archive, 'load_state', return_value={'location': '茶摊'}), \
+                patch.object(keeper_archive, 'ensure_npc_registry', return_value={'entities': []}), \
+                patch.object(keeper_archive, 'ensure_object_registry', return_value=None), \
+                patch.object(keeper_archive, 'ensure_clue_registry', return_value=None):
+            archive = keeper_archive.build_keeper_record_archive(
+                'test-session',
+                window_size=10,
+                overlap_recent_pairs=1,
+                use_llm=False,
+            )
+
+        self.assertEqual(archive['source_pair_count'], 12)
+        self.assertNotIn('半截回复', str(archive['records']))
 
 
 if __name__ == '__main__':

@@ -77,15 +77,15 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(reply, '{"carryover_signals": []}')
         self.assertEqual(final_usage['retry_count'], 1)
 
-    def test_state_keeper_llm_does_not_retry_non_empty_output(self):
+    def test_state_keeper_llm_retries_once_on_unparsable_output(self):
         usage = {'model': 'test-model', 'finish_reason': 'stop'}
-        with patch('backend.state_keeper.call_role_llm', return_value=('not json', dict(usage))) as mocked:
+        with patch('backend.state_keeper.call_role_llm', side_effect=[('not json', dict(usage)), ('{"carryover_signals": []}', dict(usage))]) as mocked:
             reply, final_usage, attempts = _call_state_keeper_llm('prompt')
 
-        self.assertEqual(mocked.call_count, 1)
-        self.assertEqual(attempts, 1)
-        self.assertEqual(reply, 'not json')
-        self.assertEqual(final_usage['retry_count'], 0)
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(reply, '{"carryover_signals": []}')
+        self.assertEqual(final_usage['retry_count'], 1)
 
     def test_keeper_fallback_with_usable_fragment_exits_bootstrap_mode(self):
         fragment_state = {

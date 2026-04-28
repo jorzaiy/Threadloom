@@ -2,6 +2,13 @@
 from __future__ import annotations
 
 import json
+import re
+
+
+GENERIC_TOPIC_TOKENS = {
+    '当前', '继续', '已经', '没有', '还有', '一个', '一些', '自己', '觉得', '开始',
+    '位置', '地方', '时候', '周围', '后面', '前面', '然后', '只是', '不是', '可能',
+}
 
 
 def joined_recent_text(recent_history: list[dict], limit: int = 6) -> str:
@@ -11,6 +18,61 @@ def joined_recent_text(recent_history: list[dict], limit: int = 6) -> str:
             continue
         parts.append(str(item.get('content', '') or ''))
     return '\n'.join(parts)
+
+
+def _topic_tokens(text: str) -> set[str]:
+    tokens = set()
+    for token in re.findall(r'[\u4e00-\u9fff]{2,8}|[A-Za-z][A-Za-z0-9_-]{1,20}', str(text or '')):
+        if token in GENERIC_TOPIC_TOKENS:
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def _event_text(item: dict) -> str:
+    pieces = []
+    for field in ('event_id', 'title', 'label', 'summary', 'result', 'claim', 'location', 'main_event'):
+        pieces.append(str(item.get(field, '') or ''))
+    for field in ('actors', 'keywords', 'open_loops', 'unresolved', 'signals'):
+        value = item.get(field, [])
+        if isinstance(value, list):
+            pieces.extend(str(x or '') for x in value)
+    return ' '.join(pieces)
+
+
+def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_history: list[dict], user_text: str = '') -> list[dict]:
+    query_text = '\n'.join([
+        joined_recent_text(recent_history),
+        str(user_text or ''),
+        str(state_json.get('location', '') or ''),
+        str(state_json.get('main_event', '') or ''),
+        ' '.join(str(x or '') for x in (state_json.get('onstage_npcs', []) or [])),
+        ' '.join(str(x or '') for x in (state_json.get('relevant_npcs', []) or [])),
+        ' '.join(str(x or '') for x in (state_json.get('immediate_risks', []) or [])),
+        ' '.join(str(x.get('text', '') or '') for x in (state_json.get('carryover_signals', []) or []) if isinstance(x, dict)),
+    ])
+    query_tokens = _topic_tokens(query_text)
+    hits = []
+    for item in event_summaries[-20:]:
+        if not isinstance(item, dict):
+            continue
+        event_tokens = _topic_tokens(_event_text(item))
+        shared = sorted(query_tokens & event_tokens)
+        actor_bonus = 0
+        for name in (item.get('actors', []) or []):
+            if str(name or '').strip() and str(name).strip() in query_text:
+                actor_bonus += 2
+        score = len(shared) + actor_bonus
+        if score <= 0:
+            continue
+        hits.append({
+            'event_id': item.get('event_id'),
+            'score': score,
+            'reason': 'topic_overlap',
+            'keyword_hits': shared[:8],
+        })
+    hits.sort(key=lambda x: -x['score'])
+    return hits[:4]
 
 
 def candidate_name_hits(candidates: list[dict], text: str, limit: int = 3) -> int:
@@ -158,11 +220,19 @@ def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict]
         if clue_overlap:
             score += 2
             reason.append('knowledge_overlap')
-        keyword_overlap = any(keyword and keyword in query_text for keyword in (item.get('keywords', []) or []))
+        keyword_hits = [str(keyword).strip() for keyword in (item.get('keywords', []) or []) if str(keyword).strip() and str(keyword).strip() in query_text]
+        keyword_overlap = bool(keyword_hits)
         if keyword_overlap:
             score += 2
             reason.append('keyword_overlap')
+        if not keyword_overlap and not actor_overlap and not object_overlap and not clue_overlap:
+            shared_topics = _topic_tokens(chunk_text) & _topic_tokens(query_text)
+            if len(shared_topics) >= 2:
+                score += min(3, len(shared_topics))
+                reason.append('topic_overlap')
         if score >= 2 and (clue_overlap or keyword_overlap or object_overlap or actor_overlap):
+            hits.append({'chunk_id': item.get('chunk_id'), 'turn_start': item.get('turn_start'), 'turn_end': item.get('turn_end'), 'score': score, 'reason': '+'.join(reason), 'keyword_hits': keyword_hits[:8]})
+        elif score >= 2 and 'topic_overlap' in reason:
             hits.append({'chunk_id': item.get('chunk_id'), 'turn_start': item.get('turn_start'), 'turn_end': item.get('turn_end'), 'score': score, 'reason': '+'.join(reason)})
     hits.sort(key=lambda x: -x['score'])
     return hits[:3]
@@ -180,7 +250,7 @@ def build_selector_decision(*, state_json: dict, recent_history: list[dict], kee
         tracked_objects=state_json.get('tracked_objects', []),
         knowledge_records=state_json.get('knowledge_records', []),
     )
-    event_hits = []
+    event_hits = event_summary_hits(event_summaries, state_json=state_json, recent_history=recent_history, user_text=user_text)
     inject_summary = bool(chunk_hits) and any(hit.get('score', 0) >= 2 for hit in chunk_hits)
     npc_roster = build_npc_roster(
         onstage=onstage,

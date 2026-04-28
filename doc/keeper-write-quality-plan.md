@@ -37,6 +37,36 @@ PYTHONPATH="/root/Threadloom:/root/Threadloom/backend" pytest tests/test_model_c
 - full keeper 失败后，若 fragment/skeleton fallback 已经给出可用核心骨架，不再把 `state_keeper_bootstrapped` 强制置回 `false`，避免每轮进入 bootstrap retry 并跳过 skeleton keeper。
 - full keeper 的 JSON 整包解析失败时，会尝试从坏 JSON 中局部 salvage `tracked_objects / possession_state / object_visibility / knowledge_scope`，减少物件和知情 delta 因尾部截断或局部坏字段而整包丢失。
 - full keeper consolidation 默认频率从每 3 轮改为每 2 轮，降低非合并轮发生物件/知识变化后漏写的窗口。
+- history 追加新 user turn 时会清理尾部 partial assistant，keeper archive 也只统计 complete assistant pair，避免半截回复进入长期记录。
+- full state keeper 对非空但不可解析输出会自动重试一次，并用更严格提示约束纯 JSON 输出。
+
+## 2026-04-28 partial history 与 JSON retry 修复
+
+### 问题
+
+`维克托奥古斯特-20260428-f773f2` 中发现多条 `completion_status=partial` 的 assistant 回复残留在 `history.jsonl` 中，后续用户继续输入后这些半截回复仍可能被 keeper archive 或其他历史消费者读到。同时 state keeper 存在 HTTP 成功但正文包含解释文字、导致 JSON 解析失败并 fallback 的情况。
+
+### 修复
+
+修改点：
+
+- `backend/runtime_store.py`
+- `backend/keeper_archive.py`
+- `backend/state_keeper.py`
+- `tests/test_keeper_archive_windows.py`
+- `tests/test_state_fragment.py`
+
+修复内容：
+
+- `append_history()` 在追加新 user turn 前移除尾部 partial assistant。
+- `build_keeper_record_archive()` 只把 complete assistant 与前一个 user 组成 pair。
+- `_call_state_keeper_llm()` 对非空但不可解析输出重试一次。
+- `_fill_user_prompt()` 明确要求 JSON 不得带解释、分析过程或 Markdown 代码块。
+- 补充回归测试覆盖 partial pair 不进入 keeper archive，以及不可解析 keeper 输出会触发 retry。
+
+### 边界
+
+如果 partial assistant 不是 history 尾部，而是旧 session 中已经夹在中间的历史污染，本次代码会阻止其进入新的 keeper archive pair，但不会自动改写旧 history 文件。需要清理历史文件时应单独做会话维护操作。
 
 ## 2026-04-27 object/knowledge salvage 与 consolidation 频率调整
 

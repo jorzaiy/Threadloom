@@ -296,7 +296,7 @@ def _fill_user_prompt(baseline_state: dict, narrator_reply: str, user_text: str 
         sections.append(f"""本轮玩家输入：
 {user_text.strip()}
 """)
-    sections.append("""请只输出需要补充或纠正的 JSON 字段；若骨架字段没有被正文明确推翻，就不要重复输出。""")
+    sections.append("""请只输出需要补充或纠正的 JSON 字段；若骨架字段没有被正文明确推翻，就不要重复输出。输出必须以 { 开头、以 } 结尾，禁止解释、分析过程、Markdown 代码块。""")
     return '\n'.join(sections)
 
 
@@ -1456,13 +1456,23 @@ def _call_state_keeper_llm(user_prompt: str, *, max_attempts: int = 2) -> tuple[
     reply_text = ''
     usage: dict | None = None
     attempts = 0
+    prompt = user_prompt
     for attempt in range(1, max(1, max_attempts) + 1):
         attempts = attempt
-        reply_text, usage = call_role_llm('state_keeper', STATE_KEEPER_FILL_SYSTEM, user_prompt)
+        reply_text, usage = call_role_llm('state_keeper', STATE_KEEPER_FILL_SYSTEM, prompt)
         if not isinstance(usage, dict):
             usage = {}
-        usage['prompt_chars'] = len(STATE_KEEPER_FILL_SYSTEM) + len(user_prompt)
+        usage['prompt_chars'] = len(STATE_KEEPER_FILL_SYSTEM) + len(prompt)
         if str(reply_text or '').strip():
+            try:
+                _parse_fill_payload(str(reply_text or ''))
+                break
+            except Exception:
+                if attempt >= max(1, max_attempts):
+                    break
+                logger.warning('State-keeper returned unparsable output; retrying once')
+                prompt = user_prompt + '\n\n上一次输出无法解析。请重新输出严格 JSON 对象；不要解释，不要代码块，不要在 JSON 前后添加文字。'
+                continue
             break
         if attempt == 1:
             logger.warning('State-keeper returned empty output; retrying once')
