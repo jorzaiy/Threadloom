@@ -75,6 +75,83 @@ def _state_keeper_failure_diagnostics(err: Exception, state_error: str) -> dict:
     return diagnostics
 
 
+def _model_label(model_cfg: dict) -> str:
+    return f"{model_cfg.get('provider_name', 'unknown')}:{model_cfg.get('model', {}).get('id', 'unknown')}"
+
+
+def _secondary_narrator_model_cfg(primary_cfg: dict, keeper_cfg: dict) -> dict:
+    secondary = copy.deepcopy(primary_cfg)
+    secondary['provider_name'] = keeper_cfg.get('provider_name', secondary.get('provider_name'))
+    secondary['provider'] = copy.deepcopy(keeper_cfg.get('provider', secondary.get('provider', {})))
+    secondary['model'] = copy.deepcopy(keeper_cfg.get('model', secondary.get('model', {})))
+    secondary['is_secondary_narrator'] = True
+    secondary.pop('response_format', None)
+    return secondary
+
+
+def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, attempts_per_model: int = 3) -> tuple[str, dict, dict]:
+    primary_cfg = resolve_provider_model('narrator')
+    keeper_cfg = resolve_provider_model('state_keeper')
+    model_plan = [
+        ('primary', primary_cfg),
+        ('secondary', _secondary_narrator_model_cfg(primary_cfg, keeper_cfg)),
+    ]
+    attempts = []
+    last_error = None
+    for role, model_cfg in model_plan:
+        for attempt_index in range(1, attempts_per_model + 1):
+            attempt = {
+                'role': role,
+                'attempt': attempt_index,
+                'model': _model_label(model_cfg),
+            }
+            try:
+                reply, usage = call_model(model_cfg, system_prompt, user_prompt)
+            except Exception as err:
+                last_error = str(err)
+                attempt['ok'] = False
+                attempt['error'] = last_error
+                attempts.append(attempt)
+                continue
+            finish_reason = usage.get('finish_reason') if isinstance(usage, dict) else None
+            if not str(reply or '').strip():
+                last_error = 'empty narrator reply'
+                attempt['ok'] = False
+                attempt['error'] = last_error
+                attempt['finish_reason'] = finish_reason
+                attempts.append(attempt)
+                continue
+            attempt['ok'] = True
+            attempt['finish_reason'] = finish_reason
+            attempts.append(attempt)
+            usage = dict(usage or {})
+            usage['model_role'] = role
+            usage['model'] = usage.get('model') or _model_label(model_cfg)
+            trace = {
+                'attempts': attempts,
+                'provider_used': role,
+                'model_used': _model_label(model_cfg),
+                'fallback_to_secondary': role == 'secondary',
+                'all_failed': False,
+            }
+            return reply, usage, trace
+    trace = {
+        'attempts': attempts,
+        'provider_used': 'none',
+        'model_used': None,
+        'fallback_to_secondary': True,
+        'all_failed': True,
+        'last_error': last_error,
+    }
+    usage = {
+        'model': _model_label(primary_cfg),
+        'input_tokens': 0,
+        'output_tokens': 0,
+        'finish_reason': 'error',
+    }
+    return '', usage, trace
+
+
 def _keeper_fallback_bootstrapped(fragment_state: dict, skeleton_keeper_diagnostics: dict | None = None) -> bool:
     """Treat fragment/skeleton state as enough to leave bootstrap retry mode.
 
@@ -272,18 +349,46 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         context = dict(context)
         context['state_fragment'] = state_fragment
         system_prompt, user_prompt = build_narrator_input(context, opening_prompt, arbiter_result=arbiter_result)
-        model_cfg = resolve_provider_model('narrator')
-        model_error = None
-        try:
-            reply, usage = call_model(model_cfg, system_prompt, user_prompt)
-        except Exception as err:
-            model_error = str(err)
-            reply = opening_prompt
-            usage = {
-                'model': f"{model_cfg.get('provider_name', 'unknown')}:{model_cfg.get('model', {}).get('id', 'unknown')}",
-                'input_tokens': 0,
-                'output_tokens': 0,
+        reply, usage, narrator_retry_trace = _call_narrator_with_retries(system_prompt, user_prompt)
+        model_error = narrator_retry_trace.get('last_error') if narrator_retry_trace.get('all_failed') else None
+        if narrator_retry_trace.get('all_failed'):
+            response = {
+                'session_id': session_id,
+                'turn_id': turn_id,
+                'reply': '',
+                'usage': usage,
+                'narrator_retry': narrator_retry_trace,
+                'state_snapshot': build_state_snapshot(state),
+                'web': web_runtime_settings(),
+                'error': {'code': 'NARRATOR_UNAVAILABLE', 'message': 'narrator primary and secondary models failed'},
             }
+            trace = copy.deepcopy(turn_trace)
+            trace['mode'] = 'opening-choice-narrator-failed'
+            trace['opening'] = {
+                'choice': choice,
+                'opening_prompt': opening_prompt,
+            }
+            trace['runtime'] = {
+                'context': _trace_context_excerpt(context),
+                'arbiter': copy.deepcopy(arbiter),
+                'state_fragment_initial': copy.deepcopy(state_fragment),
+                'narrator': {
+                    'system_prompt': _trim_trace_text(system_prompt),
+                    'user_prompt': _trim_trace_text(user_prompt),
+                    'prompt_block_stats': copy.deepcopy(prompt_block_stats(system_prompt)),
+                    'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
+                    'reply': '',
+                    'usage': copy.deepcopy(usage),
+                    'model_error': model_error,
+                    'retry_trace': copy.deepcopy(narrator_retry_trace),
+                },
+            }
+            trace['post_turn'] = {
+                'state': copy.deepcopy(state),
+                'state_snapshot': build_state_snapshot(state),
+                'not_committed': True,
+            }
+            return finalize_response(response, trace=trace)
         state['opening_started'] = True
         state['state_keeper_bootstrapped'] = False
         save_state(session_id, state)
@@ -353,6 +458,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'turn_id': turn_id,
             'reply': reply,
             'usage': usage,
+            'narrator_retry': narrator_retry_trace,
             'state_snapshot': build_state_snapshot(state),
             'web': web_runtime_settings(),
         }
@@ -365,6 +471,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'loaded_preset': context.get('active_preset', {}).get('name', 'unknown'),
                 'loaded_onstage': state.get('onstage_npcs', []),
                 'model_error': model_error,
+                'narrator_retry': copy.deepcopy(narrator_retry_trace),
                 'state_keeper_diagnostics': copy.deepcopy(state_keeper_diagnostics) if isinstance(state_keeper_diagnostics, dict) else {},
             }
         meta['last_turn_id'] += 1
@@ -389,6 +496,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'reply': reply,
                 'usage': copy.deepcopy(usage),
                 'model_error': model_error,
+                'retry_trace': copy.deepcopy(narrator_retry_trace),
             },
             'skeleton_keeper': {
                 'diagnostics': copy.deepcopy(skeleton_keeper_diagnostics),
@@ -542,26 +650,15 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'prompt_block_stats': copy.deepcopy(prompt_stats),
         'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
     }
-    model_cfg = resolve_provider_model('narrator')
-    model_error = None
-    try:
-        reply, usage = call_model(model_cfg, system_prompt, user_prompt)
-    except Exception as err:
-        model_error = str(err)
-        reply = f"[fallback] 当前主事件：{scene.get('main_event', '待确认')} | 收到输入：{text}"
-        usage = {
-            'model': f"{model_cfg.get('provider_name', 'unknown')}:{model_cfg.get('model', {}).get('id', 'unknown')}",
-            'input_tokens': 0,
-            'output_tokens': 0,
-            'finish_reason': 'error',
-        }
-    if not reply.strip():
-        reply = f"[fallback] 当前主事件：{scene.get('main_event', '待确认')} | 收到输入：{text}"
+    reply, usage, narrator_retry_trace = _call_narrator_with_retries(system_prompt, user_prompt)
+    model_error = narrator_retry_trace.get('last_error') if narrator_retry_trace.get('all_failed') else None
+    fallback_used = bool(narrator_retry_trace.get('all_failed'))
     turn_trace['runtime']['narrator']['reply'] = reply
     turn_trace['runtime']['narrator']['usage'] = copy.deepcopy(usage)
     turn_trace['runtime']['narrator']['model_error'] = model_error
+    turn_trace['runtime']['narrator']['retry_trace'] = copy.deepcopy(narrator_retry_trace)
     finish_reason = usage.get('finish_reason')
-    completion_status = 'partial' if finish_reason == 'length' else 'complete'
+    completion_status = 'partial' if fallback_used or finish_reason in ('length', 'error') else 'complete'
     if completion_status == 'complete' and looks_incomplete_reply(reply):
         completion_status = 'partial'
         finish_reason = finish_reason or 'incomplete'
@@ -570,6 +667,38 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'completion_status': completion_status,
         'finish_reason': finish_reason,
     }
+
+    if fallback_used and not reply.strip():
+        response = {
+            'session_id': session_id,
+            'turn_id': turn_id,
+            'reply': '',
+            'usage': usage,
+            'narrator_retry': narrator_retry_trace,
+            'state_snapshot': build_state_snapshot(state),
+            'web': web_runtime_settings(),
+            'error': {'code': 'NARRATOR_UNAVAILABLE', 'message': 'narrator primary and secondary models failed'},
+        }
+        if debug_enabled:
+            response['debug'] = {
+                'scene_mode': 'runtime-narrator-failed',
+                'arbiter_used': bool(arbiter.get('arbiter_needed')),
+                'arbiter_event_count': len(arbiter.get('results', [])),
+                'arbiter_analysis': arbiter.get('analysis', {}),
+                'loaded_preset': context.get('active_preset', {}).get('name', 'unknown'),
+                'loaded_onstage': scene.get('onstage_npcs', []),
+                'model_error': model_error,
+                'completion_status': completion_status,
+                'finish_reason': finish_reason,
+                'narrator_retry': copy.deepcopy(narrator_retry_trace),
+                'prompt_block_stats': copy.deepcopy(prompt_stats),
+            }
+        turn_trace['post_turn'] = {
+            'state': copy.deepcopy(state),
+            'state_snapshot': build_state_snapshot(state),
+            'not_committed': True,
+        }
+        return finalize_response(response)
 
     current_turn_num = meta['last_turn_id'] + 1
     is_first_turn = current_turn_num == 1
@@ -629,6 +758,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'turn_id': turn_id,
             'reply': reply,
             'usage': usage,
+            'narrator_retry': narrator_retry_trace,
             'state_snapshot': build_state_snapshot(state),
             'web': web_runtime_settings(),
         }
@@ -643,6 +773,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'model_error': model_error,
                 'completion_status': completion_status,
                 'finish_reason': finish_reason,
+                'narrator_retry': copy.deepcopy(narrator_retry_trace),
                 'current_character': context.get('character_core', {}).get('name', ''),
                 'current_user': context.get('player_profile_json', {}).get('name', '') or context.get('player_profile_json', {}).get('courtesyName', '') or 'user',
                 'prompt_block_stats': copy.deepcopy(prompt_stats),

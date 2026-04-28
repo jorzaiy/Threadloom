@@ -234,6 +234,8 @@ http://127.0.0.1:8765
 - 同一 `session_id` 的 HTTP 写请求现在会串行执行，降低并发覆盖风险
 - 每个 turn 现在会额外落一份 `turn-trace/turn-XXXX.json`，用于单回合精确回放
 - `runtime.json -> trace.enabled / trace.keep_last_turns` 可控制 trace 是否启用以及最多保留多少轮
+- narrator 正文生成现在先用主 narrator 模型重试 3 次；主模型均失败后，使用 `state_keeper.model` 作为副 LLM 再重试 3 次。副 LLM 接管会在 response / turn trace 的 `narrator_retry` 中标记 `provider_used: secondary`。
+- 若主/副 narrator 全部失败，本轮返回空 `reply` 与 `NARRATOR_UNAVAILABLE`，不写 assistant 历史、不递增 turn、不更新 state，trace 标记 `not_committed: true`，避免沉浸式 RP 中出现硬编码 fallback 文案。
 - partial assistant 回复会显示，但不会继续污染事实层
 - narrator 若明显停在半句中间，即使 provider 没返回 `finish_reason`，当前也会按 partial 处理，避免把坏输出继续写坏 state
 - `regenerate-last` 会回滚最后一对 `user -> assistant(partial)` 再重试
@@ -333,7 +335,7 @@ http://127.0.0.1:8765
 - 直接在前端页面手动跑一个真实 session
 - 用 `GET /api/state` 和 `GET /api/history` 看写回是否稳定
 - 直接看 `sessions/<session_id>/turn-trace/turn-XXXX.json`，确认本轮 pre-turn / narrator / keeper / post-turn 是否符合预期
-- 若当前环境下 narrator / keeper 模型不可达，也可以先故意在本地跑一轮，拿到 fallback 产出的 trace，再用单回合回放调 `threads / important_npcs / persona / summary`
+- 若当前环境下 narrator / keeper 模型不可达，可先手动跑一轮拿到 `NARRATOR_UNAVAILABLE` trace，重点检查 `narrator.retry_trace / prompt_block_stats / selector`，再用单回合回放调 `threads / important_npcs / persona / summary`
 - 看调试区里的：
   - `arbiter_analysis`
   - `arbiter_results`
