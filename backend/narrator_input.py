@@ -216,6 +216,7 @@ def _format_recent_window(history: list[dict], limit_pairs: int = 6) -> str:
     if not history:
         return '暂无'
     pairs = []
+    leading_assistants = []
     current_user = None
     for item in history:
         if not isinstance(item, dict):
@@ -226,10 +227,16 @@ def _format_recent_window(history: list[dict], limit_pairs: int = 6) -> str:
         elif role == 'assistant' and current_user is not None:
             pairs.append((current_user, item))
             current_user = None
+        elif role == 'assistant' and current_user is None:
+            leading_assistants.append(item)
     pairs = pairs[-limit_pairs:]
-    if not pairs:
-        return '暂无'
     lines = []
+    if not pairs:
+        for item in leading_assistants[-max(1, limit_pairs):]:
+            assistant_text = str(item.get('content', '') or '').strip()
+            if assistant_text:
+                lines.append(f"[叙事] {assistant_text}")
+        return '\n'.join(lines) if lines else '暂无'
     for user_item, assistant_item in pairs:
         user_text = str(user_item.get('content', '') or '').strip()
         assistant_text = str(assistant_item.get('content', '') or '').strip()
@@ -445,12 +452,22 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
 
     foundation_text = context.get('lorebook_foundation_text', '').strip()
     if foundation_text:
-        blocks.append('【世界书基础规则】\n本块是导入时蒸馏出的常驻瘦身世界书，只提供世界认知、身份边界、势力/规则口径参考；它不是当前场景事实源。\n' + foundation_text)
+        blocks.append(
+            '【世界书基础规则】\n'
+            '本块是导入时蒸馏出的常驻护栏，只记录最容易造成设定错误的世界认知、身份边界与硬规则。'
+            '它不是完整世界书，也不表示世界只有这些内容；缺失细节应以后面的情境世界书或最近上下文为准，不要自行补完。\n'
+            + foundation_text
+        )
 
     # 15. 世界书正文放后，避免压过最近窗口
     lorebook_text = context.get('lorebook_text', '').strip()
     if lorebook_text and lorebook_text != '暂无相关世界书条目':
-        blocks.append('【情境世界书】\n本块只包含 selector 命中的蒸馏世界书条目，用于补世界规则、势力背景与场景解释；不自动等于当前场景事实。\n' + lorebook_text)
+        blocks.append(
+            '【情境世界书】\n'
+            '本块是 selector 根据本轮输入、最近上下文与状态信号命中的相关世界书内容；命中后优先回源到原始世界书片段。'
+            '它用于补世界规则、势力背景与场景解释，但不自动等于当前场景事实。\n'
+            + lorebook_text
+        )
 
     blocks.append(
         '【知情边界补充】\n'

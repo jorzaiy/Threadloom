@@ -48,6 +48,7 @@ web input
 更具体地说：
 - narrator 主导“当前这轮怎么写”，不由 `thread` 或 `event` 直接接管。
 - selector 主导“这一轮要不要把旧东西拿回来”，优先参考 `recent window + state + signals + event recall`。
+- 世界书由三层处理：开局首个 narrator 回合用原始 alwaysOn/foundation 条目大预算定底；后续每轮常驻蒸馏出的基础护栏；selector 命中世界书 index 后回源到原始 `lorebook.json` 片段交给 narrator，而不是只给蒸馏摘要。
 - keeper 主导“后台结构化维护世界状态”，其中：
   - `signals` 负责“当前还没消失、会继续影响下一拍”的东西；
   - `knowledge_scope` 只负责本轮新增知情 delta，长期情报由 `knowledge_records` 承担；

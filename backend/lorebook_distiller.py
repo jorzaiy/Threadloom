@@ -28,6 +28,10 @@ MAX_INDEX_ITEMS = 80
 MAX_HEURISTIC_FOUNDATION_RULES = 5
 DISTILL_MAX_OUTPUT_TOKENS = 1200
 MAX_LLM_DISTILL_ENTRIES = 10
+CONSTRAINT_MARKERS = (
+    '严禁', '禁止', '不得', '不允许', '不能', '不可', '不应', '不存在',
+    '必须', '务必', '只能', '只允许', '仅限', '一律', '始终', '保持适当距离',
+)
 
 
 DISTILL_SYSTEM = """你是角色卡世界书蒸馏器。
@@ -112,6 +116,45 @@ def _clean_source_text(value: str) -> str:
     text = text.replace('{{user}}', '玩家')
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
+
+
+def _constraint_lines(text: str, *, limit: int = 8) -> list[str]:
+    lines = []
+    for raw in _clean_source_text(text).splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = re.sub(r'^[-*+•]\s*', '', line).strip()
+        if not line or line.endswith('：'):
+            continue
+        if any(marker in line for marker in CONSTRAINT_MARKERS):
+            line = _compact(line, 120)
+            if line and line not in lines:
+                lines.append(line)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _entry_constraint_text(entry: dict, *, limit: int = 220) -> str:
+    lines = _constraint_lines(str(entry.get('content', '') or ''))
+    if not lines:
+        return ''
+    return _compact('；'.join(lines), limit)
+
+
+def _summary_with_constraints(content: str, constraints: str, *, limit: int = 260) -> str:
+    base = _compact(content, limit)
+    if not constraints:
+        return base
+    if constraints in base:
+        return base
+    prefix = f'关键约束：{constraints}'
+    remaining = limit - len(prefix) - len('。背景：')
+    if remaining < 50:
+        return _compact(prefix, limit)
+    background = _compact(content, remaining)
+    return _compact(f'{prefix}。背景：{background}', limit)
 
 
 def _stable_id(prefix: str, text: str) -> str:
@@ -235,6 +278,8 @@ def _foundation_score(entry: dict, category: str) -> int:
         score -= 4
     if any(token in title + content for token in ('身份边界', '世界观', '运行规则', '动态规则', '禁区', '禁止', '必须', '玩家', '异人', '土著')):
         score += 5
+    if _constraint_lines(str(entry.get('content', '') or ''), limit=1):
+        score += 6
     if any(token in title for token in ('人物总览', '关键人物', '势力与npc', 'NPC', 'npc')):
         score -= 8
     return score
@@ -251,16 +296,19 @@ def _fallback_distill(entries: list[dict], *, provider: str = 'heuristic') -> tu
         keywords = _keywords(entry)
         foundation_score = _foundation_score(entry, category)
         if foundation_score >= 8:
+            constraints = _entry_constraint_text(entry)
+            text = constraints or _compact(content, 220 if category == 'rule' else 180)
             foundation_candidates.append((foundation_score, {
                 'title': _compact(title, 80),
-                'text': _compact(content, 220 if category == 'rule' else 180),
+                'text': text,
                 'category': category if category in {'rule', 'world', 'tone'} else 'other',
                 'source_entry_ids': source_ids,
             }))
+        constraints = _entry_constraint_text(entry)
         situational.append({
             'id': _stable_id('lore', str(entry.get('id')) + title),
             'title': _compact(title, 80),
-            'summary': _compact(content, 260),
+            'summary': _summary_with_constraints(content, constraints, limit=260),
             'keywords': keywords,
             'category': category,
             'source_entry_ids': source_ids,
@@ -305,6 +353,7 @@ def _normalize_list(value, limit: int, item_limit: int = 180) -> list[str]:
 def _normalize_llm(payload: dict, entries: list[dict]) -> tuple[dict, dict]:
     fallback_foundation, fallback_index = _fallback_distill(entries, provider='llm')
     valid_source_ids = {str(item.get('id', '') or '') for item in entries}
+    entries_by_id = {str(item.get('id', '') or ''): item for item in entries}
     rules = []
     for item in payload.get('foundation_rules', []) if isinstance(payload, dict) else []:
         if not isinstance(item, dict):
@@ -344,10 +393,32 @@ def _normalize_llm(payload: dict, entries: list[dict]) -> tuple[dict, dict]:
             break
     if not rules:
         rules = fallback_foundation['rules']
+    seen_rule_texts = {str(item.get('text', '') or '') for item in rules}
+    for item in fallback_foundation['rules']:
+        text = str(item.get('text', '') or '')
+        if not text or text in seen_rule_texts:
+            continue
+        source_ids = [str(x or '') for x in (item.get('source_entry_ids', []) or [])]
+        if not any(_entry_constraint_text(entries_by_id.get(source_id, {})) for source_id in source_ids):
+            continue
+        rules.append(item)
+        seen_rule_texts.add(text)
+        if len(rules) >= MAX_FOUNDATION_RULES:
+            break
     seen_sources = {source_id for item in items for source_id in (item.get('source_entry_ids', []) or [])}
     for item in fallback_index['items']:
         source_ids = [str(x or '') for x in (item.get('source_entry_ids', []) or [])]
         if any(source_id in seen_sources for source_id in source_ids):
+            for existing in items:
+                existing_sources = [str(x or '') for x in (existing.get('source_entry_ids', []) or [])]
+                if not any(source_id in existing_sources for source_id in source_ids):
+                    continue
+                constraints = _entry_constraint_text(entries_by_id.get(source_ids[0], {})) if source_ids else ''
+                summary = str(existing.get('summary', '') or '')
+                if constraints and constraints not in summary:
+                    source_entry = entries_by_id.get(source_ids[0], {}) if source_ids else {}
+                    existing['summary'] = _summary_with_constraints(str(source_entry.get('content', '') or summary), constraints, limit=260)
+                break
             continue
         items.append(item)
         seen_sources.update(source_ids)
@@ -370,7 +441,11 @@ def _build_llm_prompt(entries: list[dict]) -> str:
             'entryType': entry.get('entryType'),
             'runtimeScope': entry.get('runtimeScope'),
             'priority': entry.get('priority'),
-            'content': _compact(entry.get('content', ''), 300),
+            'content': _summary_with_constraints(
+                str(entry.get('content', '') or ''),
+                _entry_constraint_text(entry, limit=260),
+                limit=520,
+            ),
         })
     return json.dumps({'entries': compact_entries}, ensure_ascii=False, indent=2)
 

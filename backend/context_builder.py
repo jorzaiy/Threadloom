@@ -271,6 +271,14 @@ def summarize_lorebook_entries(entries: list[dict], *, max_entry_chars: int = 32
     }
 
 
+def select_lorebook_text_for_turn(lorebook_summary: dict, lorebook_index_hits: dict, *, opening_lorebook_turn: bool, lorebook_source_hits: dict | None = None) -> str:
+    if opening_lorebook_turn:
+        return str(lorebook_summary.get('text', '') or '')
+    if isinstance(lorebook_source_hits, dict) and str(lorebook_source_hits.get('text', '') or '').strip():
+        return str(lorebook_source_hits.get('text', '') or '')
+    return str(lorebook_index_hits.get('text', '') or '') or str(lorebook_summary.get('text', '') or '')
+
+
 def format_lorebook_foundation(path: Path, *, max_rule_chars: int = 180, max_total_chars: int = 1600) -> dict:
     data = read_json(path)
     rules = data.get('rules', []) if isinstance(data.get('rules', []), list) else []
@@ -350,6 +358,59 @@ def load_lorebook_index_hits(path: Path, trigger_text: str, *, limit: int = 4, m
         'text': '\n\n'.join(blocks).strip(),
         'items': hit_items,
         'provider': str(data.get('provider', '') or '').strip(),
+        'total_chars': len('\n\n'.join(blocks).strip()) if blocks else 0,
+    }
+
+
+def load_lorebook_source_hits(lorebook_path: Path, index_hits: dict, *, max_entry_chars: int = 900, max_total_chars: int = 1800) -> dict:
+    data = read_json(lorebook_path)
+    entries = data.get('entries', []) if isinstance(data.get('entries', []), list) else []
+    entries_by_id = {
+        str(entry.get('id', entry.get('title', '')) or '').strip(): entry
+        for entry in entries
+        if isinstance(entry, dict) and str(entry.get('id', entry.get('title', '')) or '').strip()
+    }
+    blocks = []
+    items = []
+    seen_ids = set()
+    total = 0
+    for hit in index_hits.get('items', []) if isinstance(index_hits, dict) else []:
+        if not isinstance(hit, dict):
+            continue
+        source_ids = [str(x or '').strip() for x in (hit.get('source_entry_ids', []) or []) if str(x or '').strip()] if isinstance(hit.get('source_entry_ids', []), list) else []
+        for source_id in source_ids:
+            if source_id in seen_ids:
+                continue
+            entry = entries_by_id.get(source_id)
+            if not isinstance(entry, dict):
+                continue
+            title = str(entry.get('title', entry.get('id', '世界书条目')) or '世界书条目').strip()
+            content = _short_lore_text(entry.get('content', ''), max_entry_chars)
+            if not content:
+                continue
+            block = f"### {title}\n{content}"
+            if blocks and total + len(block) > max_total_chars:
+                break
+            if not blocks and len(block) > max_total_chars:
+                allowed = max(120, max_total_chars - len(f"### {title}\n") - 1)
+                content = _short_lore_text(entry.get('content', ''), allowed)
+                block = f"### {title}\n{content}"
+            blocks.append(block)
+            total += len(block)
+            seen_ids.add(source_id)
+            items.append({
+                'id': source_id,
+                'title': title,
+                'source_index_id': str(hit.get('id', '') or '').strip(),
+                'index_score': int(hit.get('score', 0) or 0),
+                'keyword_hits': hit.get('keyword_hits', []) if isinstance(hit.get('keyword_hits', []), list) else [],
+                'injected_chars': len(block),
+            })
+        if total >= max_total_chars:
+            break
+    return {
+        'text': '\n\n'.join(blocks).strip(),
+        'items': items,
         'total_chars': len('\n\n'.join(blocks).strip()) if blocks else 0,
     }
 
@@ -630,6 +691,8 @@ def select_recent_history_window(items: list[dict], limit_pairs: int) -> list[di
             start_index = index
             if pair_count >= limit_pairs:
                 break
+    if pair_count == 0:
+        return filtered[-max(1, limit_pairs * 2):]
     return filtered[start_index:]
 
 
@@ -742,11 +805,15 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     trigger_text = '\n'.join(trigger_parts)
 
     lorebook_strategy = preset.get('lorebookStrategy', {})
+    opening_lorebook_turn = current_pair_count == 0
     max_lore_entries = int(lorebook_strategy.get('maxEntries', 6) or 6)
     min_lore_entries = int(lorebook_strategy.get('minEntries', 2) or 2)
-    include_always_on = bool(lorebook_strategy.get('includeAlwaysOn', True)) and current_pair_count == 0
+    include_always_on = bool(lorebook_strategy.get('includeAlwaysOn', True)) and opening_lorebook_turn
     if current_pair_count > 0:
         min_lore_entries = 0
+    if opening_lorebook_turn:
+        max_lore_entries = int(lorebook_strategy.get('openingMaxEntries', max(max_lore_entries, 12)) or max(max_lore_entries, 12))
+        min_lore_entries = int(lorebook_strategy.get('openingMinEntries', max(min_lore_entries, 1)) or max(min_lore_entries, 1))
     always_on_limit = int(lorebook_strategy.get('alwaysOnMaxEntries', 3) or 3)
     matched_limit = int(lorebook_strategy.get('matchedMaxEntries', max(0, max_lore_entries - always_on_limit)) or max(0, max_lore_entries - always_on_limit))
     foundation_rule_limit = int(lorebook_strategy.get('foundationRuleMaxEntries', 1) or 1)
@@ -757,6 +824,9 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     situational_entry_limit = int(lorebook_strategy.get('situationalEntryMaxEntries', 2) or 2)
     max_entry_chars = int(lorebook_strategy.get('maxEntryChars', 320) or 320)
     max_total_chars = int(lorebook_strategy.get('maxTotalChars', 2200) or 2200)
+    if opening_lorebook_turn:
+        max_entry_chars = int(lorebook_strategy.get('openingMaxEntryChars', max(max_entry_chars, 6000)) or max(max_entry_chars, 6000))
+        max_total_chars = int(lorebook_strategy.get('openingMaxTotalChars', max(max_total_chars, 12000)) or max(max_total_chars, 12000))
     system_npc_limit = int(lorebook_strategy.get('systemNpcLimit', 3) or 3)
     lorebook_npc_limit = int(lorebook_strategy.get('lorebookNpcLimit', 4) or 4)
     featured_cast_limit = int(lorebook_strategy.get('featuredCastLimit', 3) or 3)
@@ -788,12 +858,23 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         max_item_chars=int(lorebook_strategy.get('situationalIndexMaxItemChars', 220) or 220),
         max_total_chars=int(lorebook_strategy.get('situationalIndexMaxTotalChars', 700) or 700),
     )
+    lorebook_source_hits = load_lorebook_source_hits(
+        lorebook_path,
+        lorebook_index_hits,
+        max_entry_chars=int(lorebook_strategy.get('situationalSourceMaxEntryChars', 900) or 900),
+        max_total_chars=int(lorebook_strategy.get('situationalSourceMaxTotalChars', 1800) or 1800),
+    )
     lorebook_foundation = format_lorebook_foundation(
         lorebook_foundation_path,
         max_rule_chars=int(lorebook_strategy.get('foundationMaxRuleChars', 180) or 180),
         max_total_chars=int(lorebook_strategy.get('foundationMaxTotalChars', 1600) or 1600),
     )
-    lorebook_text = lorebook_index_hits['text'] or lorebook_summary['text']
+    lorebook_text = select_lorebook_text_for_turn(
+        lorebook_summary,
+        lorebook_index_hits,
+        opening_lorebook_turn=opening_lorebook_turn,
+        lorebook_source_hits=lorebook_source_hits,
+    )
     system_npc_candidates = extract_system_npc_candidates(onstage, relevant, limit=system_npc_limit)
     lorebook_npc_candidates = extract_lorebook_npc_candidates(lorebook_entries, onstage, relevant, limit=lorebook_npc_limit)
     featured_cast = build_featured_cast(lorebook_path, trigger_text, onstage, relevant, limit=featured_cast_limit)
@@ -829,7 +910,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         summary_chunks=summary_chunks,
         user_text=user_text,
     )
-    inject_lorebook_text = bool(selector_decision.get('inject_lorebook_text')) or bool(lorebook_index_hits.get('items'))
+    inject_lorebook_text = opening_lorebook_turn or bool(selector_decision.get('inject_lorebook_text')) or bool(lorebook_index_hits.get('items'))
     if inject_lorebook_text:
         selector_decision['inject_lorebook_text'] = True
     inject_npc_candidates = bool(selector_decision.get('inject_npc_candidates'))
@@ -864,10 +945,13 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         'lorebook_foundation_text': lorebook_foundation.get('text', ''),
         'lorebook_foundation': lorebook_foundation,
         'lorebook_index_hits': lorebook_index_hits,
+        'lorebook_source_hits': lorebook_source_hits,
         'lorebook_injection': {
             **lorebook_summary,
             'foundation': lorebook_foundation,
             'index_hits': lorebook_index_hits,
+            'source_hits': lorebook_source_hits,
+            'mode': 'opening-source' if opening_lorebook_turn else ('source-hit' if lorebook_source_hits.get('items') else ('index-hit' if lorebook_index_hits.get('items') else 'selected-summary')),
         },
         'lorebook_npc_candidates': merged_lorebook_candidates,
         'system_npc_candidates': system_npc_candidates,

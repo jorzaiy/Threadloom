@@ -47,7 +47,7 @@
 - narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / items / knowledge / 最近 12 轮完整窗口 / user input`
 - `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近 12 轮为准
 - `event` 不再进入 narrator prompt，也不再写回 state；12 轮外历史改由固定 `summary_chunks` 通过 selector 条件召回
-- 世界书默认读取导入时蒸馏缓存：每轮常驻短 `foundation`，情境条目只在 selector / index 条件命中时小预算注入；世界书不是当前场景事实源
+- 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
 - `state_keeper` 优先，`state_updater` 兜底
 - arbiter 已接入主链，不再只是文档占位
 - partial reply 有独立处理路径，不再继续污染事实层
@@ -97,16 +97,17 @@
 - 所有文件写入已改为原子写入模式（`_atomic_write_text()` / `_atomic_write_json()`）：写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
 - 模型调用已加入 API 韧性层：`_retry_on_rate_limit` 装饰器在 429/503 错误时自动指数退避重试（最多 3 次），尊重 `Retry-After` 响应头；远端和本地模型调用均已覆盖
 - `summary` 与独立 `mid digest` 当前不再作为 narrator prompt 的主输入块
-- 世界书注入当前已改成导入期蒸馏 + 运行期 selector：避免 `alwaysOn` 与整段 raw lore 压过最近窗口
+- 世界书注入当前已改成“开局原文定底 + 导入期蒸馏护栏 + 运行期 selector 回源”：避免普通回合每轮塞整段 raw lore，同时避免只给蒸馏摘要导致 narrator 误以为世界书只有摘要内容
 - 导入器会在写出 `lorebook.json` 后生成两个缓存文件：
   - `lorebook-foundation.json`：每轮常驻的短世界基础 / 身份边界 / 规则口径
-- `lorebook-index.json`：条件召回的情境 lore 摘要，条目保留 `source_entry_ids`；其中 `keywords` 只作为检索索引，不作为剧情触发规则
+- `lorebook-index.json`：条件召回的情境 lore 索引，条目保留 `source_entry_ids`；其中 `keywords` 只作为检索索引，不作为剧情触发规则。运行期命中 index 后优先按 `source_entry_ids` 回到 `lorebook.json` 取原文片段，而不是直接把蒸馏摘要当完整知识交给 narrator
 - `lorebook_distiller.py` 默认尝试用 `state_keeper_candidate` LLM 蒸馏；当前用户配置建议使用 `deepseek-v4-flash` 这类稳定付费模型。蒸馏调用会覆盖普通 keeper 的输出预算（独立 `max_output_tokens`），遇到空回复或 JSON 解析失败会自动重试；仍失败时使用 heuristic fallback，并在产物 `provider` 字段标记
-- narrator prompt 中对应块为 `【世界书基础规则】` 和 `【情境世界书】`；旧 raw `【世界书】` 块不再作为默认入口
-- 情境世界书默认限额较小（当前默认 2 条 / 约 700 字），避免普通观察轮因 recent window 中出现世界名词而召回过多 lore
+- narrator prompt 中对应块为 `【世界书基础规则】` 和 `【情境世界书】`；`【世界书基础规则】` 明确标注为“不完整常驻护栏”，`【情境世界书】` 标注为 selector 命中后的相关世界书内容。旧 raw `【世界书】` 块不再作为普通回合默认入口
+- 情境世界书默认先用 index 小预算定位（当前默认 2 条 / 约 700 字），再回源注入原始条目片段（默认约 1800 字），避免普通观察轮因 recent window 中出现世界名词而召回过多 lore，同时保留原文约束与局部结构
 - turn trace / debug 当前会自动记录：
   - 实际注入的 lorebook 条目列表
   - 蒸馏 foundation 与 index 命中来源
+  - index 命中后的原始世界书回源片段 `source_hits`
   - `【世界书基础规则】` / `【情境世界书】` 总字符数
   - prompt 各大区块字符占比
 
