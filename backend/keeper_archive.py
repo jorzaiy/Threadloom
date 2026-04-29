@@ -112,15 +112,23 @@ def save_keeper_record_archive(session_id: str, archive: dict) -> None:
     _atomic_write_json(path, archive)
 
 
-def load_keeper_record_archive(session_id: str, *, skip_bootstrap: bool = False, use_llm: bool = True) -> dict:
+def load_keeper_record_archive(
+    session_id: str,
+    *,
+    skip_bootstrap: bool = False,
+    use_llm: bool = True,
+    allow_archive_write: bool = True,
+) -> dict:
     path = session_paths(session_id)['keeper_archive']
     if not path.exists():
         archive = build_keeper_record_archive(session_id, skip_bootstrap=skip_bootstrap, use_llm=use_llm)
-        save_keeper_record_archive(session_id, archive)
+        if allow_archive_write:
+            save_keeper_record_archive(session_id, archive)
         return archive
     try:
         return json.loads(path.read_text(encoding='utf-8'))
     except Exception:
         archive = build_keeper_record_archive(session_id, skip_bootstrap=skip_bootstrap, use_llm=use_llm)
-        save_keeper_record_archive(session_id, archive)
+        if allow_archive_write:
+            save_keeper_record_archive(session_id, archive)
         return archive

@@ -7,6 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent / 'backend'))
 
 import keeper_archive
+import keeper_record_retriever
 from mid_context_agent import build_mid_window_digest
 
 
@@ -77,6 +78,69 @@ class KeeperArchiveWindowTests(unittest.TestCase):
 
         self.assertEqual(archive['source_pair_count'], 12)
         self.assertNotIn('半截回复', str(archive['records']))
+
+    def test_retrieve_keeper_records_can_disable_archive_writes(self):
+        stale_archive = {
+            'version': 1,
+            'window_size': 10,
+            'source_pair_count': 30,
+            'records': [
+                {
+                    'window': {'end_pair_index': 30},
+                    'location_anchor': '茶摊',
+                    'stable_entities': [{'name': '掌柜'}],
+                    'tracked_objects': [],
+                    'ongoing_events': ['掌柜继续追查茶摊线索'],
+                    'open_loops': [],
+                    'history_digest': [],
+                },
+                {
+                    'window': {'end_pair_index': 10},
+                    'location_anchor': '茶摊',
+                    'stable_entities': [{'name': '掌柜'}],
+                    'tracked_objects': [],
+                    'ongoing_events': ['掌柜追查茶摊线索'],
+                    'open_loops': [],
+                    'history_digest': [],
+                },
+            ],
+        }
+
+        with patch.object(keeper_record_retriever, 'load_keeper_record_archive', return_value=stale_archive), \
+                patch.object(keeper_record_retriever, 'save_keeper_record_archive') as save_archive, \
+                patch.object(keeper_record_retriever, 'build_keeper_record_archive') as build_archive:
+            result = keeper_record_retriever.retrieve_keeper_records(
+                'test-session',
+                {'location': '茶摊', 'onstage_npcs': ['掌柜'], 'main_event': '掌柜追查茶摊线索'},
+                current_pair_count=12,
+                recent_window_pairs=1,
+                allow_archive_write=False,
+            )
+
+        save_archive.assert_not_called()
+        build_archive.assert_not_called()
+        self.assertEqual([record['window']['end_pair_index'] for record in result['records']], [10])
+
+    def test_retrieve_keeper_records_keeps_default_archive_write_behavior(self):
+        stale_archive = {
+            'version': 1,
+            'window_size': 10,
+            'source_pair_count': 30,
+            'records': [{'window': {'end_pair_index': 30}, 'location_anchor': '茶摊'}],
+        }
+
+        with patch.object(keeper_record_retriever, 'load_keeper_record_archive', return_value=stale_archive), \
+                patch.object(keeper_record_retriever, 'save_keeper_record_archive') as save_archive, \
+                patch.object(keeper_record_retriever, 'build_keeper_record_archive') as build_archive:
+            keeper_record_retriever.retrieve_keeper_records(
+                'test-session',
+                {'location': '茶摊'},
+                current_pair_count=12,
+                recent_window_pairs=1,
+            )
+
+        save_archive.assert_called_once()
+        build_archive.assert_not_called()
 
 
 if __name__ == '__main__':

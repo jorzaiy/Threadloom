@@ -248,13 +248,19 @@ def retrieve_keeper_records(
     limit: int = 4,
     refresh_skip_bootstrap: bool = True,
     refresh_use_llm: bool = False,
+    allow_archive_write: bool = True,
 ) -> dict:
-    archive = load_keeper_record_archive(session_id, skip_bootstrap=refresh_skip_bootstrap, use_llm=refresh_use_llm)
+    archive = load_keeper_record_archive(
+        session_id,
+        skip_bootstrap=refresh_skip_bootstrap,
+        use_llm=refresh_use_llm,
+        allow_archive_write=allow_archive_write,
+    )
     archive, pruned = _prune_future_records(archive, current_pair_count=max(0, int(current_pair_count or 0)))
-    if pruned:
+    if pruned and allow_archive_write:
         save_keeper_record_archive(session_id, archive)
     records = archive.get('records', []) if isinstance(archive.get('records', []), list) else []
-    if _archive_needs_refresh(archive, records, current_pair_count=current_pair_count, recent_window_pairs=recent_window_pairs):
+    if allow_archive_write and _archive_needs_refresh(archive, records, current_pair_count=current_pair_count, recent_window_pairs=recent_window_pairs):
         previous_archive = archive
         archive = build_keeper_record_archive(
             session_id,
