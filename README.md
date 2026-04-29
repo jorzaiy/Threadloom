@@ -44,6 +44,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - **泛化架构**：所有卡特定逻辑已从代码移到 `character-data.json["hints"]`，支持任意角色卡
 - API Key 支持环境变量引用（`$VAR` 或 `env:VAR`）
 - API 韧性：模型调用自动重试 429/503 错误（指数退避，最多 3 次，尊重 `Retry-After`）
+- 安全加固：后端默认仅监听 `127.0.0.1`，API 响应带基础安全头，请求体有大小上限，provider URL 会阻止常见 SSRF 目标
 - 原子文件写入：所有 state/archive 写入防崩溃/断电数据损坏
 - 结构化知情边界：`knowledge_scope` 独立追踪主角和各 NPC 已知信息，替代纯文本软约束
 - 线程生命周期管理：按类型分级保留、`cooling_down` 过渡态、`resolved_events` 归档
@@ -280,11 +281,13 @@ cd /root/Threadloom/backend
 python3 server.py
 ```
 
-默认监听：
+默认监听本机回环地址：
 
 ```text
 http://127.0.0.1:8765
 ```
+
+如果需要让其他设备访问，不建议直接改成公网监听；应放在可信反向代理后，并补全认证、TLS 与访问控制。
 
 ## 文档
 
@@ -330,3 +333,4 @@ http://127.0.0.1:8765
 - **[doc/audit/KEEPER_SUMMARY_FIX.md](doc/audit/KEEPER_SUMMARY_FIX.md)** - Keeper Summary 修复详情
 - **[doc/audit/PERFORMANCE_OPTIMIZATION.md](doc/audit/PERFORMANCE_OPTIMIZATION.md)** - 性能优化总结
 - **[doc/audit/DOC_AUDIT_REPORT.md](doc/audit/DOC_AUDIT_REPORT.md)** - 文档一致性审查报告
+- **[doc/audit/SECURITY_AUDIT_2026-04-29.md](doc/audit/SECURITY_AUDIT_2026-04-29.md)** - 安全审计与修复记录

@@ -11,6 +11,7 @@
 - `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，不是只有 `recent window + keeper archive`
 - `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
+- `server.py` 当前默认绑定 `127.0.0.1`，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
 - `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、object lifecycle、possession/visibility 合法覆盖与 `knowledge_scope` 本轮 delta 标准化
@@ -96,6 +97,8 @@
 - NPC 间信息隔离已升级为结构化知识系统：keeper 每轮只提取本轮新增 `knowledge_scope` delta，`state_bridge.py` 只保留本轮 delta 不再长期合并，`actor_registry.py` 派生 actor-id 版长期 `knowledge_records` 并做轻量相似去重，`narrator_input.py` 渲染为结构化知情边界
 - 所有文件写入已改为原子写入模式（`_atomic_write_text()` / `_atomic_write_json()`）：写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
 - 模型调用已加入 API 韧性层：`_retry_on_rate_limit` 装饰器在 429/503 错误时自动指数退避重试（最多 3 次），尊重 `Retry-After` 响应头；远端和本地模型调用均已覆盖
+- 模型站点配置已加入 SSRF 与密钥外送防护：远程 `baseUrl` 必须使用 HTTPS，私网/link-local 等直接 IP 会被拒绝；切换站点 URL 时若未重新输入 API key，会清空旧 key
+- 前端 assistant markdown 渲染已增加轻量净化，CSP 也补充 `object-src 'none'`、`base-uri 'self'`、`frame-ancestors 'none'`
 - `summary` 与独立 `mid digest` 当前不再作为 narrator prompt 的主输入块
 - 世界书注入当前已改成“开局原文定底 + 导入期蒸馏护栏 + 运行期 selector 回源”：避免普通回合每轮塞整段 raw lore，同时避免只给蒸馏摘要导致 narrator 误以为世界书只有摘要内容
 - 导入器会在写出 `lorebook.json` 后生成两个缓存文件：
