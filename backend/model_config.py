@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 import copy
+import ipaddress
 import json
 import os
+import re
 import urllib.request
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 
 try:
-    from .paths import APP_ROOT, resolve_layered_source, user_config_root
+    from .paths import APP_ROOT, resolve_layered_source, user_config_root, user_presets_root
 except ImportError:
-    from paths import APP_ROOT, resolve_layered_source, user_config_root
+    from paths import APP_ROOT, resolve_layered_source, user_config_root, user_presets_root
 
 GLOBAL_RUNTIME_CONFIG = APP_ROOT / 'config' / 'runtime.json'
 GLOBAL_RUNTIME_EXAMPLE = APP_ROOT / 'config' / 'runtime.example.json'
@@ -36,6 +39,7 @@ DEFAULT_NARRATOR = {
 DEFAULT_STATE_KEEPER = {
     'model': '',
 }
+DEFAULT_ACTIVE_PRESET = 'world-sim-core'
 DEFAULT_ADVANCED_MODELS = {
     'turn_analyzer': {
         'provider': 'openai-compatible',
@@ -105,8 +109,28 @@ def _normalize_base_url(value: str, *, required: bool = True) -> str:
         if required:
             raise ValueError('baseUrl is required')
         return ''
-    if not (text.startswith('http://') or text.startswith('https://')):
-        raise ValueError('baseUrl must start with http:// or https://')
+    parsed = urlparse(text)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        raise ValueError('baseUrl must be a valid http:// or https:// URL')
+    if parsed.username or parsed.password or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError('baseUrl must not include credentials, query, or fragment')
+    return text
+
+
+def _validate_remote_base_url(value: str) -> str:
+    text = _normalize_base_url(value, required=True)
+    parsed = urlparse(text)
+    host = parsed.hostname or ''
+    if host in {'localhost', '127.0.0.1', '::1'}:
+        return text
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip and (ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+        raise ValueError('baseUrl points to a non-public network address')
+    if parsed.scheme != 'https':
+        raise ValueError('baseUrl must use https unless it targets localhost')
     return text
 
 
@@ -290,6 +314,7 @@ def load_user_model_store() -> dict:
         keeper_available = available + ([keeper_current] if keeper_current and keeper_current not in available else [])
         slim = {
             'version': 1,
+            'active_preset': str(current.get('active_preset', '') or DEFAULT_ACTIVE_PRESET).strip() or DEFAULT_ACTIVE_PRESET,
             'narrator': {
                 'model': _pick_model_with_fallback([narrator_current], narrator_available),
             },
@@ -302,11 +327,88 @@ def load_user_model_store() -> dict:
     else:
         source = _legacy_model_source()
         slim = _slim_runtime_from_legacy(source if isinstance(source, dict) else {}, site)
+        source_sources = source.get('sources', {}) if isinstance(source, dict) and isinstance(source.get('sources'), dict) else {}
+        slim['active_preset'] = str(current.get('active_preset') or source_sources.get('active_preset') or DEFAULT_ACTIVE_PRESET).strip() or DEFAULT_ACTIVE_PRESET
         if isinstance(current.get('advanced_models'), dict):
             slim['advanced_models'] = copy.deepcopy(current['advanced_models'])
     if current != slim:
         write_json(USER_MODEL_RUNTIME_CONFIG, slim)
     return slim
+
+
+def list_narrator_presets() -> list[dict]:
+    presets = []
+    root = user_presets_root()
+    for path in sorted(root.glob('*.json')) if root.exists() else []:
+        try:
+            data = read_json(path)
+        except Exception:
+            data = {}
+        name = str(data.get('name') or path.stem).strip() or path.stem
+        presets.append({
+            'id': path.stem,
+            'name': name,
+            'description': str(data.get('description') or '').strip(),
+        })
+    return presets
+
+
+def _available_preset_ids() -> set[str]:
+    return {item['id'] for item in list_narrator_presets()}
+
+
+def _normalize_preset_id(value: str) -> str:
+    preset_id = str(value or '').strip()
+    if not re.fullmatch(r'[0-9A-Za-z_.\-]+', preset_id):
+        raise ValueError('invalid preset id')
+    return preset_id
+
+
+def _preset_path(preset_id: str) -> Path:
+    safe_id = _normalize_preset_id(preset_id)
+    root = user_presets_root().resolve(strict=False)
+    path = (root / f'{safe_id}.json').resolve(strict=False)
+    try:
+        path.relative_to(root)
+    except ValueError as err:
+        raise ValueError('invalid preset id') from err
+    return path
+
+
+def load_narrator_preset(preset_id: str) -> dict:
+    path = _preset_path(preset_id)
+    if not path.exists():
+        raise ValueError('preset not found')
+    return {
+        'id': path.stem,
+        'content': read_json(path),
+    }
+
+
+def save_narrator_preset(preset_id: str, content: dict) -> dict:
+    if not isinstance(content, dict):
+        raise ValueError('preset content must be an object')
+    path = _preset_path(preset_id)
+    write_json(path, content)
+    return load_narrator_preset(path.stem)
+
+
+def delete_narrator_preset(preset_id: str) -> dict:
+    path = _preset_path(preset_id)
+    if not path.exists():
+        raise ValueError('preset not found')
+    presets_before = list_narrator_presets()
+    if len(presets_before) <= 1:
+        raise ValueError('cannot delete the last preset')
+    store = load_user_model_store()
+    active_before = str(store.get('active_preset', '') or DEFAULT_ACTIVE_PRESET)
+    path.unlink()
+    remaining = list_narrator_presets()
+    remaining_ids = {item['id'] for item in remaining}
+    if active_before == path.stem or active_before not in remaining_ids:
+        store['active_preset'] = next((item['id'] for item in remaining), DEFAULT_ACTIVE_PRESET)
+        write_json(USER_MODEL_RUNTIME_CONFIG, store)
+    return get_model_config_snapshot()
 
 
 def _site_status(site: dict) -> tuple[str, str]:
@@ -368,7 +470,9 @@ def update_site_config(payload: dict) -> dict:
         raise ValueError('site payload must be an object')
     store = load_site_store()
     site = store['site']
-    site['baseUrl'] = _normalize_base_url(payload.get('baseUrl', payload.get('base_url', site.get('baseUrl', ''))))
+    previous_base_url = str(site.get('baseUrl', '') or '').strip().rstrip('/')
+    next_base_url = _validate_remote_base_url(payload.get('baseUrl', payload.get('base_url', site.get('baseUrl', ''))))
+    site['baseUrl'] = next_base_url
     site['api'] = _normalize_api(payload.get('api', site.get('api', 'openai-completions')))
     replace_api_key = bool(payload.get('replace_api_key'))
     api_key_value = payload.get('apiKey', payload.get('api_key'))
@@ -376,6 +480,8 @@ def update_site_config(payload: dict) -> dict:
         site['apiKey'] = str(api_key_value or '').strip()
     elif api_key_value not in (None, ''):
         site['apiKey'] = str(api_key_value).strip()
+    elif previous_base_url and next_base_url != previous_base_url:
+        site['apiKey'] = ''
     site['models'] = _normalize_models(site.get('models', []), site['api'])
     write_json(USER_SITE_CONFIG, {'site': site})
     return get_site_config_snapshot()
@@ -402,7 +508,7 @@ def _extract_discovered_models(data: dict, api_type: str) -> list[dict]:
 def discover_site_models() -> dict:
     store = load_site_store()
     site = store['site']
-    base_url = _normalize_base_url(site.get('baseUrl', ''), required=True)
+    base_url = _validate_remote_base_url(site.get('baseUrl', ''))
     api_type = _normalize_api(site.get('api', 'openai-completions'))
     headers = {'Content-Type': 'application/json'}
     resolved_key = _resolve_api_key(site.get('apiKey', ''))
@@ -441,6 +547,8 @@ def get_model_config_snapshot() -> dict:
     store = load_user_model_store()
     return {
         'site': get_site_config_snapshot(),
+        'active_preset': str(store.get('active_preset', '') or DEFAULT_ACTIVE_PRESET),
+        'presets': list_narrator_presets(),
         'narrator': copy.deepcopy(store.get('narrator', DEFAULT_NARRATOR)),
         'state_keeper': copy.deepcopy(store.get('state_keeper', DEFAULT_STATE_KEEPER)),
         'advanced_models': copy.deepcopy(store.get('advanced_models', DEFAULT_ADVANCED_MODELS)),
@@ -455,6 +563,11 @@ def update_model_config(payload: dict) -> dict:
     if not available:
         raise ValueError('site models are empty; fetch models first')
     store = load_user_model_store()
+    if 'active_preset' in payload:
+        active_preset = str(payload.get('active_preset', '') or '').strip()
+        if active_preset not in _available_preset_ids():
+            raise ValueError('active preset not found')
+        store['active_preset'] = active_preset
     if 'narrator' in payload:
         narrator = payload.get('narrator')
         if not isinstance(narrator, dict):
@@ -516,6 +629,9 @@ def load_runtime_config() -> dict:
             **copy.deepcopy(DEFAULT_ADVANCED_MODELS[role_name]),
             **copy.deepcopy(advanced.get(role_name, {})),
         }
+    sources = global_cfg.get('sources', {}) if isinstance(global_cfg.get('sources'), dict) else {}
+    sources['active_preset'] = str(user_store.get('active_preset', '') or sources.get('active_preset') or DEFAULT_ACTIVE_PRESET)
+    global_cfg['sources'] = sources
     global_cfg['models'] = models
     global_cfg['roles'] = copy.deepcopy(SYSTEM_ROLE_DEFAULTS)
     return global_cfg
@@ -567,6 +683,7 @@ def resolve_provider_model(role: str = 'narrator') -> dict:
     if model is None:
         raise RuntimeError(f'No model configured for role {role}')
     resolved_provider = dict(provider)
+    resolved_provider['baseUrl'] = _validate_remote_base_url(resolved_provider.get('baseUrl', ''))
     resolved_provider['apiKey'] = _resolve_api_key(resolved_provider.get('apiKey', ''))
     max_output_tokens = role_cfg.get('max_output_tokens', 1200)
     override_max_tokens = str(os.environ.get(override_max_tokens_env, '') or '').strip()

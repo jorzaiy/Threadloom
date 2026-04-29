@@ -14,12 +14,15 @@ from character_manager import delete_character_card, import_character_card_base6
 from handler_message import handle_message
 from import_sillytavern_chat import import_sillytavern_from_content, preview_chat_import
 from model_config import (
+    delete_narrator_preset,
     delete_provider_config,
     discover_provider_models,
     discover_site_models,
     get_model_config_snapshot,
     get_site_config_snapshot,
+    load_narrator_preset,
     list_provider_configs,
+    save_narrator_preset,
     update_model_config,
     update_site_config,
     upsert_provider_config,
@@ -36,8 +39,9 @@ from user_manager import (
 )
 
 
-HOST = '0.0.0.0'
+HOST = '127.0.0.1'
 PORT = 8765
+MAX_REQUEST_BYTES = 16 * 1024 * 1024
 SESSION_LOCKS: dict[str, threading.Lock] = {}
 SESSION_LOCKS_GUARD = threading.Lock()
 
@@ -88,7 +92,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(body)))
-            for key, value in (extra_headers or {}).items():
+            headers = self._security_headers(content_type)
+            headers.update(extra_headers or {})
+            for key, value in headers.items():
                 self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
@@ -98,6 +104,39 @@ class Handler(BaseHTTPRequestHandler):
                 logger.info('Client disconnected before response could be sent on %s', self.path)
                 return False
             raise
+
+    def _security_headers(self, content_type: str) -> dict[str, str]:
+        headers = {
+            'X-Content-Type-Options': 'nosniff',
+            'Referrer-Policy': 'strict-origin-when-cross-origin',
+            'X-Frame-Options': 'DENY',
+            'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+        }
+        if content_type.startswith('text/html'):
+            headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; script-src 'self' https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+        if content_type.startswith('application/json'):
+            headers['Cache-Control'] = 'no-store'
+        return headers
+
+    def _read_json_payload(self) -> dict | None:
+        try:
+            length = int(self.headers.get('Content-Length', '0') or 0)
+        except ValueError:
+            self._invalid_input('invalid content length')
+            return None
+        if length > MAX_REQUEST_BYTES:
+            self._send(413, {'error': {'code': 'PAYLOAD_TOO_LARGE', 'message': 'request body is too large'}})
+            return None
+        raw = self.rfile.read(length) if length > 0 else b'{}'
+        try:
+            data = json.loads(raw.decode('utf-8'))
+        except Exception:
+            self._invalid_input('invalid json')
+            return None
+        if not isinstance(data, dict):
+            self._invalid_input('json payload must be an object')
+            return None
+        return data
 
     def _send(self, status: int, payload: dict):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -238,6 +277,13 @@ class Handler(BaseHTTPRequestHandler):
                 payload = get_model_config_snapshot()
                 payload['web'] = web_runtime_settings()
                 return self._send(200, payload)
+
+            if parsed.path == '/api/narrator-preset':
+                preset_id = (qs.get('preset_id') or qs.get('id') or [''])[0].strip()
+                try:
+                    return self._send(200, load_narrator_preset(preset_id))
+                except ValueError as err:
+                    return self._invalid_input(str(err))
 
             if parsed.path == '/api/users':
                 if not MULTI_USER_PRODUCT_ENABLED:
@@ -382,12 +428,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        length = int(self.headers.get('Content-Length', '0') or 0)
-        raw = self.rfile.read(length) if length > 0 else b'{}'
-        try:
-            payload = json.loads(raw.decode('utf-8'))
-        except Exception:
-            return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': 'invalid json'}})
+        payload = self._read_json_payload()
+        if payload is None:
+            return
 
         try:
             if parsed.path == '/api/new-game':
@@ -589,6 +632,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self._invalid_input(str(err))
                 return self._send(200, result)
 
+            if parsed.path == '/api/narrator-preset':
+                action = str(payload.get('action', 'save') or 'save').strip()
+                preset_id = str(payload.get('preset_id') or payload.get('id') or '').strip()
+                try:
+                    if action == 'delete':
+                        return self._send(200, delete_narrator_preset(preset_id))
+                    if action == 'save':
+                        return self._send(200, save_narrator_preset(preset_id, payload.get('content')))
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                return self._invalid_input('unsupported narrator preset action')
+
             if parsed.path == '/api/providers/discover':
                 try:
                     result = discover_provider_models(str(payload.get('name', '') or ''))
@@ -672,12 +727,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         parsed = urlparse(self.path)
-        length = int(self.headers.get('Content-Length', '0') or 0)
-        raw = self.rfile.read(length) if length > 0 else b'{}'
-        try:
-            payload = json.loads(raw.decode('utf-8'))
-        except Exception:
-            return self._invalid_input('invalid json')
+        payload = self._read_json_payload()
+        if payload is None:
+            return
 
         try:
             if parsed.path == '/api/providers':
