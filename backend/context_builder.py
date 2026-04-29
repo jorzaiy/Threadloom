@@ -10,7 +10,7 @@ from clue_bootstrap_agent import load_clue_registry
 from player_profile import load_effective_player_profile, render_runtime_player_profile_markdown
 from selector import build_selector_decision
 from runtime_store import is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history, load_persona_index, load_state, load_summary, load_summary_chunks
-from paths import APP_ROOT, SHARED_ROOT, resolve_layered_source
+from paths import APP_ROOT, SHARED_ROOT, read_json_file, resolve_layered_source
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
@@ -22,7 +22,7 @@ def read_text(path: Path) -> str:
 
 
 def read_json(path: Path):
-    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    return read_json_file(path) if path.exists() else {}
 
 
 def _distilled_lore_paths(lorebook_path: Path) -> tuple[Path, Path]:

@@ -10,9 +10,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 
 try:
-    from .paths import APP_ROOT, resolve_layered_source, user_config_root, user_presets_root
+    from .paths import APP_ROOT, read_json_file, resolve_layered_source, user_config_root, user_presets_root
 except ImportError:
-    from paths import APP_ROOT, resolve_layered_source, user_config_root, user_presets_root
+    from paths import APP_ROOT, read_json_file, resolve_layered_source, user_config_root, user_presets_root
 
 GLOBAL_RUNTIME_CONFIG = APP_ROOT / 'config' / 'runtime.json'
 GLOBAL_RUNTIME_EXAMPLE = APP_ROOT / 'config' / 'runtime.example.json'
@@ -86,7 +86,7 @@ SYSTEM_MODEL_DEFAULTS = copy.deepcopy(DEFAULT_ADVANCED_MODELS)
 
 
 def read_json(path: Path):
-    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    return read_json_file(path) if path.exists() else {}
 
 
 def write_json(path: Path, payload: dict) -> None:

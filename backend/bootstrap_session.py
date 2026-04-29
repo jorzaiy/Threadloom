@@ -4,7 +4,7 @@ from pathlib import Path
 
 from runtime_store import ensure_session_dirs, load_canon, load_context, load_state, load_summary, save_canon, save_context, save_state, seed_default_state, session_paths
 from state_bridge import parse_root_state_markdown
-from paths import APP_ROOT, SHARED_ROOT, resolve_layered_source, resolve_source_key
+from paths import APP_ROOT, SHARED_ROOT, read_json_file, resolve_layered_source, resolve_source_key
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
@@ -16,7 +16,7 @@ def read_text(path: Path) -> str:
 
 
 def read_json(path: Path):
-    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    return read_json_file(path) if path.exists() else {}
 
 
 def load_runtime_config() -> dict:
