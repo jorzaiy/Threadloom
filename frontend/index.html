@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; script-src 'self' https://cdn.jsdelivr.net" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; script-src 'self' https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'; frame-ancestors 'none'" />
     <title>Threadloom</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -234,11 +234,17 @@
                   <span>状态提取</span>
                   <select id="stateKeeperModelSelect"></select>
                 </label>
+                <label class="field field-wide">
+                  <span>叙事预设</span>
+                  <select id="narratorPresetSelect"></select>
+                </label>
               </div>
               <div class="settings-actions">
+                <button id="editNarratorPresetBtn" type="button" class="subtle-btn">编辑预设</button>
+                <button id="deleteNarratorPresetBtn" type="button" class="subtle-danger">删除预设</button>
                 <button id="saveModelConfigBtn" type="button">保存模型配置</button>
               </div>
-              <div id="modelConfigNote" class="inline-feedback">温度和最大输出长度由系统默认管理。</div>
+              <div id="modelConfigNote" class="inline-feedback">温度和最大输出长度由系统默认管理；叙事预设只影响 narrator 提示词。</div>
             </section>
           </div>
 

@@ -35,6 +35,9 @@ const loadEarlierBtn = document.getElementById('loadEarlierBtn');
 const saveModelConfigBtn = document.getElementById('saveModelConfigBtn');
 const narratorModelSelect = document.getElementById('narratorModelSelect');
 const stateKeeperModelSelect = document.getElementById('stateKeeperModelSelect');
+const narratorPresetSelect = document.getElementById('narratorPresetSelect');
+const editNarratorPresetBtn = document.getElementById('editNarratorPresetBtn');
+const deleteNarratorPresetBtn = document.getElementById('deleteNarratorPresetBtn');
 const siteBaseUrlInput = document.getElementById('siteBaseUrlInput');
 const siteApiTypeSelect = document.getElementById('siteApiTypeSelect');
 const siteApiKeyInput = document.getElementById('siteApiKeyInput');
@@ -121,6 +124,8 @@ let siteConfig = {
   models: [],
 };
 let modelConfig = {
+  active_preset: 'world-sim-core',
+  presets: [],
   narrator: {
     model: '',
   },
@@ -134,6 +139,7 @@ let userProfile = {};
 let userAvatarUrl = null;
 let currentCharacterProfileOverride = {};
 let profileEditorMode = '';
+let presetEditorId = '';
 
 function hideCharacterProfileDraft() {
   if (charWizardStep3) charWizardStep3.hidden = true;
@@ -413,10 +419,15 @@ function renderSiteConfig() {
 
 function renderModelConfig() {
   const models = currentSiteModelChoices();
+  const presets = (modelConfig.presets || []).map(item => ({
+    value: item.id,
+    label: item.id,
+  }));
   setSelectOptions(narratorModelSelect, models, modelConfig.narrator?.model, item => item.label);
   setSelectOptions(stateKeeperModelSelect, models, modelConfig.state_keeper?.model, item => item.label);
+  setSelectOptions(narratorPresetSelect, presets, modelConfig.active_preset, item => item.label);
   if (modelConfigNote && !modelConfigNote.dataset.kind) {
-    modelConfigNote.textContent = '温度和最大输出长度已固定到默认配置，由管理员维护。';
+    modelConfigNote.textContent = '温度和最大输出长度已固定到默认配置；叙事预设只影响 narrator 提示词。';
   }
 }
 
@@ -429,11 +440,14 @@ function validateSiteDraft(draft) {
 
 function validateRuntimeDraft(draft) {
   const available = new Set((siteConfig.models || []).map(item => item.id));
+  const presetIds = new Set((modelConfig.presets || []).map(item => item.id));
   if (!draft.narrator.model) return 'Narrator 模型不能为空';
   if (!draft.state_keeper.model) return 'State Keeper 模型不能为空';
+  if (!draft.active_preset) return '叙事预设不能为空';
   if (available.size === 0) return '当前还没有模型列表，请先点击“获取模型”';
   if (!available.has(draft.narrator.model)) return 'Narrator 模型不在当前站点模型列表中';
   if (!available.has(draft.state_keeper.model)) return 'State Keeper 模型不在当前站点模型列表中';
+  if (presetIds.size > 0 && !presetIds.has(draft.active_preset)) return '叙事预设不存在';
   return '';
 }
 
@@ -663,6 +677,7 @@ async function loadModelConfig() {
 
 async function saveModelRuntimeConfig() {
   const draft = {
+    active_preset: narratorPresetSelect.value,
     narrator: {
       model: narratorModelSelect.value,
     },
@@ -705,6 +720,57 @@ async function saveModelRuntimeConfig() {
   }
 }
 
+async function loadNarratorPresetContent(presetId) {
+  if (!presetId) throw new Error('叙事预设不能为空');
+  return apiJson(`/api/narrator-preset?preset_id=${encodeURIComponent(presetId)}`);
+}
+
+async function openNarratorPresetEditor() {
+  const presetId = narratorPresetSelect?.value || modelConfig.active_preset;
+  const data = await loadNarratorPresetContent(presetId);
+  presetEditorId = data.id || presetId;
+  openProfileEditor('preset', `编辑叙事预设：${presetEditorId}.json`, '叙事预设 JSON', data.content || {});
+}
+
+async function saveNarratorPresetEditor() {
+  if (!presetEditorId) throw new Error('叙事预设不能为空');
+  let content;
+  try {
+    content = JSON.parse(profileEditorInput.value || '{}');
+  } catch (err) {
+    throw new Error(`JSON 解析失败：${err.message}`);
+  }
+  await apiJson('/api/narrator-preset', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'save', preset_id: presetEditorId, content}),
+  });
+  await loadModelConfig();
+}
+
+async function deleteSelectedNarratorPreset() {
+  const presetId = narratorPresetSelect?.value || modelConfig.active_preset;
+  if (!presetId) throw new Error('叙事预设不能为空');
+  const ok = window.confirm(`删除叙事预设 ${presetId}.json？此操作不可撤销。`);
+  if (!ok) return;
+  const data = await apiJson('/api/narrator-preset', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'delete', preset_id: presetId}),
+  });
+  modelConfig = {
+    ...modelConfig,
+    ...data,
+  };
+  if (data.site) {
+    siteConfig = {
+      ...siteConfig,
+      ...data.site,
+    };
+  }
+  renderModelConfig();
+}
+
 function currentUserDisplayName() {
   const name = String(userProfile?.name || userProfile?.courtesyName || '').trim();
   return name || 'user';
@@ -735,6 +801,7 @@ function openProfileEditor(mode, title, label, payload) {
 
 function closeProfileEditor() {
   profileEditorMode = '';
+  presetEditorId = '';
   if (profileEditorBackdrop) profileEditorBackdrop.hidden = true;
   if (profileEditorPanel) {
     profileEditorPanel.dataset.open = 'false';
@@ -1066,7 +1133,21 @@ function renderMessages(items) {
 
 function renderMarkdown(text) {
   if (typeof marked !== 'undefined') {
-    return marked.parse(text, { breaks: true, gfm: true });
+    const root = document.createElement('div');
+    root.innerHTML = marked.parse(text, { breaks: true, gfm: true });
+    root.querySelectorAll('script, iframe, object, embed, link, meta, style, form').forEach(node => node.remove());
+    root.querySelectorAll('*').forEach(node => {
+      for (const attr of [...node.attributes]) {
+        const name = attr.name.toLowerCase();
+        const value = attr.value.trim().toLowerCase();
+        if (name.startsWith('on') || name === 'style') {
+          node.removeAttribute(attr.name);
+        } else if ((name === 'href' || name === 'src') && value && !value.startsWith('#') && !value.startsWith('/') && !value.startsWith('http://') && !value.startsWith('https://')) {
+          node.removeAttribute(attr.name);
+        }
+      }
+    });
+    return root.innerHTML;
   }
   return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -1891,6 +1972,39 @@ saveModelConfigBtn?.addEventListener('click', async () => {
   }
 });
 
+editNarratorPresetBtn?.addEventListener('click', async () => {
+  try {
+    await openNarratorPresetEditor();
+  } catch (err) {
+    if (modelConfigNote) {
+      modelConfigNote.textContent = err.message;
+      modelConfigNote.dataset.kind = 'error';
+    }
+  }
+});
+
+deleteNarratorPresetBtn?.addEventListener('click', async () => {
+  try {
+    await deleteSelectedNarratorPreset();
+    if (modelConfigNote) {
+      modelConfigNote.textContent = '叙事预设已删除';
+      modelConfigNote.dataset.kind = 'ok';
+    }
+  } catch (err) {
+    if (modelConfigNote) {
+      modelConfigNote.textContent = err.message;
+      modelConfigNote.dataset.kind = 'error';
+    }
+  }
+});
+
+narratorPresetSelect?.addEventListener('change', () => {
+  if (modelConfigNote) {
+    modelConfigNote.textContent = '预设已切换，点击“保存模型配置”后生效。';
+    modelConfigNote.dataset.kind = '';
+  }
+});
+
 editBaseUserProfileBtn?.addEventListener('click', () => {
   openProfileEditor('base', '维护基础设定', '当前用户基础设定（JSON）', userProfile);
 });
@@ -2000,6 +2114,13 @@ profileEditorSaveBtn?.addEventListener('click', async () => {
       if (userProfileNote) {
         userProfileNote.textContent = '当前卡强化设定已保存';
         userProfileNote.dataset.kind = 'ok';
+      }
+    } else if (profileEditorMode === 'preset') {
+      await saveNarratorPresetEditor();
+      setStatus('叙事预设已保存', 'ok');
+      if (modelConfigNote) {
+        modelConfigNote.textContent = '叙事预设已保存';
+        modelConfigNote.dataset.kind = 'ok';
       }
     }
     closeProfileEditor();
