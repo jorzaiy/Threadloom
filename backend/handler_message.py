@@ -391,6 +391,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             return finalize_response(response, trace=trace)
         state['opening_started'] = True
         state['state_keeper_bootstrapped'] = False
+        # First authoritative turn commit after keeper/arbiter/thread/NPC
+        # merges. A later actor-registry pass may enrich the same turn state.
         save_state(session_id, state)
 
         state_error = None
@@ -851,6 +853,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state['continuity_hints'] = normalized_hint_entries(session_id)
     state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
     state = resolve_important_npc_continuity(state)
+    # Final authoritative turn commit after actor registry adds stable actor,
+    # possession, visibility, and knowledge bindings.
     save_state(session_id, state)
     recent_pairs = []
     history_after_append = load_history(session_id)
