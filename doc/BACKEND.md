@@ -27,7 +27,7 @@
 - `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重
 - `event_ledger.py`：事件账本；产出阶段事件摘要，不再负责人物短期状态写回
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器
-- `opening.py`：opening 菜单与开局状态机
+- `opening.py`：opening 菜单与开局状态机；其 state 写入是阶段 checkpoint，最终 turn state 仍由 `handler_message.py` 统一提交
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
 - `session_lifecycle.py`：new game / delete / session list

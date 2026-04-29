@@ -151,6 +151,9 @@ def initialize_opening_state(session_id: str) -> dict:
         'opening_started': False,
         'opening_choice': None,
     }
+    # Opening writes are phase checkpoints: they persist menu/direct-start state
+    # before the narrator turn. Handler_message.py still owns the final turn
+    # commit after keeper, arbiter, thread, and actor merges complete.
     save_state(session_id, state)
     return state
 
@@ -174,5 +177,7 @@ def initialize_opening_choice_state(session_id: str, choice: str) -> dict:
         'opening_started': False,
         'opening_choice': choice,
     }
+    # Persist the chosen opening before generating the first scene. This is a
+    # checkpoint, not the authoritative end-of-turn commit.
     save_state(session_id, state)
     return state
