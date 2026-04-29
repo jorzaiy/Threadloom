@@ -35,6 +35,7 @@ web input
 - `history` 只保留最近窗口承接，不再承担完整骨架职责。
 - 更早历史优先收敛成 keeper archive，而不是自由摘要层。
 - 写回时先收口到结构化状态；`summary` 可继续保留为调试/运维产物，但不再主导 narrator。
+- state 写入分三类：opening 只做开局状态机 checkpoint；`handler_message.py` 负责每个完整 turn 的最终权威提交；keeper archive 写入只维护派生缓存。
 - keeper 写回按增量 patch 执行：骨架字段由 skeleton keeper 维护，fill keeper 只补信号、物件、持有关系、可见性和本轮知情 delta。
 - `knowledge_scope` 是本轮 delta，长期知识落到 `knowledge_records`；物件退出 active 状态通过 `lifecycle_status` 和 `graveyard_objects` 表达。
 - keeper archive 是派生缓存，刷新时会清理超过当前有效 pair index 的未来 records，避免撤回/重试后的旧分支污染召回。

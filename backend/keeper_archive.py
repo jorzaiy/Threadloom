@@ -119,6 +119,12 @@ def load_keeper_record_archive(
     use_llm: bool = True,
     allow_archive_write: bool = True,
 ) -> dict:
+    """Load the derived keeper archive.
+
+    The archive is a cache, so default reads may rebuild/save missing or corrupt
+    cache files. Pass allow_archive_write=False for inspection paths that must
+    not touch disk.
+    """
     path = session_paths(session_id)['keeper_archive']
     if not path.exists():
         archive = build_keeper_record_archive(session_id, skip_bootstrap=skip_bootstrap, use_llm=use_llm)
