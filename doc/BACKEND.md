@@ -14,8 +14,8 @@
 - `server.py` 当前默认绑定 `127.0.0.1`，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
-- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、object lifecycle、possession/visibility 合法覆盖与 `knowledge_scope` 本轮 delta 标准化
-- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前只维护物品、持有关系、情报与信号，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层
+- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、object lifecycle、possession/visibility 合法覆盖与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
+- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前只维护物品、持有关系、情报与信号，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
 - `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流
