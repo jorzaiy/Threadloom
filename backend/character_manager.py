@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import tempfile
 from urllib.parse import quote
@@ -13,7 +12,7 @@ from card_hints import invalidate_card_hints_cache
 from card_importer import extract_card_json, import_card_to_target, load_raw_card
 from lorebook_distiller import rebuild_lorebook_distillation
 from player_profile import build_player_profile_override_draft, load_base_player_profile
-from paths import APP_ROOT, active_character_id, active_user_id, active_user_label, character_root, normalize_session_id, user_root
+from paths import APP_ROOT, active_character_id, active_user_id, active_user_label, character_root, normalize_session_id, read_json_file, slugify, user_root
 from runtime_store import invalidate_history_cache
 
 
@@ -21,20 +20,14 @@ ACTIVE_CHARACTER_FILE = user_root() / 'config' / 'active-character.json'
 
 
 def _slug(text: str, fallback: str = 'character') -> str:
-    value = str(text or '').strip()
-    if not value:
-        return fallback
-    value = re.sub(r'[\\/:\s]+', '-', value)
-    value = re.sub(r'[^0-9A-Za-z_\-\u4e00-\u9fff·]+', '', value)
-    value = value.strip('-')
-    return value or fallback
+    return slugify(text, fallback)
 
 
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
+        return read_json_file(path)
     except Exception:
         return {}
 

@@ -32,7 +32,7 @@ def shared_path(*parts: str) -> Path:
     return SHARED_ROOT.joinpath(*parts)
 
 
-def _slug(text: str, fallback: str) -> str:
+def slugify(text: str, fallback: str) -> str:
     value = str(text or '').strip()
     if not value:
         return fallback
@@ -40,6 +40,16 @@ def _slug(text: str, fallback: str) -> str:
     value = re.sub(r'[^0-9A-Za-z_\-\u4e00-\u9fff·]+', '', value)
     value = value.strip('-')
     return value or fallback
+
+
+def _slug(text: str, fallback: str) -> str:
+    return slugify(text, fallback)
+
+
+def read_json_file(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding='utf-8'))
 
 
 def normalize_session_id(session_id: str) -> str:
@@ -118,7 +128,7 @@ def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
+        return read_json_file(path)
     except Exception:
         return {}
 

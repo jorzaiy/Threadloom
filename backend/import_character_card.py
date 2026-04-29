@@ -3,21 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 
 from card_importer import extract_card_json, import_card, import_card_to_target, import_raw_card_file, load_raw_card
-from paths import active_user_id, character_source_root, character_root
+from paths import active_user_id, character_source_root, character_root, slugify
 
 
 def _slug(text: str, fallback: str = 'character') -> str:
-    value = str(text or '').strip()
-    if not value:
-        return fallback
-    value = re.sub(r'[\\/:\s]+', '-', value)
-    value = re.sub(r'[^0-9A-Za-z_\-\u4e00-\u9fff·]+', '', value)
-    value = value.strip('-')
-    return value or fallback
+    return slugify(text, fallback)
 
 
 def main() -> int:
