@@ -42,7 +42,7 @@
     "show_debug_panel": false
   },
   "trace": {
-    "enabled": true,
+    "enabled": false,
     "keep_last_turns": 40
   }
 }
