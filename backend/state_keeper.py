@@ -14,8 +14,8 @@ from typing import Optional
 try:
     from .llm_manager import call_role_llm
     from .local_model_client import parse_json_response
-    from .runtime_store import load_state, save_state, seed_default_state
-    from .state_bridge import infer_role_label, normalize_state_dict
+    from .runtime_store import load_state, seed_default_state
+    from .state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
     from .model_config import load_runtime_config
     from .state_fragment import build_state_from_fragment
     from .name_sanitizer import is_protagonist_name, protagonist_names
@@ -28,8 +28,8 @@ try:
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
-    from runtime_store import load_state, save_state, seed_default_state
-    from state_bridge import infer_role_label, normalize_state_dict
+    from runtime_store import load_state, seed_default_state
+    from state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
     from model_config import load_runtime_config
     from state_fragment import build_state_from_fragment
     from name_sanitizer import is_protagonist_name, protagonist_names
@@ -437,44 +437,11 @@ def _extract_signal_list_field(text: str, field: str) -> list[dict] | None:
 
 def _normalize_carryover_signals(payload: dict) -> list[dict]:
     items = payload.get('carryover_signals', []) if isinstance(payload.get('carryover_signals', []), list) else []
-    normalized = []
-    seen = set()
-    for item in items:
-        if isinstance(item, str):
-            signal_type = 'mixed'
-            text = str(item or '').strip()
-        elif isinstance(item, dict):
-            signal_type = str(item.get('type', '') or 'mixed').strip() or 'mixed'
-            text = str(item.get('text', '') or '').strip()
-        else:
-            continue
-        if not text:
-            continue
-        key = (signal_type, text)
-        if key in seen:
-            continue
-        seen.add(key)
-        normalized.append({'type': signal_type, 'text': text})
-        if len(normalized) >= 6:
-            break
-    return normalized
+    return normalize_carryover_signals(items)
 
 
 def _derive_risks_clues_from_signals(signals: list[dict]) -> tuple[list[str], list[str]]:
-    risks = []
-    clues = []
-    for item in signals or []:
-        if not isinstance(item, dict):
-            continue
-        signal_type = str(item.get('type', '') or 'mixed').strip() or 'mixed'
-        text = str(item.get('text', '') or '').strip()
-        if not text:
-            continue
-        if signal_type in {'risk', 'mixed'} and text not in risks:
-            risks.append(text)
-        if signal_type in {'clue', 'mixed'} and text not in clues:
-            clues.append(text)
-    return risks[:4], clues[:4]
+    return derive_risks_clues_from_signals(signals)
 
 
 def _derive_signals_from_legacy_lists(payload: dict) -> list[dict]:
@@ -609,11 +576,7 @@ def _ensure_object_for_label(label: str, objects_by_label: dict[str, dict], next
 
 
 def _normalize_object_label(text: str) -> str:
-    value = str(text or '').strip()
-    if not value:
-        return ''
-    value = value.split('（', 1)[0].split('(', 1)[0].strip()
-    return value
+    return normalize_keeper_object_label(text)
 
 
 def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> dict:
@@ -1064,31 +1027,15 @@ def _coerce_candidate_entity_item(item) -> dict | None:
 
 
 def _descriptor_signature(name: str) -> str:
-    text = sanitize_runtime_name(name)
-    if not text:
-        return ''
-    for suffix in (
-        '身影', '背影', '影子', '影', '之人', '那人', '此人', '来人',
-        '男人', '女人', '女子', '青年', '少年', '老者', '壮汉',
-        '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
-    ):
-        if text.endswith(suffix) and len(text) > len(suffix):
-            return text[:-len(suffix)].strip()
-    return text
+    return entity_descriptor_signature(name)
 
 
 def _labels_compatible(left: str, right: str) -> bool:
     left_text = sanitize_runtime_name(left)
     right_text = sanitize_runtime_name(right)
-    if not left_text or not right_text:
-        return False
-    if left_text == right_text:
-        return True
     if _is_shadow_like_label(left_text) or _is_shadow_like_label(right_text):
         return False
-    left_sig = _descriptor_signature(left_text)
-    right_sig = _descriptor_signature(right_text)
-    return bool(left_sig and right_sig and left_sig == right_sig)
+    return entity_labels_compatible(left_text, right_text)
 
 
 def _is_shadow_like_label(name: str) -> bool:
@@ -1532,7 +1479,6 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
         'fallback_used': False,
         'fallback_reason': None,
     }
-    save_state(session_id, new_state)
     if return_trace:
         return new_state, {
             'baseline_state': baseline_state,

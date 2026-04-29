@@ -3,14 +3,42 @@ import unittest
 from unittest.mock import patch
 
 from backend.state_fragment import extract_reply_skeleton, merge_reply_skeleton, merge_state_skeleton
+from backend import state_keeper
 from backend.state_bridge import normalize_state_dict
 from backend.actor_registry import update_actor_registry
 from backend.arbiter_state import merge_arbiter_state
 from backend.state_keeper import _call_state_keeper_llm, _merge_keeper_fill, _parse_fill_payload
+from backend.state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, normalize_carryover_signals, normalize_keeper_object_label
 from backend.handler_message import _keeper_fallback_bootstrapped
 
 
 class StateFragmentTest(unittest.TestCase):
+    def test_shared_normalization_helpers_preserve_current_contract(self):
+        self.assertEqual(entity_descriptor_signature('灰衣人'), '灰衣')
+        self.assertTrue(entity_labels_compatible('灰衣人', '灰衣'))
+        self.assertFalse(entity_labels_compatible('暗影', '暗'))
+        self.assertEqual(normalize_keeper_object_label('纸封（坊署证物）'), '纸封')
+
+        signals = normalize_carryover_signals([
+            {'type': 'risk', 'text': '巡捕仍在盘查'},
+            {'type': 'risk', 'text': '巡捕仍在盘查'},
+            {'type': 'clue', 'text': '纸封未拆'},
+            '掌柜仍在隐瞒账册',
+        ])
+        self.assertEqual(signals, [
+            {'type': 'risk', 'text': '巡捕仍在盘查'},
+            {'type': 'clue', 'text': '纸封未拆'},
+            {'type': 'mixed', 'text': '掌柜仍在隐瞒账册'},
+        ])
+        self.assertEqual(derive_risks_clues_from_signals(signals), (
+            ['巡捕仍在盘查', '掌柜仍在隐瞒账册'],
+            ['纸封未拆', '掌柜仍在隐瞒账册'],
+        ))
+
+    def test_state_keeper_returns_state_but_does_not_own_persistence(self):
+        self.assertFalse(hasattr(state_keeper, 'save_state'))
+
+
     def test_normalize_state_does_not_inherit_stale_arbiter_signals(self):
         prev = {
             'time': '夜里',

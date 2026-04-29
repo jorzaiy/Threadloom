@@ -235,7 +235,7 @@ def _entity_name_set(entity: dict) -> set[str]:
     return names
 
 
-def _descriptor_signature(name: str) -> str:
+def entity_descriptor_signature(name: str) -> str:
     text = sanitize_runtime_name(name)
     if not text:
         return ''
@@ -245,7 +245,15 @@ def _descriptor_signature(name: str) -> str:
     return text
 
 
+def _descriptor_signature(name: str) -> str:
+    return entity_descriptor_signature(name)
+
+
 def _labels_compatible(left: str, right: str) -> bool:
+    return entity_labels_compatible(left, right)
+
+
+def entity_labels_compatible(left: str, right: str) -> bool:
     left_text = sanitize_runtime_name(left)
     right_text = sanitize_runtime_name(right)
     if not left_text or not right_text:
@@ -257,6 +265,54 @@ def _labels_compatible(left: str, right: str) -> bool:
     left_sig = _descriptor_signature(left_text)
     right_sig = _descriptor_signature(right_text)
     return bool(left_sig and right_sig and left_sig == right_sig)
+
+
+def normalize_carryover_signals(items) -> list[dict]:
+    out = []
+    seen = set()
+    for item in items or []:
+        if isinstance(item, str):
+            signal_type = 'mixed'
+            text = str(item or '').strip()
+        elif isinstance(item, dict):
+            signal_type = str(item.get('type', '') or 'mixed').strip() or 'mixed'
+            text = str(item.get('text', '') or '').strip()
+        else:
+            continue
+        if not text:
+            continue
+        key = (signal_type, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({'type': signal_type, 'text': text})
+        if len(out) >= 6:
+            break
+    return out
+
+
+def derive_risks_clues_from_signals(items: list[dict]) -> tuple[list[str], list[str]]:
+    risks = []
+    clues = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        signal_type = str(item.get('type', '') or 'mixed').strip() or 'mixed'
+        text = str(item.get('text', '') or '').strip()
+        if not text:
+            continue
+        if signal_type in {'risk', 'mixed'} and text not in risks:
+            risks.append(text)
+        if signal_type in {'clue', 'mixed'} and text not in clues:
+            clues.append(text)
+    return risks[:4], clues[:4]
+
+
+def normalize_keeper_object_label(text: str) -> str:
+    value = str(text or '').strip()
+    if not value:
+        return ''
+    return value.split('（', 1)[0].split('(', 1)[0].strip()
 
 
 def _preferred_primary_label(labels: list[str], onstage_names: set[str], relevant_names: set[str]) -> str:
@@ -1289,45 +1345,6 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
                 break
         return out
 
-    def _normalize_carryover_signals(items) -> list[dict]:
-        out = []
-        seen = set()
-        for item in items or []:
-            if isinstance(item, str):
-                signal_type = 'mixed'
-                text = str(item or '').strip()
-            elif isinstance(item, dict):
-                signal_type = str(item.get('type', '') or 'mixed').strip() or 'mixed'
-                text = str(item.get('text', '') or '').strip()
-            else:
-                continue
-            if not text:
-                continue
-            key = (signal_type, text)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append({'type': signal_type, 'text': text})
-            if len(out) >= 6:
-                break
-        return out
-
-    def _derive_risks_clues_from_signals(items: list[dict]) -> tuple[list[str], list[str]]:
-        risks = []
-        clues = []
-        for item in items or []:
-            if not isinstance(item, dict):
-                continue
-            signal_type = str(item.get('type', '') or 'mixed').strip() or 'mixed'
-            text = str(item.get('text', '') or '').strip()
-            if not text:
-                continue
-            if signal_type in {'risk', 'mixed'} and text not in risks:
-                risks.append(text)
-            if signal_type in {'clue', 'mixed'} and text not in clues:
-                clues.append(text)
-        return risks[:4], clues[:4]
-
     def _looks_like_fragmentary_core_value(value: str, field: str) -> bool:
         text = str(value or '').strip()
         if not text:
@@ -1386,9 +1403,9 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     )
     current['relevant_npcs'] = [name for name in current['relevant_npcs'] if not looks_like_bad_entity_fragment(name)]
 
-    current['carryover_signals'] = _normalize_carryover_signals(current.get('carryover_signals', prev.get('carryover_signals', [])))
+    current['carryover_signals'] = normalize_carryover_signals(current.get('carryover_signals', prev.get('carryover_signals', [])))
     if current['carryover_signals']:
-        derived_risks, derived_clues = _derive_risks_clues_from_signals(current['carryover_signals'])
+        derived_risks, derived_clues = derive_risks_clues_from_signals(current['carryover_signals'])
         current['immediate_risks'] = normalize_text_list(derived_risks, limit=4)
         current['carryover_clues'] = normalize_text_list(derived_clues, limit=4)
     else:
