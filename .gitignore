@@ -26,6 +26,7 @@ runtime/
 .codex
 
 runtime-data/default-user/
+runtime-data/user-*/
 runtime-data/_system/
 tmp/
 
