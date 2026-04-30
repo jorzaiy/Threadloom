@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import base64
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -804,6 +805,98 @@ class MultiUserFoundationTests(unittest.TestCase):
                 paths.clear_active_character_override()
                 paths.RUNTIME_DATA_ROOT = original_runtime_root
                 paths.APP_ROOT = original_app_root
+
+    def test_active_character_override_is_request_local(self):
+        self.assertNotEqual(paths.active_character_id(), 'character-a')
+        token_a = paths.set_active_character_override('character-a')
+        try:
+            self.assertEqual(paths.active_character_id(), 'character-a')
+            token_b = paths.set_active_character_override('character-b')
+            try:
+                self.assertEqual(paths.active_character_id(), 'character-b')
+            finally:
+                paths.reset_active_character_override(token_b)
+            self.assertEqual(paths.active_character_id(), 'character-a')
+        finally:
+            paths.reset_active_character_override(token_a)
+
+    def test_history_cache_is_scoped_by_resolved_history_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_runtime_root = paths.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir) / 'runtime-data'
+            fixed_time = 1_700_000_000
+            try:
+                paths.RUNTIME_DATA_ROOT = temp_root
+                for character_id, content in (('char-a', 'from-a'), ('char-b', 'from-b')):
+                    history_path = temp_root / paths.DEFAULT_USER_ID / 'characters' / character_id / 'sessions' / 'same-session' / 'memory' / 'history.jsonl'
+                    history_path.parent.mkdir(parents=True, exist_ok=True)
+                    history_path.write_text(json.dumps({'role': 'user', 'content': content}) + '\n', encoding='utf-8')
+                    os.utime(history_path, (fixed_time, fixed_time))
+
+                token_a = paths.set_active_character_override('char-a')
+                try:
+                    first = runtime_store.load_history('same-session')
+                finally:
+                    paths.reset_active_character_override(token_a)
+
+                token_b = paths.set_active_character_override('char-b')
+                try:
+                    second = runtime_store.load_history('same-session')
+                finally:
+                    paths.reset_active_character_override(token_b)
+
+                self.assertEqual(first[0]['content'], 'from-a')
+                self.assertEqual(second[0]['content'], 'from-b')
+            finally:
+                runtime_store.invalidate_history_cache()
+                paths.RUNTIME_DATA_ROOT = original_runtime_root
+
+    def test_shared_persona_seed_does_not_fallback_into_character_runtime(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_runtime_root = paths.RUNTIME_DATA_ROOT
+            original_shared_root = paths.SHARED_ROOT
+            temp_root = Path(temp_dir)
+            try:
+                paths.RUNTIME_DATA_ROOT = temp_root / 'runtime-data'
+                paths.SHARED_ROOT = temp_root / 'shared'
+                shared_seed = paths.SHARED_ROOT / 'runtime' / 'persona-seeds' / 'scene' / 'Shared.json'
+                shared_seed.parent.mkdir(parents=True, exist_ok=True)
+                shared_seed.write_text(json.dumps({'display_name': 'Shared'}), encoding='utf-8')
+                token = paths.set_active_character_override('char-a')
+                try:
+                    self.assertEqual(runtime_store.load_persona_index(), {})
+                finally:
+                    paths.reset_active_character_override(token)
+            finally:
+                paths.RUNTIME_DATA_ROOT = original_runtime_root
+                paths.SHARED_ROOT = original_shared_root
+
+    def test_stale_session_id_under_other_character_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_runtime_root = paths.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir) / 'runtime-data'
+            try:
+                paths.RUNTIME_DATA_ROOT = temp_root
+                other_session = temp_root / paths.DEFAULT_USER_ID / 'characters' / 'char-a' / 'sessions' / 'stale-session'
+                other_session.mkdir(parents=True)
+                token = paths.set_active_character_override('char-b')
+                try:
+                    handler = make_get_handler('/api/state?session_id=stale-session')
+                    self.assertFalse(handler._validate_active_session_scope('stale-session', allow_missing=True))
+                    self.assertIsNotNone(handler.sent)
+                    if handler.sent is None:
+                        self.fail('handler did not send a response')
+                    status, payload = handler.sent
+                    error = payload.get('error')
+                    self.assertIsInstance(error, dict)
+                    if not isinstance(error, dict):
+                        self.fail('handler response did not include an error object')
+                    self.assertEqual(status, 409)
+                    self.assertEqual(error.get('code'), 'SESSION_CHARACTER_MISMATCH')
+                finally:
+                    paths.reset_active_character_override(token)
+            finally:
+                paths.RUNTIME_DATA_ROOT = original_runtime_root
 
 
 if __name__ == '__main__':
