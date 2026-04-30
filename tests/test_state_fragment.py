@@ -648,6 +648,104 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['object_visibility'], [])
         self.assertEqual(normalized['graveyard_objects'][0]['lifecycle_status'], 'destroyed')
 
+    def test_keeper_fill_payload_overrides_baseline_object_by_id(self):
+        # P1.1 regression: previously baseline + payload were concatenated, the
+        # baseline copy of obj_01 won the dedupe in normalize_state_dict, and
+        # the keeper's fresh data for the same object_id was discarded.
+        baseline = {
+            'tracked_objects': [
+                {'object_id': 'obj_01', 'label': '铜牌', 'kind': 'item', 'story_relevant': True},
+                {'object_id': 'obj_02', 'label': '账册', 'kind': 'document', 'story_relevant': True},
+            ],
+            'possession_state': [
+                {'object_id': 'obj_01', 'holder': '顾青衣', 'status': 'held', 'location': '', 'updated_by_turn': ''},
+            ],
+            'object_visibility': [
+                {'object_id': 'obj_01', 'visibility': 'private', 'known_to': ['顾青衣'], 'note': ''},
+            ],
+        }
+        payload = {
+            'tracked_objects': [
+                {'object_id': 'obj_01', 'label': '铜牌', 'kind': 'key_item', 'story_relevant': True},
+            ],
+            'possession_state': [
+                {'object_id': 'obj_01', 'holder': '林越', 'status': 'held', 'location': '', 'updated_by_turn': ''},
+            ],
+            'object_visibility': [
+                {'object_id': 'obj_01', 'visibility': 'public', 'known_to': ['林越', '顾青衣'], 'note': '亮在桌面'},
+            ],
+        }
+
+        merged = _merge_keeper_fill(baseline, payload)
+
+        ids = [item['object_id'] for item in merged['tracked_objects']]
+        self.assertEqual(sorted(ids), ['obj_01', 'obj_02'])
+        obj_01 = next(item for item in merged['tracked_objects'] if item['object_id'] == 'obj_01')
+        self.assertEqual(obj_01['kind'], 'key_item')
+        self.assertEqual(merged['possession_state'][0]['holder'], '林越')
+        self.assertEqual(merged['object_visibility'][0]['visibility'], 'public')
+        self.assertEqual(merged['object_visibility'][0]['note'], '亮在桌面')
+
+    def test_keeper_fill_merges_knowledge_scope_with_baseline(self):
+        # P1.2 regression: keeper output replaced the baseline scope outright,
+        # so an opening turn's scope that hadn't been folded into knowledge_records
+        # yet was lost when the next runtime turn produced its own delta.
+        baseline = {
+            'knowledge_scope': {
+                'protagonist': {'learned': ['开局学到的旧线索']},
+                'npc_local': {'顾青衣': {'learned': ['顾青衣注意到主角佩刀']}},
+            },
+        }
+        payload = {
+            'knowledge_scope': {
+                'protagonist': {'learned': ['本轮新看到伤疤']},
+                'npc_local': {'林越': {'learned': ['林越听见了脚步声']}},
+            },
+        }
+
+        merged = _merge_keeper_fill(baseline, payload)
+
+        self.assertEqual(
+            merged['knowledge_scope']['protagonist']['learned'],
+            ['开局学到的旧线索', '本轮新看到伤疤'],
+        )
+        self.assertEqual(merged['knowledge_scope']['npc_local']['顾青衣']['learned'], ['顾青衣注意到主角佩刀'])
+        self.assertEqual(merged['knowledge_scope']['npc_local']['林越']['learned'], ['林越听见了脚步声'])
+
+    def test_keeper_fill_signals_extend_baseline_risks_and_clues(self):
+        # P1.3 regression: when the keeper output one new signal, deriving risks
+        # and clues replaced baseline values entirely, dropping ongoing carryovers.
+        baseline = {
+            'immediate_risks': ['门外巡捕仍在盘查', '同伴受伤未恢复'],
+            'carryover_clues': ['纸封未拆', '账册中夹有暗号'],
+        }
+        payload = {
+            'carryover_signals': [
+                {'type': 'risk', 'text': '陌生人逼近巷口'},
+            ],
+        }
+
+        merged = _merge_keeper_fill(baseline, payload)
+
+        self.assertIn('陌生人逼近巷口', merged['immediate_risks'])
+        self.assertIn('门外巡捕仍在盘查', merged['immediate_risks'])
+        self.assertIn('同伴受伤未恢复', merged['immediate_risks'])
+        # Clues from baseline must persist when not contradicted by signals.
+        self.assertIn('纸封未拆', merged['carryover_clues'])
+        self.assertIn('账册中夹有暗号', merged['carryover_clues'])
+
+    def test_extract_reply_skeleton_skips_main_event_without_terminal_punctuation(self):
+        # P3.8 regression: previously the first paragraph was sliced to 100 chars
+        # whenever no sentence-ending punctuation was found, leaking half-sentences
+        # into main_event.
+        reply = '【清早，医馆门前】\n\n陆小环拎着医箱跨过门槛声音像风穿过院落很久没有停下'
+
+        skeleton = extract_reply_skeleton(reply)
+
+        self.assertEqual(skeleton.get('time'), '清早')
+        self.assertEqual(skeleton.get('location'), '医馆门前')
+        self.assertNotIn('main_event', skeleton)
+
 
 if __name__ == '__main__':
     unittest.main()

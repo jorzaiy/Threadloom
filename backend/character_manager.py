@@ -12,6 +12,7 @@ from pathlib import Path
 from card_hints import invalidate_card_hints_cache
 from card_importer import extract_card_json, import_card_to_target, load_raw_card
 from lorebook_distiller import rebuild_lorebook_distillation
+from name_sanitizer import invalidate_protagonist_names_cache
 from player_profile import build_player_profile_override_draft, load_base_player_profile
 from paths import APP_ROOT, active_character_id, active_user_id, active_user_label, character_root, normalize_session_id, read_json_file, slugify, user_root
 from runtime_store import invalidate_history_cache
@@ -106,6 +107,7 @@ def set_active_character(character_id: str) -> dict:
         raise ValueError('character not found')
     _write_json(active_character_file(), {'character_id': value})
     invalidate_card_hints_cache()
+    invalidate_protagonist_names_cache()
     invalidate_history_cache()
     return {
         'user_id': active_user_label(),
@@ -129,6 +131,7 @@ def delete_character_card(character_id: str) -> dict:
         next_id = remaining[0]['character_id'] if remaining else ''
         _write_json(active_character_file(), {'character_id': next_id})
     invalidate_card_hints_cache()
+    invalidate_protagonist_names_cache()
     invalidate_history_cache()
     return {
         'ok': True,
@@ -148,6 +151,7 @@ def rebuild_character_lorebook(character_id: str) -> dict:
         raise ValueError('lorebook not found')
     report = rebuild_lorebook_distillation(source)
     invalidate_card_hints_cache()
+    invalidate_protagonist_names_cache()
     invalidate_history_cache()
     return {
         'ok': True,

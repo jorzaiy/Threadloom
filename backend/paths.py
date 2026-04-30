@@ -204,6 +204,16 @@ def clear_active_character_override() -> None:
     _ACTIVE_CHARACTER_ID_OVERRIDE.set(None)
 
 
+def is_character_override_active() -> bool:
+    """True when a per-request character override is set in this context.
+
+    Read paths use this to skip the legacy SHARED_ROOT fallback so an explicit
+    override (e.g. card import / cross-character inspection) cannot accidentally
+    serve content from another card's shared directory.
+    """
+    return bool(_ACTIVE_CHARACTER_ID_OVERRIDE.get())
+
+
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -447,7 +457,7 @@ def resolve_layered_source(path_str: str) -> Path:
     mapped = mappings.get(text)
     if mapped and mapped.exists():
         return mapped
-    if mapped and is_multi_user_request_context():
+    if mapped and (is_multi_user_request_context() or is_character_override_active()):
         return mapped
 
     direct = resolve_legacy_source(text)

@@ -167,9 +167,10 @@ def extract_reply_skeleton(narrator_reply: str) -> dict:
         break
     if first:
         sentence_match = re.match(r'(.{8,120}?[。！？!?])', first)
-        main_event = sentence_match.group(1).strip() if sentence_match else first[:100].strip()
-        if main_event:
-            skeleton['main_event'] = main_event
+        if sentence_match:
+            main_event = sentence_match.group(1).strip()
+            if main_event:
+                skeleton['main_event'] = main_event
     return skeleton
 
 

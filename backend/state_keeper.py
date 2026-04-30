@@ -16,6 +16,7 @@ try:
     from .local_model_client import parse_json_response
     from .runtime_store import load_state, seed_default_state
     from .state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
+    from .state_bridge import _merge_knowledge_scope as merge_knowledge_scope_delta
     from .model_config import load_runtime_config
     from .state_fragment import build_state_from_fragment
     from .name_sanitizer import is_protagonist_name, protagonist_names
@@ -30,6 +31,7 @@ except ImportError:
     from local_model_client import parse_json_response
     from runtime_store import load_state, seed_default_state
     from state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
+    from state_bridge import _merge_knowledge_scope as merge_knowledge_scope_delta
     from model_config import load_runtime_config
     from state_fragment import build_state_from_fragment
     from name_sanitizer import is_protagonist_name, protagonist_names
@@ -818,18 +820,57 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
     if signals:
         merged['carryover_signals'] = signals
         derived_risks, derived_clues = _derive_risks_clues_from_signals(signals)
-        merged['immediate_risks'] = derived_risks
-        merged['carryover_clues'] = derived_clues
+        # Merge derived into the (possibly already legacy-merged) merged values so
+        # this-turn signals add to long-running risks/clues instead of replacing.
+        existing_risks = merged.get('immediate_risks', []) if isinstance(merged.get('immediate_risks', []), list) else []
+        existing_clues = merged.get('carryover_clues', []) if isinstance(merged.get('carryover_clues', []), list) else []
+        combined_risks: list[str] = []
+        seen_risks: set[str] = set()
+        for item in list(derived_risks) + list(existing_risks):
+            text = str(item or '').strip()
+            if not text or text in seen_risks:
+                continue
+            seen_risks.add(text)
+            combined_risks.append(text)
+        combined_clues: list[str] = []
+        seen_clues: set[str] = set()
+        for item in list(derived_clues) + list(existing_clues):
+            text = str(item or '').strip()
+            if not text or text in seen_clues:
+                continue
+            seen_clues.add(text)
+            combined_clues.append(text)
+        merged['immediate_risks'] = combined_risks[:6]
+        merged['carryover_clues'] = combined_clues[:6]
 
     if 'knowledge_scope' in payload:
         scope = _coerce_knowledge_scope(payload.get('knowledge_scope'))
         if scope:
-            merged['knowledge_scope'] = scope
+            baseline_scope = baseline_state.get('knowledge_scope', {}) if isinstance(baseline_state.get('knowledge_scope', {}), dict) else {}
+            merged['knowledge_scope'] = merge_knowledge_scope_delta(baseline_scope, scope)
 
     for field in ('tracked_objects', 'possession_state', 'object_visibility'):
         if field in payload and isinstance(payload.get(field), list) and payload.get(field):
             base_items = baseline_state.get(field, []) if isinstance(baseline_state.get(field, []), list) else []
-            merged[field] = (base_items + payload.get(field, []))[-16:]
+            payload_items = payload.get(field, []) or []
+            # Dedup by object_id, payload entries override baseline on collision so
+            # this-turn updates win without stacking duplicates that the downstream
+            # normalizer would resolve in baseline-first order.
+            by_id: dict[str, dict] = {}
+            order: list[str] = []
+            unkeyed: list[dict] = []
+            for item in list(base_items) + list(payload_items):
+                if not isinstance(item, dict):
+                    continue
+                oid = str(item.get('object_id', '') or '').strip()
+                if not oid:
+                    unkeyed.append(item)
+                    continue
+                if oid not in by_id:
+                    order.append(oid)
+                by_id[oid] = item
+            combined = [by_id[oid] for oid in order] + unkeyed
+            merged[field] = combined[-16:]
 
     return merged
 

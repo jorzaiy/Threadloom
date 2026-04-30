@@ -10,15 +10,14 @@ so the system works with any card.
 from __future__ import annotations
 
 import json
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 try:
-    from .paths import resolve_layered_source
+    from .paths import active_character_id, active_user_id, resolve_layered_source
     from .model_config import load_runtime_config
 except ImportError:
-    from paths import resolve_layered_source
+    from paths import active_character_id, active_user_id, resolve_layered_source
     from model_config import load_runtime_config
 
 
@@ -35,7 +34,19 @@ def _load_character_data() -> dict:
     return {}
 
 
-@lru_cache(maxsize=1)
+# Per (user, character) cache so concurrent requests with different ContextVar
+# overrides do not share a single process-wide entry. Keyed by the same scope
+# the source path resolves through.
+_card_hints_cache: dict[tuple[str, str], dict] = {}
+
+
+def _cache_key() -> tuple[str, str]:
+    try:
+        return (active_user_id(), active_character_id())
+    except Exception:
+        return ('', '')
+
+
 def load_card_hints() -> dict:
     """Load hints from character-data.json['hints'].
 
@@ -50,19 +61,24 @@ def load_card_hints() -> dict:
         time_era_prefix: str
     All fields fall back to empty if not declared.
     """
+    key = _cache_key()
+    cached = _card_hints_cache.get(key)
+    if cached is not None:
+        return cached
+
     char = _load_character_data()
     raw = char.get('hints', {})
     if not isinstance(raw, dict):
         raw = {}
 
-    def _tuple_field(key: str) -> tuple[str, ...]:
-        value = raw.get(key, [])
+    def _tuple_field(field_key: str) -> tuple[str, ...]:
+        value = raw.get(field_key, [])
         if isinstance(value, (list, tuple)):
             return tuple(str(item).strip() for item in value if str(item).strip())
         return ()
 
-    def _dict_field(key: str) -> dict[str, str]:
-        value = raw.get(key, {})
+    def _dict_field(field_key: str) -> dict[str, str]:
+        value = raw.get(field_key, {})
         if isinstance(value, dict):
             return {str(k).strip(): str(v).strip() for k, v in value.items() if str(k).strip()}
         return {}
@@ -71,7 +87,7 @@ def load_card_hints() -> dict:
     if not isinstance(persona_archetypes, list):
         persona_archetypes = []
 
-    return {
+    result = {
         'environment_tokens': _tuple_field('environment_tokens'),
         'transient_group_tokens': _tuple_field('transient_group_tokens'),
         'non_character_object_tokens': _tuple_field('non_character_object_tokens'),
@@ -82,11 +98,13 @@ def load_card_hints() -> dict:
         'time_era_prefix': str(raw.get('time_era_prefix', '') or '').strip(),
         'persona_archetypes': persona_archetypes,
     }
+    _card_hints_cache[key] = result
+    return result
 
 
 def invalidate_card_hints_cache() -> None:
     """Clear the cached hints. Call when character card changes."""
-    load_card_hints.cache_clear()
+    _card_hints_cache.clear()
 
 
 def get_environment_tokens() -> tuple[str, ...]:

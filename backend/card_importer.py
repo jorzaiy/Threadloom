@@ -26,6 +26,7 @@ from typing import Any
 
 try:
     from .card_hints import invalidate_card_hints_cache
+    from .name_sanitizer import invalidate_protagonist_names_cache
     from .character_assets import (
         character_assets_root,
         character_source_base,
@@ -41,6 +42,7 @@ try:
     from .lorebook_distiller import rebuild_lorebook_distillation
 except ImportError:
     from card_hints import invalidate_card_hints_cache
+    from name_sanitizer import invalidate_protagonist_names_cache
     from character_assets import (
         character_assets_root,
         character_source_base,
@@ -1644,6 +1646,7 @@ def import_card_bundle(card_json: dict, *, png_data: bytes | None = None) -> dic
     _write_runtime_baselines(core, lorebook, system_npcs)
 
     invalidate_card_hints_cache()
+    invalidate_protagonist_names_cache()
 
     return {
         'success': True,

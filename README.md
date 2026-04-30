@@ -109,6 +109,8 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - 设置面板内可直接导入新的角色卡文件（`.png` / `.json`）
 - 角色卡枚举范围只限于当前用户目录下的 `runtime-data/<user>/characters/`
 - 角色卡导入与聊天导入使用请求局部 override，避免并发导入时串写到其他角色卡目录
+- 当请求局部 override 设置时，`character-data / lorebook / npc / persona / player-profile` 等 layered 读路径不会再回退到仓库根 `character/` 或 `memory/`，杜绝并发导入下被另一张卡的 shared 内容串写
+- `card_hints` 与 `protagonist_names` 缓存按 `(user_id, character_id)` 维度，不再使用进程级 `lru_cache`，并发请求看到的是各自的 hints / 主角名
 - history 缓存按实际 `history.jsonl` 路径隔离，不再只按 `session_id` 复用
 - persona seed 默认只读取当前角色卡 source 与 session-local 层，不再静默回退到共享 `runtime/persona-seeds`
 - 当前默认且唯一用户会显示为 `default_user`
@@ -131,12 +133,17 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
    - `tracked_objects`
    - `possession_state`
    - `object_visibility`
-4. heuristic 作为普通 runtime 路径下的最终兜底
+4. 若 fill-mode keeper 调用失败，降级到 `state_fragment` 基线（skeleton + 上一轮 state + arbiter 合并），不再回退到旧 `state_updater.py` heuristic（`backend/tools/` 仍保留以便重放）
 
 说明：
 - `main_event` 目前已比早期版本稳定得多，opening 首轮也能落下有效主事件。
 - `immediate_goal` 虽然仍在骨架字段里，但当前稳定性明显低于 `time / location / main_event`，部分回合仍可能回到 `待确认`；它当前更主要影响 `threads / lore trigger / summary`，而不是直接强控 narrator 正文。
 - opening-choice 首轮当前会优先走 `skeleton keeper + fill keeper`，而不是直接依赖 heuristic 反提。
+
+当前 keeper 写回保证：
+- `tracked_objects / possession_state / object_visibility` 在 fill-mode 合并时按 `object_id` 字典化去重，本轮 payload 在同 id 上覆盖 baseline，避免新数据被旧值掩盖
+- `knowledge_scope` 在 fill-mode 合并时与 baseline 增量合并（去重，按角色截顶），避免开局或上一轮未沉淀的 scope 被本轮 keeper 覆盖丢失
+- `carryover_signals` 推导出的 `immediate_risks / carryover_clues` 与 baseline 累加去重，再截到 6 条；不会因为本轮信号变少而清空长期持续的风险线索
 
 当前 keeper 改进要点：
 - skeleton keeper 和 fill keeper 的 LLM prompt 已全面重写，加入字段级质量约束和好坏示例
@@ -338,3 +345,4 @@ http://127.0.0.1:8765
 - **[doc/audit/PERFORMANCE_OPTIMIZATION.md](doc/audit/PERFORMANCE_OPTIMIZATION.md)** - 性能优化总结
 - **[doc/audit/DOC_AUDIT_REPORT.md](doc/audit/DOC_AUDIT_REPORT.md)** - 文档一致性审查报告
 - **[doc/audit/SECURITY_AUDIT_2026-04-29.md](doc/audit/SECURITY_AUDIT_2026-04-29.md)** - 安全审计与修复记录
+- **[doc/audit/ISOLATION_AND_KEEPER_FIX_2026-04-30.md](doc/audit/ISOLATION_AND_KEEPER_FIX_2026-04-30.md)** - 信息隔离与 keeper 写入路径加固
