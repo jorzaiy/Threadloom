@@ -27,6 +27,14 @@ USERS_FILE = RUNTIME_DATA_ROOT / '_system' / 'users.json'
 SESSIONS_FILE = RUNTIME_DATA_ROOT / '_system' / 'sessions.json'
 TOKEN_TTL = 7 * 24 * 3600  # 7 天
 MIN_PASSWORD_LENGTH = 12
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_LOCKOUT_SECONDS = 15 * 60
+# Pre-computed bcrypt hash of a random throwaway value, used to keep the
+# response time of "user not found" comparable to "wrong password" so login
+# cannot be turned into a username oracle. Generated with bcrypt.gensalt(12).
+_DUMMY_PASSWORD_HASH = (
+    '$2b$12$0gOqcL9nz3HQfq3r81T2lePot0ufLfYOkH9N6ip5TwjFxXMP5Z5UC'
+)
 _SYSTEM_FILE_LOCK = threading.RLock()
 
 
@@ -75,8 +83,32 @@ def _load_sessions() -> dict:
         return {}
 
 
+def _prune_expired_sessions(sessions: dict) -> dict:
+    """Drop entries whose absolute TTL has passed.
+
+    Called inline before every persistent write so sessions.json does not
+    grow unboundedly with abandoned but never-revisited tokens.
+    """
+    if not isinstance(sessions, dict):
+        return {}
+    now = time.time()
+    cleaned: dict = {}
+    for key, entry in sessions.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            expires_at = float(entry.get('expires_at') or 0)
+            created_at = float(entry.get('created_at') or 0)
+        except (TypeError, ValueError):
+            continue
+        if expires_at <= now or now - created_at > TOKEN_TTL:
+            continue
+        cleaned[key] = entry
+    return cleaned
+
+
 def _save_sessions(data: dict) -> None:
-    _atomic_write(SESSIONS_FILE, data)
+    _atomic_write(SESSIONS_FILE, _prune_expired_sessions(data))
 
 
 def _hash_password(password: str) -> str:
@@ -141,8 +173,11 @@ def set_multi_user_enabled(enabled: bool) -> None:
         cfg['multi_user_enabled'] = enabled
         site_json.parent.mkdir(parents=True, exist_ok=True)
         site_json.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), 'utf-8')
-        if not enabled:
-            _save_sessions({})
+        # Wipe sessions on every transition. Disabling needs a clean slate so
+        # multi-user-issued tokens cannot survive into single-user mode; enabling
+        # is what closes the bootstrap window where default-user could log in
+        # with an empty password and carry that token into multi-user state.
+        _save_sessions({})
 
 
 # ── 用户管理 ──────────────────────────────────────────────
@@ -254,20 +289,48 @@ def login(user_id: str, password: str) -> str:
     with _SYSTEM_FILE_LOCK:
         users = _load_users()
         user = users.get(uid)
-        if not user:
-            raise ValueError('用户不存在或密码错误')
-        pw_hash = user.get('password_hash', '')
-        if not pw_hash:
-            # 管理员未设置密码时允许空密码登录（仅限单用户模式）
-            if uid == DEFAULT_USER_ID and not password and not is_multi_user_enabled():
-                pass
-            else:
-                raise ValueError('用户不存在或密码错误')
-        else:
-            if not _verify_password(password, pw_hash):
-                raise ValueError('用户不存在或密码错误')
-        token = secrets.token_urlsafe(32)
         now = time.time()
+        # Lockout window applies before the bcrypt path so an attacker cannot
+        # use the slow comparison itself as a workload check.
+        if isinstance(user, dict):
+            lockout_until = float(user.get('lockout_until') or 0)
+            if lockout_until > now:
+                logger.warning('login blocked for %s, lockout active for %.0fs', uid, lockout_until - now)
+                raise ValueError('账户暂时锁定，请稍后再试')
+        # Always run bcrypt against *some* hash so the response time of an
+        # unknown user matches the response time of a known user with a wrong
+        # password. The dummy hash never matches a real password.
+        pw_hash = user.get('password_hash', '') if isinstance(user, dict) else ''
+        password_ok = False
+        if user is None:
+            _verify_password(password, _DUMMY_PASSWORD_HASH)
+        elif not pw_hash:
+            if uid == DEFAULT_USER_ID and not password and not is_multi_user_enabled():
+                password_ok = True
+            else:
+                _verify_password(password, _DUMMY_PASSWORD_HASH)
+        else:
+            password_ok = _verify_password(password, pw_hash)
+
+        if not password_ok:
+            if isinstance(user, dict):
+                failed = int(user.get('failed_logins') or 0) + 1
+                user['failed_logins'] = failed
+                if failed >= LOGIN_FAILURE_LIMIT:
+                    user['lockout_until'] = now + LOGIN_LOCKOUT_SECONDS
+                    user['failed_logins'] = 0
+                    logger.warning('login lockout engaged for %s after %d failed attempts', uid, failed)
+                users[uid] = user
+                _save_users(users)
+            raise ValueError('用户不存在或密码错误')
+
+        if isinstance(user, dict) and (user.get('failed_logins') or user.get('lockout_until')):
+            user['failed_logins'] = 0
+            user['lockout_until'] = 0
+            users[uid] = user
+            _save_users(users)
+
+        token = secrets.token_urlsafe(32)
         sessions = _load_sessions()
         sessions[_hash_token(token)] = {
             'user_id': uid,
