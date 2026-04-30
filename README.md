@@ -144,6 +144,8 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - `tracked_objects / possession_state / object_visibility` 在 fill-mode 合并时按 `object_id` 字典化去重，本轮 payload 在同 id 上覆盖 baseline，避免新数据被旧值掩盖
 - `knowledge_scope` 在 fill-mode 合并时与 baseline 增量合并（去重，按角色截顶），避免开局或上一轮未沉淀的 scope 被本轮 keeper 覆盖丢失
 - `carryover_signals` 推导出的 `immediate_risks / carryover_clues` 与 baseline 累加去重，再截到 6 条；不会因为本轮信号变少而清空长期持续的风险线索
+- narrator 正文若因 `finish_reason=length/error` 或半句停顿被判定为不完整，会自动重试；最终仍失败时本轮不写 assistant history、不递增 turn、不更新 state，历史接口和后续 prompt 也会过滤旧 partial 轮次
+- `onstage_npcs / relevant_npcs / scene_entities` 需要通过正向人物证据门槛；地点、标题残片或事件短语不能仅凭 `main_event/location` 反推成人物层
 
 当前 keeper 改进要点：
 - skeleton keeper 和 fill keeper 的 LLM prompt 已全面重写，加入字段级质量约束和好坏示例
@@ -201,7 +203,7 @@ config/runtime.json
    - State Keeper 模型选择
  - `temperature` 与 `max_output_tokens` 已回收到共享默认配置：
    - `config/runtime.json -> model_defaults`
- - 高级角色（如 `turn_analyzer / arbiter / state_keeper_candidate`）当前不在普通设置页里改，但可以通过 `runtime-data/<user>/config/model-runtime.json -> advanced_models` 手动覆盖
+ - 高级角色（如 `turn_analyzer / arbiter`）当前不在普通设置页里改，但可以通过 `runtime-data/<user>/config/model-runtime.json -> advanced_models` 手动覆盖；`state_keeper_candidate` 不再单独维护模型，固定继承 State Keeper 模型选择
   - 当前前端会话管理入口：
     - 点击底部当前会话名，弹出最近会话下拉管理
     - 显示当前角色卡下最近更新的最多 5 个会话

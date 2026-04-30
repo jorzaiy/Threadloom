@@ -166,9 +166,9 @@ cd /root/Threadloom/backend
 - 高级角色配置：
   - `turn_analyzer`
   - `arbiter`
-  - `state_keeper_candidate`
   - 当前可通过 `runtime-data/default-user/config/model-runtime.json -> advanced_models` 手动覆盖
   - 暂不进入普通设置页
+  - `state_keeper_candidate` 不再接受独立模型覆盖，固定继承设置页中的 State Keeper 模型
 
 也可以直接：
 
@@ -235,14 +235,14 @@ http://127.0.0.1:8765
 - `runtime.json -> trace.enabled / trace.keep_last_turns` 可控制 trace 是否启用以及最多保留多少轮
 - narrator 正文生成现在先用主 narrator 模型重试 3 次；主模型均失败后，使用 `state_keeper.model` 作为副 LLM 再重试 3 次。副 LLM 接管会在 response / turn trace 的 `narrator_retry` 中标记 `provider_used: secondary`。
 - 若主/副 narrator 全部失败，本轮返回空 `reply` 与 `NARRATOR_UNAVAILABLE`，不写 assistant 历史、不递增 turn、不更新 state，trace 标记 `not_committed: true`，避免沉浸式 RP 中出现硬编码 fallback 文案。
-- partial assistant 回复会显示，但不会继续污染事实层
-- narrator 若明显停在半句中间，即使 provider 没返回 `finish_reason`，当前也会按 partial 处理，避免把坏输出继续写坏 state
+- partial assistant 回复不会作为已提交正文显示；生成阶段会自动重试，重试耗尽后返回状态栏错误，`/api/history` 与后续 prompt recent window 会过滤旧 partial 轮次及其对应 user 输入
+- narrator 若明显停在半句中间，即使 provider 没返回 `finish_reason`，当前也会按 incomplete 处理，避免把坏输出继续写坏 state 或污染下一轮上下文
 - `regenerate-last` 会回滚最后一对 `user -> assistant(partial)` 再重试
 - `state_keeper` 优先，`state_updater` 兜底
 - `state_keeper` 现在会拒收明显低信号或相对上一轮明显退化的 state
 - `state_fragment` 现在会先作为结构化锚点进入 narrator 与 state_keeper
-- `state_keeper_candidate` 与 `state_keeper` 的实际模型以 `runtime-data/default-user/config/model-runtime.json` 为准；当前不在文档中写死具体模型名。
-- `state_keeper_candidate` 现在可以作为 `skeleton keeper` sidecar 先产出最小骨架，再并入 `state_fragment`；当前每个完整回复后都会运行。它只维护 `time / location / main_event / onstage_npcs / immediate_goal` 五个骨架字段
+- `state_keeper_candidate` 固定继承 `state_keeper` 的实际模型，不再通过 hidden advanced 配置单独分模。
+- `state_keeper_candidate` 现在可以作为 `skeleton keeper` sidecar 先产出最小骨架，再并入 `state_fragment`；当前每个完整回复后都会运行，模型固定继承 State Keeper。它只维护 `time / location / main_event / onstage_npcs / immediate_goal` 五个骨架字段
 - 首轮 bootstrap 不跑 skeleton，直接走一次完整 `state_keeper` 定底
 - opening-choice 的首轮正文当前例外：会先跑一次 skeleton keeper 定骨架，再跑 fill keeper 补风险/线索/物件，避免首轮正文写出来但 state 仍停在开局壳；这条链当前不等同于普通非合并轮的 `update_state()` 路径
 - 当前 keeper 相关模型使用同一站点配置，可在设置页或 `model-runtime.json` 中切换，不再在代码中维护固定模型分工。

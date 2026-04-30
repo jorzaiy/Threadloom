@@ -52,6 +52,7 @@
 - `state_keeper` 优先，`state_updater` 兜底
 - arbiter 已接入主链，不再只是文档占位
 - partial reply 有独立处理路径，不再继续污染事实层
+- partial reply 当前会在生成阶段被阻断：`finish_reason=length/error` 或半句式结尾会触发 narrator 重试，重试耗尽后返回空回复错误；旧 partial 历史在 `/api/history` 和 prompt recent window 中会连同对应 user 输入一起过滤
 - opening 已升级为独立状态机
 - session 生命周期已覆盖：新游戏、切换、删除、partial regenerate
 - 同一 `session_id` 的写请求现会串行执行，降低并发写冲突
@@ -76,6 +77,7 @@
 - `carryover_signals` 统一信号层已接入状态 schema并真实落盘：设计目标是让 keeper 优先维护“后续仍会影响局势的统一信号”，再由兼容层派生旧 `immediate_risks / carryover_clues`；当前真实回合里 keeper 仍常直接产出旧字段，但状态归一化层已会把旧字段反推回统一信号层并持久化
 - 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里存在；`thread_tracker / context_builder / state_snapshot` 等核心消费点已开始优先使用统一信号层，再兼容旧字段
 - `onstage_npcs` 当前只作为 state/UI 快照存在，不进入 narrator 主 prompt，也不承载长期人物基础设定；长期人物基础设定进入不可变 `actors`
+- `onstage_npcs / relevant_npcs / scene_entities` 当前必须有正向人物证据：稳定 actor、important NPC、continuity hint、明确人物 role，或正文/事件中“人物称谓 + 行动锚点”。地点、标题残片、事件短语不能从 `main_event/location` 反推出 NPC
 - narrator prompt 当前不靠列举“翻墙/离场”等剧情关键词维持连续性，而是通过完整 recent 12 和通用原则约束空间关系、视线范围、人物控制权与行动链的承接
 - 当前目标分工草案：
 - `event`：中程检索层，服务于 recall / summary，不默认主导 narrator
@@ -108,7 +110,7 @@
 - 导入器会在写出 `lorebook.json` 后生成两个缓存文件：
   - `lorebook-foundation.json`：每轮常驻的短世界基础 / 身份边界 / 规则口径
 - `lorebook-index.json`：条件召回的情境 lore 索引，条目保留 `source_entry_ids`；其中 `keywords` 只作为检索索引，不作为剧情触发规则。运行期命中 index 后优先按 `source_entry_ids` 回到 `lorebook.json` 取原文片段，而不是直接把蒸馏摘要当完整知识交给 narrator
-- `lorebook_distiller.py` 默认尝试用 `state_keeper_candidate` LLM 蒸馏；当前用户配置建议使用 `deepseek-v4-flash` 这类稳定付费模型。蒸馏调用会覆盖普通 keeper 的输出预算（独立 `max_output_tokens`），遇到空回复或 JSON 解析失败会自动重试；仍失败时使用 heuristic fallback，并在产物 `provider` 字段标记
+- `lorebook_distiller.py` 默认尝试用 `state_keeper_candidate` LLM 蒸馏；该 role 固定继承 State Keeper 模型，只保留独立低温 JSON 输出参数，不再单独维护 hidden 模型。遇到空回复或 JSON 解析失败会自动重试；仍失败时使用 heuristic fallback，并在产物 `provider` 字段标记
 - narrator prompt 中对应块为 `【世界书基础规则】` 和 `【情境世界书】`；`【世界书基础规则】` 明确标注为“不完整常驻护栏”，`【情境世界书】` 标注为 selector 命中后的相关世界书内容。旧 raw `【世界书】` 块不再作为普通回合默认入口
 - 情境世界书默认先用 index 小预算定位（当前默认 2 条 / 约 700 字），再回源注入原始条目片段（默认约 1800 字），避免普通观察轮因 recent window 中出现世界名词而召回过多 lore，同时保留原文约束与局部结构
 - turn trace / debug 当前会自动记录：
@@ -135,7 +137,7 @@
 - 单用户当前可用，默认用户目录是主工作路径
 - 单站点是当前产品层简化，不是永久平台承诺
 - `Narrator / State Keeper` 已有用户级模型选择
-- `Analyzer / Arbiter / Skeleton Keeper / Lorebook Distiller` 这类高级角色当前不暴露给普通用户界面，但已可通过用户级 `model-runtime.json -> advanced_models` 做高级覆盖
+- `Analyzer / Arbiter` 这类高级角色当前不暴露给普通用户界面，但仍可通过用户级 `model-runtime.json -> advanced_models` 做高级覆盖；Skeleton Keeper / Lorebook Distiller 走 `state_keeper_candidate`，固定继承 State Keeper 模型
 - 当前角色卡管理也已进入 Web UI：
   - 当前用户角色卡列表可枚举
   - 可切换当前活跃角色卡
@@ -143,16 +145,16 @@
   - 当前默认用户标签固定显示为 `default_user`
   - 当前阶段不做用户管理，产品面默认仍为单用户 `default-user`
   - 多用户相关底层代码已保留在 `user_manager.py`，但 `/api/users`、`/api/multi-user`、`/api/auth/login`、`/api/auth/logout` 当前统一视为实验态关闭
-  - `state_keeper_candidate` 当前建议绑定稳定模型；本地默认用户已切到 `deepseek-v4-flash`，避免世界书蒸馏阶段出现空回复 / 截断
+  - `state_keeper_candidate` 当前继承 State Keeper 模型，不再使用 hidden 单独模型配置
   - 三条 bootstrap（NPC/物品/情报）均已通过 LLM 回合测试
 
 当前建议配模方向：
 - narrator 继续使用强远端模型
-- `state_keeper` 与 `state_keeper_candidate` 当前建议使用稳定低温模型；默认用户当前使用 `deepseek-v4-flash`
+- `state_keeper_candidate` 固定继承 `state_keeper` 模型；只需要在设置页选择一个稳定的 State Keeper 模型
 - skeleton keeper 和 fill keeper 均使用同一模型，通过 prompt 分工
 - 当前 keeper 主链路是：
-  - `skeleton keeper`（`deepseek-v4-flash`）→ 最小骨架
-  - `fill keeper`（`deepseek-v4-flash`）→ 补物品、情报与信号
+  - `skeleton keeper`（继承 State Keeper 模型）→ 最小骨架
+  - `fill keeper`（State Keeper 模型）→ 补物品、情报与信号
   - `heuristic fallback` → 最终兜底
 - `fill keeper` 当前按增量 patch 思路运行：已有 NPC / 物件默认沿用，只在明确新增或明确变化时输出，避免低质量后抽取覆盖高质量旧状态
 - NPC 与物件绑定当前由 `possession_state` 驱动：标准化层会把 holder 对齐到稳定 NPC 主名，并自动写回 `tracked_objects[].owner / bound_entity_id` 与 `scene_entities[].owned_objects`；新 holder 必须来自当前人物、scene entity、actor registry 或 protagonist aliases，非法 holder 不覆盖旧合法归属
@@ -370,7 +372,7 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 
 ### 世界书蒸馏回归（v0.4.4）
 
-- `state_keeper / state_keeper_candidate` 默认用户配置已切到 `deepseek-v4-flash`，用于提高 keeper 与世界书蒸馏稳定性。
+- `state_keeper_candidate` 已收敛为继承 State Keeper 模型，不再使用 hidden advanced 模型覆盖。
 - 四张当前角色卡均已重建 `lorebook-foundation.json` / `lorebook-index.json`，产物 `provider: llm`。
 - HTTP 3 轮回归从 `开始游戏` 开局验证通过：开局与后续 3 个正文回合均正常返回。
 - narrator prompt 注入审查结论：每轮均注入 `【世界书基础规则】`，普通正文轮情境世界书限制在约 2 条 / 700 字；旧 raw `【世界书】` 块不再出现。

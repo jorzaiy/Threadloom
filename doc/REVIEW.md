@@ -81,7 +81,7 @@
 - `runtime-rules / state / summary` 的优先级已经明显高于纯 transcript 惯性
 - session-local 写回已经落地，不再直接把在线会话当唯一真相源
 - opening 已经独立成状态机，而不是把“开始游戏”当普通用户输入
-- partial reply 已被隔离，不再直接污染后续 state
+- partial reply 已被隔离，不再直接污染后续 state、历史展示或下一轮 narrator recent window
 - arbiter、threads、important NPC、persona 这几层已经开始进入统一主链
 - narrator / turn_analyzer / state_keeper 已具备分模能力，而不是全部绑死在一套模型配置上
 
@@ -115,7 +115,7 @@
 
 现状：
 - skeleton + fill 双 keeper 均使用 `gemma-4-31b-it`，提取 prompt 已加入字段级质量指南和正反例
-- `state_keeper_candidate` 现由用户级 `advanced_models` 配置控制，默认上限已高于早期 280 截断阶段
+- `state_keeper_candidate` 现继承 State Keeper 模型，默认上限已高于早期 280 截断阶段
 - heuristic 层重写为评分式架构：`_score_sentence()` 替代关键词猜世界，加入元文本过滤和中文自然断点截断
 - 在 4 组跨题材长记录测试中（维克托、九幽大陆、血蚀纪），关键指标全部归零
 
