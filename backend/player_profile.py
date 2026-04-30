@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 
 try:
-    from .paths import character_source_root, shared_path, user_profile_root
+    from .paths import character_source_root, is_multi_user_request_context, shared_path, user_profile_root
 except ImportError:
-    from paths import character_source_root, shared_path, user_profile_root
+    from paths import character_source_root, is_multi_user_request_context, shared_path, user_profile_root
 
 
 def _read_json(path: Path) -> dict:
@@ -39,6 +39,8 @@ def base_player_profile_path() -> Path:
     legacy = user_profile_root() / 'player-profile.json'
     if legacy.exists():
         return legacy
+    if is_multi_user_request_context():
+        return layered
     shared_base = shared_path('player-profile.base.json')
     if shared_base.exists():
         return shared_base

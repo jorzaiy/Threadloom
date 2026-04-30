@@ -9,16 +9,15 @@ try:
     from .character_assets import resolve_character_cover_path
     from .persona_runtime import infer_persona_traits
     from .name_sanitizer import sanitize_runtime_name, looks_like_bad_entity_fragment
-    from .paths import APP_ROOT, SHARED_ROOT, active_character_id, active_user_label, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
+    from .paths import APP_ROOT, SHARED_ROOT, active_character_id, active_user_label, character_npcs_root, character_runtime_persona_root, character_source_root, is_multi_user_request_context, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
 except ImportError:
     from character_assets import resolve_character_cover_path
     from persona_runtime import infer_persona_traits
     from name_sanitizer import sanitize_runtime_name, looks_like_bad_entity_fragment
-    from paths import APP_ROOT, SHARED_ROOT, active_character_id, active_user_label, character_npcs_root, character_runtime_persona_root, character_source_root, current_sessions_root, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
+    from paths import APP_ROOT, SHARED_ROOT, active_character_id, active_user_label, character_npcs_root, character_runtime_persona_root, character_source_root, is_multi_user_request_context, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
-SESSIONS_DIR = current_sessions_root()
 CONFIG = RUNTIME_WEB / 'config' / 'runtime.json'
 
 
@@ -60,6 +59,8 @@ def character_data_path() -> Path:
     layered = character_source_root() / 'character-data.json'
     if layered.exists():
         return layered
+    if is_multi_user_request_context():
+        return layered
     return shared_path('character', 'character-data.json')
 
 
@@ -67,12 +68,16 @@ def root_persona_dir() -> Path:
     layered = character_runtime_persona_root()
     if layered.exists():
         return layered
+    if is_multi_user_request_context():
+        return layered
     return shared_path('runtime', 'persona-seeds')
 
 
 def character_npc_profiles_dir() -> Path:
     layered = character_npcs_root()
     if layered.exists():
+        return layered
+    if is_multi_user_request_context():
         return layered
     return shared_path('memory', 'npcs')
 

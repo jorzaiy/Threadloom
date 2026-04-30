@@ -6,9 +6,9 @@ import re
 from pathlib import Path
 
 try:
-    from .paths import APP_ROOT, active_user_id, character_root, character_source_root, shared_path
+    from .paths import APP_ROOT, active_user_id, character_root, character_source_root, is_multi_user_request_context, shared_path
 except ImportError:
-    from paths import APP_ROOT, active_user_id, character_root, character_source_root, shared_path
+    from paths import APP_ROOT, active_user_id, character_root, character_source_root, is_multi_user_request_context, shared_path
 
 
 _CHARACTER_OVERRIDE_ROOT: Path | None = None
@@ -142,7 +142,7 @@ def resolve_character_cover_path() -> Path | None:
                 return candidate
 
     legacy_frontend_cover = APP_ROOT / 'frontend' / 'character-cover-small.png'
-    if legacy_frontend_cover.exists():
+    if legacy_frontend_cover.exists() and not is_multi_user_request_context():
         return legacy_frontend_cover
 
     stem = _legacy_imported_stem()
@@ -153,6 +153,8 @@ def resolve_character_cover_path() -> Path | None:
             if candidate.exists():
                 return candidate
         for ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
+            if is_multi_user_request_context():
+                break
             candidate = shared_path('角色卡', f'{stem}{ext}')
             if candidate.exists():
                 return candidate
