@@ -14,7 +14,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from paths import clear_active_character_override, normalize_session_id, resolve_session_dir, set_active_character_override
+from paths import normalize_session_id, reset_active_character_override, resolve_session_dir, set_active_character_override
 from arbiter_runtime import run_arbiter
 from arbiter_state import merge_arbiter_state
 from context_builder import build_runtime_context
@@ -351,7 +351,7 @@ def main() -> int:
     parser.add_argument('--keeper-summary-chars', type=int, help='Temporary state_keeper summary excerpt size override used only for this rebuild run')
     parser.add_argument('--keeper-stride', type=int, default=1, help='Only call LLM keeper every N pairs during rebuild; other pairs use heuristics')
     args = parser.parse_args()
-    set_active_character_override(args.character_id)
+    character_override_token = set_active_character_override(args.character_id)
     old_override = os.environ.get('THREADLOOM_OVERRIDE_STATE_KEEPER_MODEL')
     old_max_tokens_override = os.environ.get('THREADLOOM_OVERRIDE_STATE_KEEPER_MAX_TOKENS')
     old_summary_chars_override = os.environ.get('THREADLOOM_OVERRIDE_STATE_KEEPER_SUMMARY_CHARS')
@@ -397,7 +397,7 @@ def main() -> int:
                 os.environ.pop('THREADLOOM_OVERRIDE_STATE_KEEPER_STREAM', None)
             else:
                 os.environ['THREADLOOM_OVERRIDE_STATE_KEEPER_STREAM'] = old_stream_override
-        clear_active_character_override()
+        reset_active_character_override(character_override_token)
 
 
 if __name__ == '__main__':

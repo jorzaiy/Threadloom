@@ -20,7 +20,7 @@ SESSION_ID_RE = re.compile(r'^[0-9A-Za-z_\-\u4e00-\u9fff]+$')
 TURN_ID_RE = re.compile(r'^[0-9A-Za-z_-]+$')
 MAX_SESSION_ID_LENGTH = 120
 MAX_TURN_ID_LENGTH = 120
-_ACTIVE_CHARACTER_ID_OVERRIDE: str | None = None
+_ACTIVE_CHARACTER_ID_OVERRIDE: ContextVar[str | None] = ContextVar('threadloom_active_character_id_override', default=None)
 _ACTIVE_USER_ID: ContextVar[str] = ContextVar('threadloom_active_user_id', default=DEFAULT_USER_ID)
 _MULTI_USER_REQUEST: ContextVar[bool] = ContextVar('threadloom_multi_user_request', default=False)
 
@@ -191,14 +191,17 @@ def active_user_label() -> str:
     return active_user_id()
 
 
-def set_active_character_override(character_id: str | None) -> None:
-    global _ACTIVE_CHARACTER_ID_OVERRIDE
+def set_active_character_override(character_id: str | None) -> Token[str | None]:
     value = str(character_id or '').strip()
-    _ACTIVE_CHARACTER_ID_OVERRIDE = value or None
+    return _ACTIVE_CHARACTER_ID_OVERRIDE.set(value or None)
+
+
+def reset_active_character_override(token: Token[str | None]) -> None:
+    _ACTIVE_CHARACTER_ID_OVERRIDE.reset(token)
 
 
 def clear_active_character_override() -> None:
-    set_active_character_override(None)
+    _ACTIVE_CHARACTER_ID_OVERRIDE.set(None)
 
 
 def _read_json(path: Path) -> dict:
@@ -211,8 +214,9 @@ def _read_json(path: Path) -> dict:
 
 
 def active_character_id() -> str:
-    if _ACTIVE_CHARACTER_ID_OVERRIDE:
-        return _ACTIVE_CHARACTER_ID_OVERRIDE
+    override = _ACTIVE_CHARACTER_ID_OVERRIDE.get()
+    if override:
+        return override
     active_path = user_config_root() / ACTIVE_CHARACTER_CONFIG_NAME
     active_data = _read_json(active_path)
     configured = str(active_data.get('character_id', '') or '').strip()
@@ -303,6 +307,38 @@ def current_session_dir(session_id: str) -> Path:
 
 def legacy_session_dir(session_id: str) -> Path:
     return _session_dir_for_root(legacy_sessions_root(), session_id)
+
+
+def find_character_session_dir(session_id: str, *, exclude_active: bool = False) -> Path | None:
+    safe_session_id = normalize_session_id(session_id)
+    active_character = active_character_id()
+    current_resolved = current_session_dir(safe_session_id).resolve(strict=False) if exclude_active else None
+    root = user_root() / 'characters'
+    if not root.exists():
+        return None
+    for character_dir in sorted(root.iterdir(), key=lambda item: item.name):
+        if not character_dir.is_dir():
+            continue
+        if exclude_active and character_dir.name == active_character:
+            continue
+        candidate = _session_dir_for_root(character_dir / 'sessions', safe_session_id)
+        if current_resolved is not None and candidate.resolve(strict=False) == current_resolved:
+            continue
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def current_session_owner_context(session_id: str) -> dict:
+    safe_session_id = normalize_session_id(session_id)
+    session_dir = current_session_dir(safe_session_id)
+    return {
+        'user_id': active_user_id(),
+        'character_id': active_character_id(),
+        'session_id': safe_session_id,
+        'session_root': str(current_sessions_root().resolve(strict=False)),
+        'session_dir': str(session_dir.resolve(strict=False)),
+    }
 
 
 def managed_session_id_from_path(path: Path) -> str | None:

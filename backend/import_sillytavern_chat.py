@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from bootstrap_session import bootstrap_session, load_runtime_config, resolve_source, read_text, resolve_source_from_config
-from paths import clear_active_character_override, normalize_session_id, resolve_session_dir, set_active_character_override
+from paths import current_session_owner_context, normalize_session_id, reset_active_character_override, resolve_session_dir, set_active_character_override
 from runtime_store import append_history, build_state_snapshot, save_canon, save_context, save_meta, save_state, save_summary, seed_default_state, session_paths
 from state_bridge import parse_root_state_markdown
 
@@ -253,6 +253,7 @@ def _bootstrap_import_session(session_id: str, *, source_path: Path, metadata: d
     save_state(session_id, state)
 
     context = {
+        **current_session_owner_context(session_id),
         'runtime_rules_path': sources.get('runtime_rules'),
         'character_core_path': sources.get('character_core'),
         'lorebook_path': sources.get('lorebook'),
@@ -269,7 +270,7 @@ def _bootstrap_import_session(session_id: str, *, source_path: Path, metadata: d
 
 
 def import_sillytavern_jsonl(source_path: Path, *, target_session: str | None = None, character_id: str | None = None) -> dict:
-    set_active_character_override(character_id)
+    token = set_active_character_override(character_id)
     try:
         items = _load_jsonl(source_path)
         metadata, chat_items = _split_metadata(items)
@@ -320,7 +321,7 @@ def import_sillytavern_jsonl(source_path: Path, *, target_session: str | None = 
 
         return report
     finally:
-        clear_active_character_override()
+        reset_active_character_override(token)
 
 
 def main() -> int:

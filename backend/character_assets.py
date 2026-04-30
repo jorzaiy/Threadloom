@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextvars import ContextVar, Token
 from pathlib import Path
 
 try:
@@ -11,21 +12,25 @@ except ImportError:
     from paths import APP_ROOT, active_user_id, character_root, character_source_root, is_multi_user_request_context, shared_path
 
 
-_CHARACTER_OVERRIDE_ROOT: Path | None = None
+_CHARACTER_OVERRIDE_ROOT: ContextVar[Path | None] = ContextVar('threadloom_character_override_root', default=None)
 
 
-def set_character_override_root(root: Path | None) -> None:
-    global _CHARACTER_OVERRIDE_ROOT
-    _CHARACTER_OVERRIDE_ROOT = root.resolve() if isinstance(root, Path) else None
+def set_character_override_root(root: Path | None) -> Token[Path | None]:
+    return _CHARACTER_OVERRIDE_ROOT.set(root.resolve() if isinstance(root, Path) else None)
+
+
+def reset_character_override_root(token: Token[Path | None]) -> None:
+    _CHARACTER_OVERRIDE_ROOT.reset(token)
 
 
 def clear_character_override_root() -> None:
-    set_character_override_root(None)
+    _CHARACTER_OVERRIDE_ROOT.set(None)
 
 
 def character_source_base() -> Path:
-    if _CHARACTER_OVERRIDE_ROOT is not None:
-        return _CHARACTER_OVERRIDE_ROOT
+    override = _CHARACTER_OVERRIDE_ROOT.get()
+    if override is not None:
+        return override
     return character_source_root()
 
 

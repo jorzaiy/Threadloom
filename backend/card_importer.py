@@ -27,7 +27,6 @@ from typing import Any
 try:
     from .card_hints import invalidate_card_hints_cache
     from .character_assets import (
-        clear_character_override_root,
         character_assets_root,
         character_source_base,
         character_core_path,
@@ -35,6 +34,7 @@ try:
         imported_card_root,
         lorebook_path,
         openings_path,
+        reset_character_override_root,
         set_character_override_root,
         system_npcs_path,
     )
@@ -42,7 +42,6 @@ try:
 except ImportError:
     from card_hints import invalidate_card_hints_cache
     from character_assets import (
-        clear_character_override_root,
         character_assets_root,
         character_source_base,
         character_core_path,
@@ -50,6 +49,7 @@ except ImportError:
         imported_card_root,
         lorebook_path,
         openings_path,
+        reset_character_override_root,
         set_character_override_root,
         system_npcs_path,
     )
@@ -1672,7 +1672,7 @@ def import_card_to_target(source: str | Path, *, target_source_root: Path) -> di
     source_path = Path(source).expanduser().resolve()
     target_root = target_source_root.expanduser().resolve()
     target_root.mkdir(parents=True, exist_ok=True)
-    set_character_override_root(target_root)
+    token = set_character_override_root(target_root)
     try:
         if source_path.suffix.lower() == '.png':
             return import_card(source_path.read_bytes())
@@ -1680,4 +1680,4 @@ def import_card_to_target(source: str | Path, *, target_source_root: Path) -> di
             return import_raw_card_file(source_path)
         raise ValueError('source must be a .png or .json raw card')
     finally:
-        clear_character_override_root()
+        reset_character_override_root(token)
