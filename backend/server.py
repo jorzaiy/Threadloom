@@ -30,7 +30,7 @@ from model_config import (
 )
 from regenerate_turn import regenerate_last_partial
 from session_lifecycle import delete_session, list_sessions, start_new_game
-from paths import DEFAULT_USER_ID, active_character_id, is_path_within_user_root, normalize_session_id, resolve_session_dir, reset_active_user_id, reset_multi_user_request_context, set_active_user_id, set_multi_user_request_context, slugify
+from paths import DEFAULT_USER_ID, active_character_id, current_session_dir, find_character_session_dir, is_path_within_user_root, normalize_session_id, resolve_session_dir, reset_active_user_id, reset_multi_user_request_context, set_active_user_id, set_multi_user_request_context, slugify
 from player_profile import delete_user_avatar, load_base_player_profile, load_character_player_profile_override, resolve_user_avatar_path, save_base_player_profile, save_character_player_profile_override, save_user_avatar
 from runtime_store import build_entity_map, build_state_snapshot, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 from user_manager import (
@@ -184,6 +184,24 @@ class Handler(BaseHTTPRequestHandler):
         session_dir = resolve_session_dir(session_id, create=False)
         return session_dir.exists() and (session_dir / 'context.json').exists()
 
+    def _validate_active_session_scope(self, session_id: str, *, allow_missing: bool = False) -> bool:
+        current = current_session_dir(session_id)
+        if current.exists():
+            return True
+        other = find_character_session_dir(session_id, exclude_active=True)
+        if other is not None:
+            self._send(409, {
+                'error': {
+                    'code': 'SESSION_CHARACTER_MISMATCH',
+                    'message': 'session belongs to a different character; switch back to that character before using it',
+                }
+            })
+            return False
+        if allow_missing:
+            return True
+        self._send(404, {'error': {'code': 'SESSION_NOT_FOUND', 'message': 'session not found'}})
+        return False
+
     def _invalid_input(self, message: str):
         return self._send(400, {'error': {'code': 'INVALID_INPUT', 'message': message}})
 
@@ -278,10 +296,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _session_lock(self, session_id: str) -> threading.Lock:
         with SESSION_LOCKS_GUARD:
-            lock = SESSION_LOCKS.get(session_id)
+            lock_key = str(resolve_session_dir(session_id, create=False).resolve(strict=False))
+            lock = SESSION_LOCKS.get(lock_key)
             if lock is None:
                 lock = threading.Lock()
-                SESSION_LOCKS[session_id] = lock
+                SESSION_LOCKS[lock_key] = lock
             return lock
 
     def _extract_token(self) -> str:
@@ -338,6 +357,8 @@ class Handler(BaseHTTPRequestHandler):
                     session_id = normalize_session_id(session_id)
                 except ValueError as err:
                     return self._invalid_input(str(err))
+                if not self._validate_active_session_scope(session_id, allow_missing=True):
+                    return
                 if not self._session_exists(session_id):
                     return self._send(200, {
                         'session_id': session_id,
@@ -449,6 +470,8 @@ class Handler(BaseHTTPRequestHandler):
                     session_id = normalize_session_id(session_id)
                 except ValueError as err:
                     return self._invalid_input(str(err))
+                if not self._validate_active_session_scope(session_id, allow_missing=True):
+                    return
                 before: int | None = None
                 if before_raw:
                     try:
@@ -491,6 +514,8 @@ class Handler(BaseHTTPRequestHandler):
                     session_id = normalize_session_id(session_id)
                 except ValueError as err:
                     return self._invalid_input(str(err))
+                if not self._validate_active_session_scope(session_id, allow_missing=False):
+                    return
                 if not self._session_exists(session_id):
                     return self._send(404, {'error': {'code': 'SESSION_NOT_FOUND', 'message': 'session not found'}})
                 state = load_state(session_id)
@@ -605,6 +630,8 @@ class Handler(BaseHTTPRequestHandler):
                     session_id = normalize_session_id(session_id)
                 except ValueError as err:
                     return self._invalid_input(str(err))
+                if not self._validate_active_session_scope(session_id, allow_missing=True):
+                    return
                 with self._session_lock(session_id):
                     return self._send(200, start_new_game(session_id))
 
@@ -616,6 +643,8 @@ class Handler(BaseHTTPRequestHandler):
                     session_id = normalize_session_id(session_id)
                 except ValueError as err:
                     return self._invalid_input(str(err))
+                if not self._validate_active_session_scope(session_id, allow_missing=False):
+                    return
                 with self._session_lock(session_id):
                     return self._send(200, delete_session(session_id))
 
@@ -627,6 +656,8 @@ class Handler(BaseHTTPRequestHandler):
                     session_id = normalize_session_id(session_id)
                 except ValueError as err:
                     return self._invalid_input(str(err))
+                if not self._validate_active_session_scope(session_id, allow_missing=False):
+                    return
                 with self._session_lock(session_id):
                     result = regenerate_last_partial(session_id)
                 status = 200 if 'error' not in result else 400
@@ -640,6 +671,8 @@ class Handler(BaseHTTPRequestHandler):
                     session_id = normalize_session_id(session_id)
                 except ValueError as err:
                     return self._invalid_input(str(err))
+                if not self._validate_active_session_scope(session_id, allow_missing=True):
+                    return
                 payload['session_id'] = session_id
                 with self._session_lock(session_id):
                     result = handle_message(payload)

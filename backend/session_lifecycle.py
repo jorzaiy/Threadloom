@@ -11,12 +11,12 @@ from pathlib import Path
 try:
     from .bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from .opening import build_opening_reply, initialize_opening_state
-    from .paths import iter_session_dirs, normalize_session_id, resolve_session_dir
+    from .paths import current_session_owner_context, iter_session_dirs, normalize_session_id, resolve_session_dir
     from .runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, session_paths
 except ImportError:
     from bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from opening import build_opening_reply, initialize_opening_state
-    from paths import iter_session_dirs, normalize_session_id, resolve_session_dir
+    from paths import current_session_owner_context, iter_session_dirs, normalize_session_id, resolve_session_dir
     from runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, session_paths
 
 
@@ -103,6 +103,7 @@ def start_new_game(session_id: str) -> dict:
     state['active_threads'] = []
     save_state(new_session_id, state)
     save_context(new_session_id, {
+        **current_session_owner_context(new_session_id),
         'runtime_rules_path': sources.get('runtime_rules'),
         'character_core_path': sources.get('character_core'),
         'lorebook_path': sources.get('lorebook'),

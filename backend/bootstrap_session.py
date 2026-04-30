@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import json
+from importlib import import_module
 from pathlib import Path
 
 from runtime_store import ensure_session_dirs, load_canon, load_context, load_state, load_summary, save_canon, save_context, save_state, seed_default_state, session_paths
 from state_bridge import parse_root_state_markdown
-from paths import APP_ROOT, SHARED_ROOT, read_json_file, resolve_layered_source, resolve_source_key
+from paths import APP_ROOT, SHARED_ROOT, current_session_owner_context, read_json_file, resolve_layered_source, resolve_source_key
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
@@ -20,7 +21,8 @@ def read_json(path: Path):
 
 
 def load_runtime_config() -> dict:
-    return read_json(CONFIG)
+    module_name = f'{__package__}.model_config' if __package__ else 'model_config'
+    return import_module(module_name).load_runtime_config()
 
 
 def resolve_source(path_str: str) -> Path:
@@ -66,6 +68,7 @@ def bootstrap_session(session_id: str) -> dict:
         save_state(session_id, state)
 
         save_context(session_id, {
+            **current_session_owner_context(session_id),
             'runtime_rules_path': sources.get('runtime_rules'),
             'character_core_path': sources.get('character_core'),
             'lorebook_path': sources.get('lorebook'),
