@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import Any, Iterable
 
 try:
     from .continuity_hints import match_continuity_hint
@@ -44,6 +44,19 @@ ENTITY_DESCRIPTOR_SUFFIXES = (
     '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
 )
 GENERIC_SHADOW_LABELS = {'暗影', '黑影', '影子', '人影'}
+PERSON_EVIDENCE_SUFFIXES = ENTITY_DESCRIPTOR_SUFFIXES + (
+    '老汉', '老妇', '老人', '先生', '小姐', '姑娘', '掌柜', '老板', '东家', '伙计', '学徒', '官差', '衙役',
+    '捕快', '巡捕', '守卫', '侍卫', '士兵', '弟子', '师父', '师兄', '师姐', '师弟', '师妹', '长老', '管事',
+)
+PERSON_ACTION_VERBS = (
+    '说', '问', '答', '笑', '喊', '叫', '道', '提醒', '解释', '反驳', '点头', '摇头', '看', '望', '盯', '瞥',
+    '走', '站', '坐', '递', '接', '拿', '放', '拦', '扶', '推', '拉', '领', '带', '跟', '追', '退', '拱手', '皱眉',
+)
+PERSON_ROLE_HINTS = (
+    '人物', '人', '者', '男', '女', '青年', '少年', '老者', '老人', '老汉', '老妇', '姑娘', '先生', '小姐',
+    '掌柜', '老板', '东家', '伙计', '学徒', '官差', '衙役', '捕快', '巡捕', '守卫', '侍卫', '士兵', '弟子',
+    '师父', '师兄', '师姐', '师弟', '师妹', '长老', '管事', 'NPC', 'npc',
+)
 
 
 def extract_section_lines(text: str, section: str) -> list[str]:
@@ -233,6 +246,153 @@ def _entity_name_set(entity: dict) -> set[str]:
         if alias_text:
             names.add(alias_text)
     return names
+
+
+def _looks_like_person_label(name: str) -> bool:
+    text = sanitize_runtime_name(name)
+    if not text or is_protagonist_name(text) or looks_like_bad_entity_fragment(text):
+        return False
+    if len(text) > 16:
+        return False
+    if any(ch in text for ch in '，。！？：；、“”‘’【】[]（）()'):
+        return False
+    if text.endswith(NON_PERSON_SUFFIXES):
+        return False
+    if '的' in text:
+        return False
+    if '·' in text and 3 <= len(text) <= 16:
+        return True
+    if any(text.endswith(suffix) for suffix in PERSON_EVIDENCE_SUFFIXES):
+        return True
+    return False
+
+
+def _person_action_evidence(name: str, text: str) -> bool:
+    label = sanitize_runtime_name(name)
+    if not label or not text or label not in text:
+        return False
+    verb_pattern = '|'.join(re.escape(verb) for verb in PERSON_ACTION_VERBS)
+    patterns = [
+        rf'{re.escape(label)}[^。！？\n]{{0,8}}(?:{verb_pattern})',
+        rf'(?:对|向|和|与|跟|把|将|被|让){re.escape(label)}',
+        rf'{re.escape(label)}[^。！？\n]{{0,12}}(?:低声|沉声|扬声|拱手|皱眉|点头|摇头)',
+    ]
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _role_has_person_evidence(role_label: str) -> bool:
+    role = str(role_label or '').strip()
+    if not role or role == '待确认':
+        return False
+    return any(hint in role for hint in PERSON_ROLE_HINTS)
+
+
+def _actor_name_pool(*states: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+    for state in states:
+        actors = state.get('actors', {}) if isinstance(state, dict) else {}
+        if not isinstance(actors, dict):
+            continue
+        for actor_id, actor in actors.items():
+            if not isinstance(actor, dict) or str(actor_id) == 'protagonist' or actor.get('kind') == 'protagonist':
+                continue
+            for raw in [actor.get('name', '')] + list(actor.get('aliases', []) or []):
+                name = sanitize_runtime_name(raw)
+                if name and not is_protagonist_name(name):
+                    names.add(name)
+    return names
+
+
+def _important_name_pool(items: list[dict[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        for raw in [item.get('primary_label', '')] + list(item.get('aliases', []) or []):
+            name = sanitize_runtime_name(raw)
+            if name and not is_protagonist_name(name):
+                names.add(name)
+    return names
+
+
+def _continuity_hint_name_pool(items: list[dict[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        for raw in [item.get('primary_label', '')] + list(item.get('aliases', []) or []):
+            name = sanitize_runtime_name(raw)
+            if name and not is_protagonist_name(name):
+                names.add(name)
+    return names
+
+
+def _person_evidence_text(current: dict[str, Any], prev: dict[str, Any]) -> str:
+    blocks: list[str] = []
+    for state in (current, prev):
+        if not isinstance(state, dict):
+            continue
+        blocks.extend(str(state.get(field, '') or '') for field in ('main_event', 'immediate_goal'))
+        for item in state.get('active_threads', []) or []:
+            if isinstance(item, dict):
+                blocks.extend(str(item.get(field, '') or '') for field in ('label', 'goal', 'obstacle', 'latest_change'))
+    recent = _recent_assistant_text(prev, limit=4) if isinstance(prev, dict) else ''
+    if recent:
+        blocks.append(recent)
+    return '\n'.join(block for block in blocks if block)
+
+
+def _has_positive_person_evidence(name: str, item: dict[str, Any] | None, current: dict[str, Any], prev: dict[str, Any]) -> bool:
+    label = sanitize_runtime_name(name)
+    if not label or is_protagonist_name(label) or looks_like_bad_entity_fragment(label):
+        return False
+    if label in _actor_name_pool(current, prev):
+        return True
+    important_names = _important_name_pool(current.get('important_npcs', prev.get('important_npcs', []))) | _important_name_pool(prev.get('important_npcs', []))
+    if label in important_names:
+        return True
+    hint_names = _continuity_hint_name_pool(current.get('continuity_hints', prev.get('continuity_hints', []))) | _continuity_hint_name_pool(prev.get('continuity_hints', []))
+    if label in hint_names:
+        return True
+    if item and _looks_like_person_label(label) and _role_has_person_evidence(str(item.get('role_label', '') or '')):
+        return True
+    if _looks_like_person_label(label) and _person_action_evidence(label, _person_evidence_text(current, prev)):
+        return True
+    return False
+
+
+def _filter_person_names_with_evidence(names: Iterable[str], current: dict[str, Any], prev: dict[str, Any], *, limit: int = 6) -> list[str]:
+    out: list[str] = []
+    for raw in names or []:
+        name = sanitize_runtime_name(raw)
+        if not name or name in out:
+            continue
+        if not _has_positive_person_evidence(name, None, current, prev):
+            continue
+        out.append(name)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _filter_scene_entities_with_person_evidence(entities: list[dict[str, Any]], current: dict[str, Any], prev: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in entities or []:
+        if not isinstance(item, dict):
+            continue
+        primary = sanitize_runtime_name(item.get('primary_label', ''))
+        if not _has_positive_person_evidence(primary, item, current, prev):
+            continue
+        next_item = dict(item)
+        aliases = []
+        for alias in item.get('aliases', []) or []:
+            alias_text = sanitize_runtime_name(alias)
+            if alias_text and (alias_text == primary or _has_positive_person_evidence(alias_text, item, current, prev)):
+                aliases.append(alias_text)
+        next_item['primary_label'] = primary
+        next_item['aliases'] = dedupe_names(aliases + [primary])
+        out.append(next_item)
+    return out
 
 
 def entity_descriptor_signature(name: str) -> str:
@@ -1391,17 +1551,20 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             elif key == 'immediate_goal':
                 current[key] = '待确认'
 
+    if isinstance(current.get('scene_entities', []), list):
+        current['scene_entities'] = _filter_scene_entities_with_person_evidence(current.get('scene_entities', []), current, prev)
+
     entity_onstage_names = _derive_names_from_scene_entities(current.get('scene_entities', []), onstage_only=True)
     if entity_onstage_names:
         current['onstage_npcs'] = entity_onstage_names
     else:
         current['onstage_npcs'] = dedupe_names(current.get('onstage_npcs', prev.get('onstage_npcs', [])), limit=6)
-    current['onstage_npcs'] = [name for name in current['onstage_npcs'] if not looks_like_bad_entity_fragment(name)]
+    current['onstage_npcs'] = _filter_person_names_with_evidence(current['onstage_npcs'], current, prev, limit=6)
     current['relevant_npcs'] = dedupe_names(
         [name for name in current.get('relevant_npcs', prev.get('relevant_npcs', [])) if name not in current['onstage_npcs']],
         limit=6,
     )
-    current['relevant_npcs'] = [name for name in current['relevant_npcs'] if not looks_like_bad_entity_fragment(name)]
+    current['relevant_npcs'] = _filter_person_names_with_evidence(current['relevant_npcs'], current, prev, limit=6)
 
     current['carryover_signals'] = normalize_carryover_signals(current.get('carryover_signals', prev.get('carryover_signals', [])))
     if current['carryover_signals']:
@@ -1597,6 +1760,12 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         current.get('continuity_hints', prev.get('continuity_hints', [])),
     )
     current['scene_entities'] = _repair_existing_degraded_entities(current.get('scene_entities', []), prev)
+    current['scene_entities'] = _filter_scene_entities_with_person_evidence(current.get('scene_entities', []), current, prev)
+    entity_onstage_names = _derive_names_from_scene_entities(current.get('scene_entities', []), onstage_only=True)
+    if entity_onstage_names:
+        current['onstage_npcs'] = _filter_person_names_with_evidence(entity_onstage_names, current, prev, limit=6)
+    else:
+        current['onstage_npcs'] = _filter_person_names_with_evidence(current.get('onstage_npcs', []), current, prev, limit=6)
     arbiter_signals = current.get('arbiter_signals', {})
     if not isinstance(arbiter_signals, dict):
         arbiter_signals = {}
@@ -1644,12 +1813,13 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     )
     recovered_relevant = _recover_relevant_from_continuity(current, prev)
     if recovered_relevant:
-        current['relevant_npcs'] = dedupe_names(current.get('relevant_npcs', []) + recovered_relevant, limit=6)
+        current['relevant_npcs'] = _filter_person_names_with_evidence(dedupe_names(current.get('relevant_npcs', []) + recovered_relevant, limit=6), current, prev, limit=6)
     recovered_names = _recover_names_from_structure(current, prev)
     if recovered_names:
-        current['relevant_npcs'] = dedupe_names(current.get('relevant_npcs', []) + recovered_names, limit=6)
+        current['relevant_npcs'] = _filter_person_names_with_evidence(dedupe_names(current.get('relevant_npcs', []) + recovered_names, limit=6), current, prev, limit=6)
         if not current.get('scene_entities'):
             current['scene_entities'] = fallback_scene_entities(recovered_names)
+            current['scene_entities'] = _filter_scene_entities_with_person_evidence(current.get('scene_entities', []), current, prev)
     current_main_event = str(current.get('main_event', '') or '').strip()
     current_location = str(current.get('location', '') or '').strip()
     present_names = set(current.get('onstage_npcs', []) or []) | set(current.get('relevant_npcs', []) or [])

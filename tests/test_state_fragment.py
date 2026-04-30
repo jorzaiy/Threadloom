@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import unittest
+from typing import Any
 from unittest.mock import patch
 
 from backend.state_fragment import extract_reply_skeleton, merge_reply_skeleton, merge_state_skeleton
 from backend import state_keeper
 from backend.state_bridge import normalize_state_dict
+from backend.thread_tracker import apply_thread_tracker
 from backend.actor_registry import update_actor_registry
 from backend.arbiter_state import merge_arbiter_state
 from backend.state_keeper import _call_state_keeper_llm, _merge_keeper_fill, _parse_fill_payload
@@ -40,7 +42,7 @@ class StateFragmentTest(unittest.TestCase):
 
 
     def test_normalize_state_does_not_inherit_stale_arbiter_signals(self):
-        prev = {
+        prev: dict[str, Any] = {
             'time': '夜里',
             'location': '巷口',
             'main_event': '旧潜行风险仍未裁定。',
@@ -182,7 +184,7 @@ class StateFragmentTest(unittest.TestCase):
         )
 
     def test_normalize_state_keeps_stable_entities_and_objects_when_candidate_is_weaker(self):
-        prev = {
+        prev: dict[str, Any] = {
             'time': '夜里',
             'location': '来福客栈',
             'main_event': '客栈老板递出账册。',
@@ -449,8 +451,47 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['scene_entities'], [])
         self.assertEqual(normalized['main_event'], '主角独自整理铜牌。')
 
+    def test_normalize_state_rejects_scene_title_fragment_as_npc(self):
+        main_event = '**2026年4月28日 清晨，训练场跑道。** 维克托独自在跑道上调整呼吸。'
+        state = {
+            'time': '2026年4月28日 清晨',
+            'location': '训练场跑道',
+            'main_event': main_event,
+            'onstage_npcs': ['训练场跑'],
+            'scene_entities': [
+                {
+                    'entity_id': 'scene_npc_01',
+                    'primary_label': '训练场跑',
+                    'aliases': ['训练场跑'],
+                    'role_label': '当前互动核心人物',
+                    'onstage': True,
+                },
+            ],
+        }
+
+        normalized = normalize_state_dict(state, prev_state={})
+        threaded = apply_thread_tracker(normalized, narrator_reply=main_event)
+
+        self.assertEqual(normalized['onstage_npcs'], [])
+        self.assertEqual(normalized['scene_entities'], [])
+        self.assertNotIn('训练场跑', threaded['active_threads'][0]['actors'])
+
+    def test_normalize_state_keeps_action_anchored_people_as_npcs(self):
+        state = {
+            'time': '清晨',
+            'location': '村口',
+            'main_event': '老汉低声提醒她城里不太平，学徒递给她一包药。',
+            'onstage_npcs': ['老汉', '学徒'],
+            'scene_entities': [],
+        }
+
+        normalized = normalize_state_dict(state, prev_state={})
+
+        self.assertEqual(normalized['onstage_npcs'], ['老汉', '学徒'])
+        self.assertEqual([item['primary_label'] for item in normalized['scene_entities']], ['老汉', '学徒'])
+
     def test_normalize_state_accepts_main_event_without_npc_name(self):
-        prev = {
+        prev: dict[str, Any] = {
             'main_event': '陆小环在茶棚试探老汉。',
             'onstage_npcs': ['瘦长中年人', '花白老妇'],
             'scene_entities': [
@@ -468,7 +509,7 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['main_event'], '陆小环转入药铺试探昨夜伤客线索，门外有人驻足窃听。')
 
     def test_normalize_state_preserves_actor_registry_from_previous_state(self):
-        prev = {
+        prev: dict[str, Any] = {
             'time': '雨夜',
             'location': '神都东坊外巷',
             'main_event': '受伤男子被皂衣人围捕。',
@@ -596,7 +637,7 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(updated['knowledge_records'], [{'holder_actor_id': 'protagonist', 'text': '主角知道村长是卧底', 'source_turn': 1}])
 
     def test_possession_new_valid_holder_overrides_old_holder(self):
-        prev = {
+        prev: dict[str, Any] = {
             'actors': {
                 'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '顾青衣', 'aliases': []},
                 'npc_002': {'actor_id': 'npc_002', 'kind': 'npc', 'name': '林越', 'aliases': []},
@@ -616,7 +657,7 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['possession_state'][0]['holder_actor_id'], 'npc_002')
 
     def test_possession_invalid_holder_does_not_override_old_holder(self):
-        prev = {
+        prev: dict[str, Any] = {
             'actors': {'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '顾青衣', 'aliases': []}},
             'tracked_objects': [{'object_id': 'obj_01', 'label': '铜牌', 'kind': 'key_item'}],
             'possession_state': [{'object_id': 'obj_01', 'holder': '顾青衣', 'status': 'held'}],
@@ -752,7 +793,7 @@ class StateFragmentTest(unittest.TestCase):
         # silently be rebuilt and persisted during read-only debugging.
         from backend import important_npc_tracker
 
-        captured: dict = {}
+        captured: dict[str, Any] = {}
 
         def fake_loader(session_id, *, allow_archive_write=True, **kwargs):
             captured['session_id'] = session_id
