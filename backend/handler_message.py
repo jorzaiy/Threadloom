@@ -853,9 +853,6 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state['continuity_hints'] = normalized_hint_entries(session_id)
     state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
     state = resolve_important_npc_continuity(state)
-    # Final authoritative turn commit after actor registry adds stable actor,
-    # possession, visibility, and knowledge bindings.
-    save_state(session_id, state)
     recent_pairs = []
     history_after_append = load_history(session_id)
     current_user = None
@@ -875,6 +872,10 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         recent_pairs=recent_pairs,
         player_name=context.get('player_profile_json', {}).get('name', '') or context.get('player_profile_json', {}).get('courtesyName', ''),
     )
+    # Single authoritative turn commit after keeper, arbiter, thread/npc trackers,
+    # and actor registry have all merged their bindings. update_actor_registry
+    # contains its own LLM-failure fallback so it does not raise out, which lets
+    # us collapse the prior intermediate save into this final write.
     save_state(session_id, state)
     summary_chunk_result = update_summary_chunks(session_id)
     event_summary_item = None

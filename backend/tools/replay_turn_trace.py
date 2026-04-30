@@ -205,7 +205,7 @@ def replay_turn_trace(source_session: str, turn_id: str, target_session: str) ->
     if needs_post_processing:
         state = apply_thread_tracker(state, user_text=text, narrator_reply=reply, arbiter=arbiter)
         state['continuity_hints'] = normalized_hint_entries(target_session)
-        state = update_important_npcs(state, load_history(target_session), continuity_candidates)
+        state = update_important_npcs(state, load_history(target_session), continuity_candidates, allow_archive_write=False)
         state = resolve_important_npc_continuity(state)
         save_state(target_session, state)
         persona_counts = update_persona(target_session, continuity_candidates)

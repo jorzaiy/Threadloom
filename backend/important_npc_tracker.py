@@ -80,7 +80,7 @@ def _service_lock_allowed(*, label: str, role_label: str, reference_candidate: b
     return False
 
 
-def update_important_npcs(state: dict, history: list[dict], reference_candidates: list[dict] | None = None) -> dict:
+def update_important_npcs(state: dict, history: list[dict], reference_candidates: list[dict] | None = None, *, allow_archive_write: bool = True) -> dict:
     current = deepcopy(state or {})
     session_id = str(current.get('session_id', '') or '').strip()
     current_location = str(current.get('location', '') or '').strip()
@@ -213,7 +213,7 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
 
     if not next_items and session_id:
         try:
-            archive = load_keeper_record_archive(session_id)
+            archive = load_keeper_record_archive(session_id, allow_archive_write=allow_archive_write)
         except Exception:
             archive = {}
         registry_items = archive.get('npc_registry', {}).get('entities', []) if isinstance(archive.get('npc_registry', {}), dict) else []

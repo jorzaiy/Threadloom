@@ -211,7 +211,7 @@ def _llm_keeper_rebuild_step(session_id: str, user_text: str, assistant_text: st
         arbiter=arbiter,
     )
     state['continuity_hints'] = normalized_hint_entries(session_id)
-    state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
+    state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []), allow_archive_write=False)
     state = resolve_important_npc_continuity(state)
     save_state(session_id, state)
     persona_counts = update_persona(session_id, context.get('continuity_candidates', []))
@@ -291,7 +291,7 @@ def rebuild_session_from_history(source_session: str, *, target_session: str | N
                     arbiter=None,
                 )
                 state['continuity_hints'] = normalized_hint_entries(session_id)
-                state = update_important_npcs(state, rebuilt_history, [])
+                state = update_important_npcs(state, rebuilt_history, [], allow_archive_write=False)
                 state = resolve_important_npc_continuity(state)
                 save_state(session_id, state)
                 persona_counts = update_persona(session_id, [])

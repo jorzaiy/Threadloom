@@ -55,7 +55,17 @@ PYTHONPATH=backend python3 -m unittest discover -s tests -p 'test_*.py'
 
 ## 没做的事 / 风险记录
 
-- **一回合 4 次 `save_state`**（`handler_message.py` 396 / 456 / 858 / 878）：当前是 crash-recovery 检查点，合并需要重审失败语义，不在本次范围内。
-- **`keeper_archive.load_keeper_record_archive` 默认写盘**：审计了所有调用方（`keeper_record_retriever`、`important_npc_tracker`），均在运行时路径，写盘是预期行为；保留 `allow_archive_write=False` 形参以备未来 read-only 工具调用。
 - **`state_bridge._merge_knowledge_scope` 之前是死代码**：本次修复将其纳入实际调用路径，不再悬空。
 - **`backend/state_updater.py`**：仍保留以服务 `backend/tools/replay_turn_trace.py` 与 `backend/tools/rebuild_session_from_history.py` 的离线重放/重建路径；运行时主链不再依赖。
+
+## 后续小优化（同次提交）
+
+| 项 | 文件 | 说明 |
+|----|------|------|
+| 合并 runtime turn 末尾两次 `save_state` | `backend/handler_message.py` | 中间 save 是 actor_registry 之前的 checkpoint，但 `update_actor_registry` 完全捕获自身 LLM 异常不会向外 raise，合并后 runtime 每 turn 少一次 atomic-rename + history 缓存失效；turn-trace 仍能复现中间态。 |
+| `update_important_npcs` 增加 `allow_archive_write` 形参，tools 改只读调用 | `backend/important_npc_tracker.py` / `backend/tools/replay_turn_trace.py` / `backend/tools/rebuild_session_from_history.py` | replay/rebuild 工具在 archive cache 缺失/损坏时不再静默重建并落盘，避免污染真实 session 的 keeper 缓存。 |
+
+测试：
+
+- `test_update_important_npcs_threads_allow_archive_write_to_archive_loader` 验证形参传透。
+- handler_message 合并通过现有 e2e 测试 (`test_full_regression`、`test_keeper_summary` 等) 间接覆盖。

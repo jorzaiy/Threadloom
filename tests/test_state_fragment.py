@@ -746,6 +746,28 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(skeleton.get('location'), '医馆门前')
         self.assertNotIn('main_event', skeleton)
 
+    def test_update_important_npcs_threads_allow_archive_write_to_archive_loader(self):
+        # Tools (replay / rebuild) call update_important_npcs with
+        # allow_archive_write=False so a stale or missing archive cache cannot
+        # silently be rebuilt and persisted during read-only debugging.
+        from backend import important_npc_tracker
+
+        captured: dict = {}
+
+        def fake_loader(session_id, *, allow_archive_write=True, **kwargs):
+            captured['session_id'] = session_id
+            captured['allow_archive_write'] = allow_archive_write
+            return {'npc_registry': {'entities': []}}
+
+        with patch.object(important_npc_tracker, 'load_keeper_record_archive', side_effect=fake_loader):
+            from backend.important_npc_tracker import update_important_npcs
+
+            state = {'session_id': 'session-isolated', 'important_npcs': []}
+            update_important_npcs(state, [], None, allow_archive_write=False)
+
+        self.assertEqual(captured.get('session_id'), 'session-isolated')
+        self.assertFalse(captured.get('allow_archive_write'))
+
 
 if __name__ == '__main__':
     unittest.main()
