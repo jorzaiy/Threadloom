@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import threading
 from urllib.parse import quote
 from base64 import b64decode
 from pathlib import Path
@@ -17,6 +18,7 @@ from runtime_store import invalidate_history_cache
 
 
 MAX_CHARACTER_IMPORT_BYTES = 16 * 1024 * 1024
+CHARACTER_IMPORT_LOCK = threading.RLock()
 
 
 def _slug(text: str, fallback: str = 'character') -> str:
@@ -156,6 +158,11 @@ def rebuild_character_lorebook(character_id: str) -> dict:
 
 
 def import_character_card_upload(filename: str, file_bytes: bytes, *, target_name: str = '', set_active: bool = True) -> dict:
+    with CHARACTER_IMPORT_LOCK:
+        return _import_character_card_upload(filename, file_bytes, target_name=target_name, set_active=set_active)
+
+
+def _import_character_card_upload(filename: str, file_bytes: bytes, *, target_name: str = '', set_active: bool = True) -> dict:
     suffix = Path(filename or '').suffix.lower()
     if suffix not in {'.png', '.json'}:
         raise ValueError('import file must be a .png or .json raw card')
