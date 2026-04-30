@@ -47,10 +47,15 @@ def _atomic_write_json(path: Path, data, *, indent: int = 2) -> None:
 _history_cache: dict[str, tuple[float, list]] = {}
 
 
+def _history_cache_key(path: Path) -> str:
+    return str(path.resolve(strict=False))
+
+
 def invalidate_history_cache(session_id: str | None = None) -> None:
     """Clear cached history. Call after appending to history."""
     if session_id:
-        _history_cache.pop(session_id, None)
+        path = session_paths(session_id)['history']
+        _history_cache.pop(_history_cache_key(path), None)
     else:
         _history_cache.clear()
 
@@ -68,9 +73,7 @@ def root_persona_dir() -> Path:
     layered = character_runtime_persona_root()
     if layered.exists():
         return layered
-    if is_multi_user_request_context():
-        return layered
-    return shared_path('runtime', 'persona-seeds')
+    return layered
 
 
 def character_npc_profiles_dir() -> Path:
@@ -159,7 +162,8 @@ def load_history(session_id: str) -> list:
         mtime = path.stat().st_mtime
     except Exception:
         mtime = 0.0
-    cached = _history_cache.get(session_id)
+    cache_key = _history_cache_key(path)
+    cached = _history_cache.get(cache_key)
     if cached and cached[0] == mtime:
         return list(cached[1])
     items = []
@@ -171,7 +175,7 @@ def load_history(session_id: str) -> list:
             items.append(json.loads(s))
         except Exception:
             continue
-    _history_cache[session_id] = (mtime, items)
+    _history_cache[cache_key] = (mtime, items)
     return list(items)
 
 

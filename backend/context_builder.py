@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+from importlib import import_module
 from pathlib import Path
 
 from character_assets import load_system_npcs
@@ -545,7 +546,8 @@ def build_featured_cast(lorebook_path: Path, trigger_text: str, onstage: list[st
 
 
 def load_runtime_config() -> dict:
-    return read_json(CONFIG)
+    module_name = f'{__package__}.model_config' if __package__ else 'model_config'
+    return import_module(module_name).load_runtime_config()
 
 
 def resolve_source(path_str: str) -> Path:
