@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from pathlib import Path
 
 
@@ -12,11 +15,14 @@ RUNTIME_DATA_ROOT = APP_ROOT / 'runtime-data'
 DEFAULT_USER_ID = 'default-user'
 DEFAULT_USER_LABEL = 'default_user'
 ACTIVE_CHARACTER_CONFIG_NAME = 'active-character.json'
+USER_ID_RE = re.compile(r'^[0-9A-Za-z_-]{1,64}$')
 SESSION_ID_RE = re.compile(r'^[0-9A-Za-z_\-\u4e00-\u9fff]+$')
 TURN_ID_RE = re.compile(r'^[0-9A-Za-z_-]+$')
 MAX_SESSION_ID_LENGTH = 120
 MAX_TURN_ID_LENGTH = 120
 _ACTIVE_CHARACTER_ID_OVERRIDE: str | None = None
+_ACTIVE_USER_ID: ContextVar[str] = ContextVar('threadloom_active_user_id', default=DEFAULT_USER_ID)
+_MULTI_USER_REQUEST: ContextVar[bool] = ContextVar('threadloom_multi_user_request', default=False)
 
 
 def detect_shared_root() -> Path:
@@ -74,8 +80,78 @@ def normalize_turn_id(turn_id: str) -> str:
     return value
 
 
+def normalize_user_id(user_id: str) -> str:
+    value = str(user_id or '').strip()
+    if not value:
+        raise ValueError('user_id is required')
+    if value in {'_system', '_template'}:
+        raise ValueError('user_id is reserved')
+    if not USER_ID_RE.fullmatch(value):
+        raise ValueError('user_id contains invalid characters')
+    return value
+
+
 def active_user_id() -> str:
-    return DEFAULT_USER_ID
+    return _ACTIVE_USER_ID.get()
+
+
+def set_active_user_id(user_id: str) -> Token[str]:
+    return _ACTIVE_USER_ID.set(normalize_user_id(user_id))
+
+
+def reset_active_user_id(token: Token[str]) -> None:
+    _ACTIVE_USER_ID.reset(token)
+
+
+def is_multi_user_request_context() -> bool:
+    return _MULTI_USER_REQUEST.get()
+
+
+def set_multi_user_request_context(enabled: bool) -> Token[bool]:
+    return _MULTI_USER_REQUEST.set(bool(enabled))
+
+
+def reset_multi_user_request_context(token: Token[bool]) -> None:
+    _MULTI_USER_REQUEST.reset(token)
+
+
+@contextmanager
+def active_user_context(user_id: str) -> Generator[None, None, None]:
+    token = set_active_user_id(user_id)
+    try:
+        yield
+    finally:
+        reset_active_user_id(token)
+
+
+def _resolve_user_id(user_id: str | None = None) -> str:
+    return normalize_user_id(user_id or active_user_id())
+
+
+def confine_to_root(root: Path, candidate: Path, *, label: str = 'path') -> Path:
+    root_resolved = root.resolve(strict=False)
+    candidate_resolved = candidate.resolve(strict=False)
+    try:
+        candidate_resolved.relative_to(root_resolved)
+    except ValueError as err:
+        raise ValueError(f'{label} escapes managed root') from err
+    return candidate_resolved
+
+
+def user_runtime_root(user_id: str | None = None) -> Path:
+    return RUNTIME_DATA_ROOT / _resolve_user_id(user_id)
+
+
+def confine_to_user_root(candidate: Path, user_id: str | None = None, *, label: str = 'path') -> Path:
+    return confine_to_root(user_runtime_root(user_id), candidate, label=label)
+
+
+def is_path_within_user_root(candidate: Path, user_id: str | None = None) -> bool:
+    try:
+        confine_to_user_root(candidate, user_id)
+    except ValueError:
+        return False
+    return True
 
 
 DEFAULT_CHARACTER_ID = '碎影江湖'
@@ -85,8 +161,8 @@ TEMPLATE_ROOT = RUNTIME_DATA_ROOT / '_template'
 def ensure_user_root(user_id: str | None = None) -> Path:
     """确保用户目录结构存在。新用户自动获得默认角色卡。"""
     import shutil
-    uid = user_id or active_user_id()
-    root = RUNTIME_DATA_ROOT / uid
+    uid = _resolve_user_id(user_id)
+    root = user_runtime_root(uid)
     if root.exists():
         return root
     # 创建基本目录结构
@@ -94,9 +170,10 @@ def ensure_user_root(user_id: str | None = None) -> Path:
     (root / 'profile').mkdir(parents=True, exist_ok=True)
     (root / 'presets').mkdir(parents=True, exist_ok=True)
     (root / 'characters').mkdir(parents=True, exist_ok=True)
-    # 复制默认角色卡
+    # 复制默认角色卡。多用户新账号只能从 _template 初始化，不能回退复制
+    # default-user 的私有角色卡数据。
     template_card = TEMPLATE_ROOT / 'characters' / DEFAULT_CHARACTER_ID
-    if not template_card.exists():
+    if not template_card.exists() and uid == DEFAULT_USER_ID:
         # 回退到 default-user 的碎影江湖
         template_card = RUNTIME_DATA_ROOT / DEFAULT_USER_ID / 'characters' / DEFAULT_CHARACTER_ID
     if template_card.exists():
@@ -141,6 +218,8 @@ def active_character_id() -> str:
     configured = str(active_data.get('character_id', '') or '').strip()
     if configured:
         return _slug(configured, 'character')
+    if is_multi_user_request_context():
+        return DEFAULT_CHARACTER_ID
     character_path = SHARED_ROOT / 'character' / 'character-data.json'
     data = _read_json(character_path)
     name = str(data.get('name', '') or '').strip()
@@ -150,7 +229,7 @@ def active_character_id() -> str:
 
 
 def user_root(user_id: str | None = None) -> Path:
-    return RUNTIME_DATA_ROOT / (user_id or active_user_id())
+    return user_runtime_root(user_id)
 
 
 def user_profile_root(user_id: str | None = None) -> Path:
@@ -199,6 +278,8 @@ def current_sessions_root() -> Path:
 
 def session_roots() -> list[Path]:
     roots = [current_sessions_root()]
+    if is_multi_user_request_context():
+        return roots
     legacy = legacy_sessions_root()
     if legacy not in roots:
         roots.append(legacy)
@@ -251,7 +332,7 @@ def resolve_session_dir(session_id: str, *, create: bool = False) -> Path:
     legacy = legacy_session_dir(safe_session_id)
     if current.exists():
         return current
-    if legacy.exists():
+    if not is_multi_user_request_context() and legacy.exists():
         return legacy
     if create:
         current.mkdir(parents=True, exist_ok=True)
@@ -264,7 +345,7 @@ def iter_session_dirs() -> list[Path]:
     legacy = legacy_sessions_root()
     if current.exists():
         roots.append(current)
-    if legacy.exists() and legacy != current:
+    if not is_multi_user_request_context() and legacy.exists() and legacy != current:
         roots.append(legacy)
 
     seen_names: set[str] = set()
@@ -329,6 +410,8 @@ def resolve_layered_source(path_str: str) -> Path:
     }
     mapped = mappings.get(text)
     if mapped and mapped.exists():
+        return mapped
+    if mapped and is_multi_user_request_context():
         return mapped
 
     direct = resolve_legacy_source(text)

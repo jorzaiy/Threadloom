@@ -5,6 +5,7 @@ import logging
 import threading
 import sys
 from base64 import b64decode
+from contextvars import Token
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -29,19 +30,21 @@ from model_config import (
 )
 from regenerate_turn import regenerate_last_partial
 from session_lifecycle import delete_session, list_sessions, start_new_game
-from paths import DEFAULT_USER_ID, active_character_id, normalize_session_id, resolve_session_dir
+from paths import DEFAULT_USER_ID, active_character_id, is_path_within_user_root, normalize_session_id, resolve_session_dir, reset_active_user_id, reset_multi_user_request_context, set_active_user_id, set_multi_user_request_context, slugify
 from player_profile import delete_user_avatar, load_base_player_profile, load_character_player_profile_override, resolve_user_avatar_path, save_base_player_profile, save_character_player_profile_override, save_user_avatar
 from runtime_store import build_entity_map, build_state_snapshot, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 from user_manager import (
-    create_user, delete_user, list_users, login, logout,
+    admin_has_password, create_user, delete_user, list_users, login, logout,
     is_multi_user_enabled, set_multi_user_enabled,
-    set_admin_password, resolve_user_from_request, ensure_admin_exists,
+    reset_user_password, set_admin_password, resolve_user_from_request, ensure_admin_exists, validate_token,
 )
 
 
 HOST = '127.0.0.1'
 PORT = 8765
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
+MAX_CHAT_IMPORT_BYTES = 16 * 1024 * 1024
 SESSION_LOCKS: dict[str, threading.Lock] = {}
 SESSION_LOCKS_GUARD = threading.Lock()
 
@@ -53,6 +56,110 @@ logging.basicConfig(
 )
 logger = logging.getLogger('threadloom.server')
 MULTI_USER_PRODUCT_ENABLED = False
+
+PUBLIC_GET_PATHS = {
+    '/',
+    '/index.html',
+    '/app.js',
+    '/styles.css',
+    '/favicon.svg',
+    '/api/health',
+    '/api/auth/me',
+}
+PUBLIC_POST_PATHS = {
+    '/api/auth/login',
+    '/api/auth/logout',
+    '/api/multi-user',
+}
+USER_ASSET_CACHE_HEADERS = {'Cache-Control': 'no-store'}
+
+
+def is_valid_character_id_param(character_id: str) -> bool:
+    value = str(character_id or '').strip()
+    return bool(value) and slugify(value, 'character') == value
+
+
+def _public_paths_for_method(method: str) -> set[str]:
+    if method == 'GET':
+        return PUBLIC_GET_PATHS
+    if method == 'POST':
+        return PUBLIC_POST_PATHS
+    return set()
+
+
+def begin_request_user_context(path: str, method: str, headers: dict[str, str]) -> tuple[str | None, Token[str] | None, bool]:
+    public_paths = _public_paths_for_method(method)
+    uid = resolve_user_from_request(headers)
+    if is_multi_user_enabled() and uid is None and path not in public_paths:
+        return None, None, False
+    token = set_active_user_id(uid or DEFAULT_USER_ID)
+    return uid or DEFAULT_USER_ID, token, True
+
+
+def begin_multi_user_request_context() -> Token[bool]:
+    return set_multi_user_request_context(is_multi_user_enabled())
+
+
+def payload_string(payload: dict, key: str, *, required: bool = True) -> str:
+    value = payload.get(key)
+    if value is None:
+        if required:
+            raise ValueError(f'{key} is required')
+        return ''
+    if not isinstance(value, str):
+        raise ValueError(f'{key} must be a string')
+    text = value.strip() if key != 'password' else value
+    if required and not text:
+        raise ValueError(f'{key} is required')
+    return text
+
+
+def payload_bool(payload: dict, key: str, *, required: bool = True) -> bool:
+    value = payload.get(key)
+    if value is None:
+        if required:
+            raise ValueError(f'{key} is required')
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(f'{key} must be a boolean')
+    return value
+
+
+def decode_base64_limited(content_base64: str, *, max_bytes: int, label: str) -> bytes:
+    try:
+        data = b64decode(content_base64.encode('utf-8'), validate=True)
+    except Exception as err:
+        raise ValueError(f'invalid {label} payload') from err
+    if len(data) > max_bytes:
+        raise ValueError(f'{label} payload is too large')
+    return data
+
+
+def decode_chat_import_content(content_base64: str) -> str:
+    return decode_base64_limited(content_base64, max_bytes=MAX_CHAT_IMPORT_BYTES, label='chat').decode('utf-8')
+
+
+def authenticated_admin_from_token(token: str) -> str | None:
+    if not token or not admin_has_password():
+        return None
+    uid = validate_token(token)
+    return uid if uid == DEFAULT_USER_ID else None
+
+
+def is_admin_password_bootstrap_action(action: str) -> bool:
+    return action == 'set_admin_password' and not is_multi_user_enabled() and not admin_has_password()
+
+
+def allows_user_id_payload(path: str) -> bool:
+    return path in {'/api/auth/login', '/api/users'}
+
+
+def business_payload_has_user_id(path: str, payload: dict) -> bool:
+    return not allows_user_id_payload(path) and 'user_id' in payload
+
+
+def business_query_has_user_id(path: str, query: dict[str, list[str]]) -> bool:
+    return not allows_user_id_payload(path) and 'user_id' in query
 
 
 def _experimental_disabled_payload(feature: str) -> dict:
@@ -138,6 +245,13 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return data
 
+    def _payload_string(self, payload: dict, key: str, *, required: bool = True) -> str | None:
+        try:
+            return payload_string(payload, key, required=required)
+        except ValueError as err:
+            self._invalid_input(str(err))
+            return None
+
     def _send(self, status: int, payload: dict):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         return self._send_raw(
@@ -181,9 +295,30 @@ class Handler(BaseHTTPRequestHandler):
                 return part[len('session_token='):]
         return ''
 
+    def _authenticated_admin_user(self) -> str | None:
+        return authenticated_admin_from_token(self._extract_token())
+
+    def _begin_request_user(self, path: str, method: str) -> tuple[str | None, Token[str] | None, bool]:
+        uid, token, ok = begin_request_user_context(path, method, dict(self.headers))
+        if not ok:
+            self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': 'login required'}})
+            return None, None, False
+        return uid, token, True
+
     def do_GET(self):
         parsed = urlparse(self.path)
-        qs = parse_qs(parsed.query)
+        _, user_token, authorized = self._begin_request_user(parsed.path, 'GET')
+        multi_user_token = begin_multi_user_request_context() if authorized else None
+        if not authorized:
+            return
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        if business_query_has_user_id(parsed.path, qs):
+            self._invalid_input('business API must not include user_id')
+            if user_token is not None:
+                reset_active_user_id(user_token)
+            if multi_user_token is not None:
+                reset_multi_user_request_context(multi_user_token)
+            return
         session_id = (qs.get('session_id') or [''])[0].strip()
         before_raw = (qs.get('before') or [''])[0].strip()
 
@@ -265,7 +400,12 @@ class Handler(BaseHTTPRequestHandler):
                     content_type = 'image/jpeg'
                 elif avatar_path.suffix.lower() == '.webp':
                     content_type = 'image/webp'
-                return self._send_raw(200, avatar_path.read_bytes(), content_type=content_type)
+                return self._send_raw(
+                    200,
+                    avatar_path.read_bytes(),
+                    content_type=content_type,
+                    extra_headers=USER_ASSET_CACHE_HEADERS,
+                )
 
             if parsed.path == '/api/site-config':
                 payload = get_site_config_snapshot()
@@ -288,7 +428,7 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/users':
                 if not MULTI_USER_PRODUCT_ENABLED:
                     return self._send(403, _experimental_disabled_payload('multi-user management'))
-                caller = resolve_user_from_request(dict(self.headers))
+                caller = self._authenticated_admin_user()
                 if caller != DEFAULT_USER_ID:
                     return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可查看用户列表'}})
                 return self._send(200, {
@@ -385,6 +525,8 @@ class Handler(BaseHTTPRequestHandler):
                 requested_character = (qs.get('character_id') or [''])[0].strip()
                 requested_variant = (qs.get('variant') or [''])[0].strip()
                 if requested_character and requested_character != active_character_id():
+                    if not is_valid_character_id_param(requested_character):
+                        return self._invalid_input('invalid character_id')
                     from character_manager import current_user_character_root
                     cover_path = None
                     character_root = current_user_character_root() / requested_character
@@ -407,6 +549,8 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     cover_path = resolve_character_cover_path()
                 if cover_path and cover_path.exists():
+                    if is_multi_user_enabled() and not is_path_within_user_root(cover_path):
+                        return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'cover not found'}})
                     body = cover_path.read_bytes()
                     mime = 'image/png'
                     if cover_path.suffix.lower() in {'.jpg', '.jpeg'}:
@@ -419,17 +563,37 @@ class Handler(BaseHTTPRequestHandler):
                         200,
                         body,
                         content_type=mime,
-                        extra_headers={'Cache-Control': 'public, max-age=3600'},
+                        extra_headers=USER_ASSET_CACHE_HEADERS,
                     )
 
             return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
         except Exception as err:
             return self._handle_exception(err, route=parsed.path)
+        finally:
+            if user_token is not None:
+                reset_active_user_id(user_token)
+            if multi_user_token is not None:
+                reset_multi_user_request_context(multi_user_token)
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        _, user_token, authorized = self._begin_request_user(parsed.path, 'POST')
+        multi_user_token = begin_multi_user_request_context() if authorized else None
+        if not authorized:
+            return
         payload = self._read_json_payload()
         if payload is None:
+            if user_token is not None:
+                reset_active_user_id(user_token)
+            if multi_user_token is not None:
+                reset_multi_user_request_context(multi_user_token)
+            return
+        if business_payload_has_user_id(parsed.path, payload):
+            self._invalid_input('business API must not include user_id')
+            if user_token is not None:
+                reset_active_user_id(user_token)
+            if multi_user_token is not None:
+                reset_multi_user_request_context(multi_user_token)
             return
 
         try:
@@ -554,7 +718,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not filename or not file_base64:
                     return self._invalid_input('filename and file_base64 are required')
                 try:
-                    file_bytes = b64decode(file_base64.encode('utf-8'), validate=True)
+                    file_bytes = decode_base64_limited(file_base64, max_bytes=MAX_AVATAR_BYTES, label='avatar')
                     path = save_user_avatar(filename, file_bytes)
                 except ValueError as err:
                     return self._invalid_input(str(err))
@@ -576,12 +740,11 @@ class Handler(BaseHTTPRequestHandler):
                 })
 
             if parsed.path == '/api/chat/preview':
-                import base64 as b64
                 content_b64 = str(payload.get('content_base64', '') or '').strip()
                 if not content_b64:
                     return self._invalid_input('content_base64 is required')
                 try:
-                    content = b64.b64decode(content_b64).decode('utf-8')
+                    content = decode_chat_import_content(content_b64)
                     card_meta = load_character_card_meta()
                     expected_name = card_meta.get('name', '') if card_meta else ''
                     result = preview_chat_import(content, expected_character_name=expected_name)
@@ -590,13 +753,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, result)
 
             if parsed.path == '/api/chat/import':
-                import base64 as b64
                 content_b64 = str(payload.get('content_base64', '') or '').strip()
                 filename = str(payload.get('filename', '') or 'imported.jsonl').strip()
                 if not content_b64:
                     return self._invalid_input('content_base64 is required')
                 try:
-                    content = b64.b64decode(content_b64).decode('utf-8')
+                    content = decode_chat_import_content(content_b64)
                     card_meta = load_character_card_meta()
                     expected_name = card_meta.get('name', '') if card_meta else None
                     report = import_sillytavern_from_content(
@@ -604,7 +766,7 @@ class Handler(BaseHTTPRequestHandler):
                         character_id=active_character_id(),
                         expected_character_name=expected_name,
                     )
-                except RuntimeError as err:
+                except (ValueError, UnicodeDecodeError, RuntimeError) as err:
                     return self._invalid_input(str(err))
                 sessions = list_sessions()
                 return self._send(200, {'report': report, 'sessions': sessions})
@@ -664,8 +826,10 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/auth/login':
                 if not MULTI_USER_PRODUCT_ENABLED:
                     return self._send(403, _experimental_disabled_payload('multi-user login'))
-                uid = str(payload.get('user_id', '') or '').strip()
-                pwd = str(payload.get('password', '') or '')
+                uid = self._payload_string(payload, 'user_id')
+                pwd = self._payload_string(payload, 'password')
+                if uid is None or pwd is None:
+                    return
                 try:
                     token = login(uid, pwd)
                 except ValueError as err:
@@ -683,52 +847,99 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/users':
                 if not MULTI_USER_PRODUCT_ENABLED:
                     return self._send(403, _experimental_disabled_payload('multi-user management'))
-                caller = resolve_user_from_request(dict(self.headers))
-                if caller != DEFAULT_USER_ID:
+                try:
+                    action = payload_string(payload, 'action')
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                caller = self._authenticated_admin_user()
+                bootstrap_admin_password = is_admin_password_bootstrap_action(action)
+                if caller != DEFAULT_USER_ID and not bootstrap_admin_password:
                     return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可管理用户'}})
-                action = str(payload.get('action', '') or '').strip()
                 if action == 'create':
-                    uid = str(payload.get('user_id', '') or '').strip()
-                    pwd = str(payload.get('password', '') or '')
+                    uid = self._payload_string(payload, 'user_id')
+                    pwd = self._payload_string(payload, 'password')
+                    if uid is None or pwd is None:
+                        return
                     try:
                         result = create_user(uid, pwd)
                     except ValueError as err:
                         return self._invalid_input(str(err))
                     return self._send(200, result)
                 elif action == 'delete':
-                    uid = str(payload.get('user_id', '') or '').strip()
+                    uid = self._payload_string(payload, 'user_id')
+                    if uid is None:
+                        return
                     try:
                         delete_user(uid)
                     except ValueError as err:
                         return self._invalid_input(str(err))
                     return self._send(200, {'ok': True})
                 elif action == 'set_admin_password':
-                    pwd = str(payload.get('password', '') or '')
-                    if not pwd:
-                        return self._invalid_input('密码不能为空')
-                    set_admin_password(pwd)
+                    pwd = self._payload_string(payload, 'password')
+                    if pwd is None:
+                        return
+                    try:
+                        set_admin_password(pwd)
+                    except ValueError as err:
+                        return self._invalid_input(str(err))
+                    return self._send(200, {'ok': True})
+                elif action == 'reset_password':
+                    uid = self._payload_string(payload, 'user_id')
+                    pwd = self._payload_string(payload, 'password')
+                    if uid is None or pwd is None:
+                        return
+                    try:
+                        reset_user_password(uid, pwd)
+                    except ValueError as err:
+                        return self._invalid_input(str(err))
                     return self._send(200, {'ok': True})
                 else:
-                    return self._invalid_input('未知操作，支持: create, delete, set_admin_password')
+                    return self._invalid_input('未知操作，支持: create, delete, reset_password, set_admin_password')
 
             if parsed.path == '/api/multi-user':
                 if not MULTI_USER_PRODUCT_ENABLED:
                     return self._send(403, _experimental_disabled_payload('multi-user mode toggle'))
-                caller = resolve_user_from_request(dict(self.headers))
+                caller = self._authenticated_admin_user()
                 if caller != DEFAULT_USER_ID:
                     return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可操作'}})
-                enabled = bool(payload.get('enabled', False))
-                set_multi_user_enabled(enabled)
+                try:
+                    enabled = payload_bool(payload, 'enabled')
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                try:
+                    set_multi_user_enabled(enabled)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
                 return self._send(200, {'multi_user_enabled': enabled})
 
             return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
         except Exception as err:
             return self._handle_exception(err, route=parsed.path)
+        finally:
+            if user_token is not None:
+                reset_active_user_id(user_token)
+            if multi_user_token is not None:
+                reset_multi_user_request_context(multi_user_token)
 
     def do_DELETE(self):
         parsed = urlparse(self.path)
+        _, user_token, authorized = self._begin_request_user(parsed.path, 'DELETE')
+        multi_user_token = begin_multi_user_request_context() if authorized else None
+        if not authorized:
+            return
         payload = self._read_json_payload()
         if payload is None:
+            if user_token is not None:
+                reset_active_user_id(user_token)
+            if multi_user_token is not None:
+                reset_multi_user_request_context(multi_user_token)
+            return
+        if business_payload_has_user_id(parsed.path, payload):
+            self._invalid_input('business API must not include user_id')
+            if user_token is not None:
+                reset_active_user_id(user_token)
+            if multi_user_token is not None:
+                reset_multi_user_request_context(multi_user_token)
             return
 
         try:
@@ -742,6 +953,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
         except Exception as err:
             return self._handle_exception(err, route=parsed.path)
+        finally:
+            if user_token is not None:
+                reset_active_user_id(user_token)
+            if multi_user_token is not None:
+                reset_multi_user_request_context(multi_user_token)
 
 
 def main():
