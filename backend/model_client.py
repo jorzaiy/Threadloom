@@ -4,8 +4,14 @@ import logging
 import os
 import re
 import time
-import urllib.request
+from email.message import Message
+from io import BytesIO
 from urllib.error import HTTPError
+
+try:
+    from safe_http import UnsafeTargetError, open_safe_connection
+except ImportError:
+    from .safe_http import UnsafeTargetError, open_safe_connection
 
 log = logging.getLogger(__name__)
 
@@ -48,30 +54,51 @@ def _retry_on_rate_limit(func):
     return wrapper
 
 
+def _build_http_error(url: str, status: int, reason: str, headers, body: bytes) -> HTTPError:
+    msg = Message()
+    if headers is not None:
+        for key, value in headers:
+            msg[key] = value
+    return HTTPError(url, status, reason or '', msg, BytesIO(body))
+
+
 @_retry_on_rate_limit
 def _post_json(url: str, payload: dict, headers: dict) -> dict:
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-        headers=headers,
-        method='POST',
-    )
-    with urllib.request.urlopen(req, timeout=_request_timeout()) as resp:
-        return json.loads(resp.read().decode('utf-8'))
+    body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    req_headers = dict(headers)
+    req_headers.setdefault('Content-Length', str(len(body)))
+    try:
+        conn, path = open_safe_connection(url, timeout=_request_timeout())
+    except UnsafeTargetError as err:
+        raise ValueError(f'model endpoint is not allowed: {err}') from err
+    try:
+        conn.request('POST', path, body=body, headers=req_headers)
+        resp = conn.getresponse()
+        resp_body = resp.read()
+        if resp.status >= 400:
+            raise _build_http_error(url, resp.status, resp.reason, resp.getheaders(), resp_body)
+        return json.loads(resp_body.decode('utf-8'))
+    finally:
+        conn.close()
 
 
 @_retry_on_rate_limit
 def _post_stream_chat(url: str, payload: dict, headers: dict) -> tuple[str, dict, str | None]:
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-        headers=headers,
-        method='POST',
-    )
+    body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    req_headers = dict(headers)
+    req_headers.setdefault('Content-Length', str(len(body)))
+    try:
+        conn, path = open_safe_connection(url, timeout=_request_timeout())
+    except UnsafeTargetError as err:
+        raise ValueError(f'model endpoint is not allowed: {err}') from err
     content_parts = []
     usage = {'prompt_tokens': 0, 'completion_tokens': 0}
     finish_reason = None
-    with urllib.request.urlopen(req, timeout=_request_timeout()) as resp:
+    try:
+        conn.request('POST', path, body=body, headers=req_headers)
+        resp = conn.getresponse()
+        if resp.status >= 400:
+            raise _build_http_error(url, resp.status, resp.reason, resp.getheaders(), resp.read())
         for raw in resp:
             line = raw.decode('utf-8', errors='ignore').strip()
             if not line or not line.startswith('data:'):
@@ -92,6 +119,8 @@ def _post_stream_chat(url: str, payload: dict, headers: dict) -> tuple[str, dict
                 content_parts.append(piece)
             if data.get('usage'):
                 usage = data['usage']
+    finally:
+        conn.close()
     return ''.join(content_parts).strip(), usage, finish_reason
 
 
