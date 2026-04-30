@@ -29,14 +29,8 @@ def backup_and_set_model(model_id: str, model_name: str):
     
     config = json.loads(USER_CONFIG_PATH.read_text())
     config['state_keeper'] = {'model': model_id}
-    config['advanced_models'] = config.get('advanced_models', {})
-    config['advanced_models']['state_keeper_candidate'] = {
-        'provider': 'site',
-        'model': model_id,
-        'temperature': 0.0,
-        'max_output_tokens': 800,
-        'stream': False
-    }
+    if isinstance(config.get('advanced_models'), dict):
+        config['advanced_models'].pop('state_keeper_candidate', None)
     USER_CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2))
     print(f"✅ 已切换到: {model_name}")
     time.sleep(2)

@@ -54,14 +54,14 @@ DEFAULT_ADVANCED_MODELS = {
         'max_output_tokens': 800,
         'stream': False,
     },
-    'state_keeper_candidate': {
-        'provider': SITE_PROVIDER_NAME,
-        'model': '',
-        'temperature': 0.0,
-        'max_output_tokens': 800,
-        'stream': False,
-        'response_format': {'type': 'json_object'},
-    },
+}
+STATE_KEEPER_CANDIDATE_DEFAULT = {
+    'provider': SITE_PROVIDER_NAME,
+    'model': '',
+    'temperature': 0.0,
+    'max_output_tokens': 800,
+    'stream': False,
+    'response_format': {'type': 'json_object'},
 }
 SYSTEM_ROLE_DEFAULTS = {
     'narrator': {
@@ -81,7 +81,10 @@ SYSTEM_ROLE_DEFAULTS = {
         'model_role': 'state_keeper_candidate',
     },
 }
-SYSTEM_MODEL_DEFAULTS = copy.deepcopy(DEFAULT_ADVANCED_MODELS)
+SYSTEM_MODEL_DEFAULTS = {
+    **copy.deepcopy(DEFAULT_ADVANCED_MODELS),
+    'state_keeper_candidate': copy.deepcopy(STATE_KEEPER_CANDIDATE_DEFAULT),
+}
 
 
 def read_json(path: Path):
@@ -297,7 +300,7 @@ def _legacy_model_source() -> dict:
     return _global_runtime_store()
 
 
-def _pick_model_with_fallback(preferred: list[str], available: list[str]) -> str:
+def _pick_model_with_fallback(preferred: list[object], available: list[str]) -> str:
     for value in preferred:
         text = str(value or '').strip()
         if not text:
@@ -305,6 +308,14 @@ def _pick_model_with_fallback(preferred: list[str], available: list[str]) -> str
         if not available or text in available:
             return text
     return available[0] if available else ''
+
+
+def _advanced_models_without_keeper_candidate(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    advanced: dict[str, object] = copy.deepcopy(value)
+    advanced.pop('state_keeper_candidate', None)
+    return advanced
 
 
 def _slim_runtime_from_legacy(source: dict, site: dict) -> dict:
@@ -321,13 +332,15 @@ def _slim_runtime_from_legacy(source: dict, site: dict) -> dict:
             state_keeper.get('model'),
             narrator['model'],
         ], available)
-        payload = {
+        payload: dict[str, object] = {
             'version': 1,
             'narrator': narrator,
             'state_keeper': state_keeper,
         }
         if isinstance(source.get('advanced_models'), dict):
-            payload['advanced_models'] = copy.deepcopy(source['advanced_models'])
+            advanced = _advanced_models_without_keeper_candidate(source['advanced_models'])
+            if advanced:
+                payload['advanced_models'] = advanced
         return payload
 
     legacy_models = source.get('models', {}) if isinstance(source.get('models', {}), dict) else {}
@@ -348,7 +361,7 @@ def _slim_runtime_from_legacy(source: dict, site: dict) -> dict:
         keeper_legacy.get('model') if str(keeper_legacy.get('provider', '') or '').strip() not in {'local-gemma'} else '',
         narrator['model'],
     ], available)
-    payload = {
+    payload: dict[str, object] = {
         'version': 1,
         'narrator': narrator,
         'state_keeper': state_keeper,
@@ -367,7 +380,7 @@ def load_user_model_store() -> dict:
         keeper_current = str(current.get('state_keeper', {}).get('model', '') or '').strip()
         narrator_available = available + ([narrator_current] if narrator_current and narrator_current not in available else [])
         keeper_available = available + ([keeper_current] if keeper_current and keeper_current not in available else [])
-        slim = {
+        slim: dict[str, object] = {
             'version': 1,
             'active_preset': str(current.get('active_preset', '') or DEFAULT_ACTIVE_PRESET).strip() or DEFAULT_ACTIVE_PRESET,
             'narrator': {
@@ -378,14 +391,18 @@ def load_user_model_store() -> dict:
             },
         }
         if isinstance(current.get('advanced_models'), dict):
-            slim['advanced_models'] = copy.deepcopy(current['advanced_models'])
+            advanced = _advanced_models_without_keeper_candidate(current['advanced_models'])
+            if advanced:
+                slim['advanced_models'] = advanced
     else:
         source = _legacy_model_source()
         slim = _slim_runtime_from_legacy(source if isinstance(source, dict) else {}, site)
         source_sources = source.get('sources', {}) if isinstance(source, dict) and isinstance(source.get('sources'), dict) else {}
         slim['active_preset'] = str(current.get('active_preset') or source_sources.get('active_preset') or DEFAULT_ACTIVE_PRESET).strip() or DEFAULT_ACTIVE_PRESET
         if isinstance(current.get('advanced_models'), dict):
-            slim['advanced_models'] = copy.deepcopy(current['advanced_models'])
+            advanced = _advanced_models_without_keeper_candidate(current['advanced_models'])
+            if advanced:
+                slim['advanced_models'] = advanced
     if current != slim:
         write_json(_user_model_runtime_config(), slim)
     return slim
@@ -569,15 +586,23 @@ def discover_site_models() -> dict:
     resolved_key = _resolve_api_key(site.get('apiKey', ''))
     if resolved_key:
         headers['Authorization'] = f'Bearer {resolved_key}'
-    req = urllib.request.Request(f'{base_url}/models', headers=headers, method='GET')
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-    except HTTPError as err:
-        body = err.read().decode('utf-8', errors='ignore')[:300]
-        raise ValueError(f'provider model discovery failed: http {err.code} {body}'.strip()) from err
-    except URLError as err:
-        raise ValueError(f'provider model discovery failed: {err.reason}') from err
+        from safe_http import UnsafeTargetError, safe_request
+    except ImportError:
+        from .safe_http import UnsafeTargetError, safe_request
+    try:
+        status, _resp_headers, body = safe_request(f'{base_url}/models', method='GET', headers=headers, timeout=20)
+    except UnsafeTargetError as err:
+        raise ValueError(f'provider model discovery failed: {err}') from err
+    except (TimeoutError, OSError) as err:
+        raise ValueError(f'provider model discovery failed: {err}') from err
+    except Exception as err:
+        raise ValueError(f'provider model discovery failed: {err}') from err
+    if status >= 400:
+        text = body.decode('utf-8', errors='ignore')[:300]
+        raise ValueError(f'provider model discovery failed: http {status} {text}'.strip())
+    try:
+        data = json.loads(body.decode('utf-8'))
     except Exception as err:
         raise ValueError(f'provider model discovery failed: {err}') from err
     site['models'] = _extract_discovered_models(data if isinstance(data, dict) else {}, api_type)
@@ -672,13 +697,9 @@ def load_runtime_config() -> dict:
         'response_format': {'type': 'json_object'},
     }
     models['state_keeper_candidate'] = {
-        **copy.deepcopy(DEFAULT_ADVANCED_MODELS['state_keeper_candidate']),
-        **copy.deepcopy(advanced.get('state_keeper_candidate', {})),
+        **copy.deepcopy(STATE_KEEPER_CANDIDATE_DEFAULT),
+        'model': state_keeper.get('model', '') or narrator.get('model', ''),
     }
-    if not isinstance(models['state_keeper_candidate'].get('response_format'), dict):
-        models['state_keeper_candidate']['response_format'] = {'type': 'json_object'}
-    if not models['state_keeper_candidate'].get('model'):
-        models['state_keeper_candidate']['model'] = state_keeper.get('model', '') or narrator.get('model', '')
     for role_name in ('turn_analyzer', 'arbiter'):
         models[role_name] = {
             **copy.deepcopy(DEFAULT_ADVANCED_MODELS[role_name]),

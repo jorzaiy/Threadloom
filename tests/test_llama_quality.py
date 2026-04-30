@@ -42,14 +42,8 @@ def set_llama():
     """切换到Llama"""
     config = json.loads(CONFIG_PATH.read_text())
     config['state_keeper'] = {'model': 'Llama-3.3-70B'}
-    config['advanced_models'] = config.get('advanced_models', {})
-    config['advanced_models']['state_keeper_candidate'] = {
-        'provider': 'site',
-        'model': 'Llama-3.3-70B',
-        'temperature': 0.0,
-        'max_output_tokens': 800,
-        'stream': False
-    }
+    if isinstance(config.get('advanced_models'), dict):
+        config['advanced_models'].pop('state_keeper_candidate', None)
     CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2))
     print(f"✅ 已切换到 Llama-3.3-70B")
 

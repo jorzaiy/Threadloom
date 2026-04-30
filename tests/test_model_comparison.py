@@ -54,14 +54,8 @@ def set_model(model_id: str, model_name: str):
     """设置模型配置"""
     config = read_config()
     config['state_keeper'] = {'model': model_id}
-    config['advanced_models'] = config.get('advanced_models', {})
-    config['advanced_models']['state_keeper_candidate'] = {
-        'provider': 'site',
-        'model': model_id,
-        'temperature': 0.0,
-        'max_output_tokens': 800,
-        'stream': False
-    }
+    if isinstance(config.get('advanced_models'), dict):
+        config['advanced_models'].pop('state_keeper_candidate', None)
     write_config(config)
     print(f"✅ 已切换到: {model_name} ({model_id})")
 
