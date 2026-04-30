@@ -55,6 +55,10 @@
 - opening 已升级为独立状态机
 - session 生命周期已覆盖：新游戏、切换、删除、partial regenerate
 - 同一 `session_id` 的写请求现会串行执行，降低并发写冲突
+- session 访问会先检查当前角色卡作用域；如果同名 session 存在于其他角色卡下，`state/history/message/regenerate/delete` 等入口会拒绝继续使用，避免旧 session 在切卡后被当前角色卡上下文污染
+- `history` 读取缓存按解析后的 `history.jsonl` 绝对路径隔离，不再只按裸 `session_id` 复用，避免不同角色卡/用户下同名 session 串 history
+- 角色卡导入与聊天导入使用请求局部 override；`character_assets` 与 `paths.active_character_id()` 的临时 override 不再是跨线程共享状态
+- persona root seed 默认只读取当前角色卡 source 下的 `runtime/persona-seeds`；缺失时不再静默回退到仓库共享 `runtime/persona-seeds`
 - 会话归档功能已取消：新游戏只创建新 session，不再把旧 session 移动到 `archive-*`；session list 也不再返回 `archived` 字段。历史 `archive-*` 目录仅作为旧数据存在，不进入当前会话列表
 - `state_keeper` 已加入低信号拒收与回归检查
 - `state_fragment` 已前移到 narrator / state_keeper 主链，并在失败分支提供 `fragment-baseline`

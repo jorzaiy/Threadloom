@@ -116,6 +116,18 @@
 - 优先把“持续互动 / 世界书重要人物 / 线索承载者”纳入 persona，而不是给一次性 NPC 普遍建档
 - 在场景切换后，把不再互动的人物逐步降到 `archive`
 - 优先消费导入器产出的 `system-npcs.json`，而不是主要依赖世界书关键词临时猜系统角色
+- persona root seed 只来自当前角色卡 source；缺失时不再读取仓库共享 `runtime/persona-seeds`，避免不同角色卡的人格骨架静默继承
+
+## Session / 角色卡隔离
+
+当前运行时以 `runtime-data/<user>/characters/<character_id>/sessions/<session_id>/` 作为 session-local 真相源。每个 session 的 `context.json` 会记录创建时的 `user_id / character_id / session_root / session_dir`，HTTP 入口在访问 state、history、message、regenerate、delete 前会检查当前角色卡下是否拥有该 session。
+
+如果同名 session 存在于其他角色卡目录下，后端会拒绝当前请求，而不是在当前角色卡下静默 bootstrap 一个同名 session 或把旧历史配上新角色卡上下文。单用户旧版 `/sessions` 目录仍作为兼容 fallback 存在，但多用户 request context 会禁用 legacy fallback。
+
+隔离补充规则：
+- history cache 使用实际 `history.jsonl` 路径作为 key，而不是裸 `session_id`
+- 角色卡导入 / 聊天导入的临时角色卡 override 是 request-local，不跨线程共享
+- 角色卡 source 资产导入的临时 root override 是 request-local，不跨并发导入共享
 
 ## 角色卡 source 结构
 

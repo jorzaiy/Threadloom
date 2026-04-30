@@ -40,6 +40,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - session-local `state / summary / persona / threads / important_npcs`
 - skeleton keeper + fill-mode keeper 的双层状态链
 - session 级串行锁与 partial 污染隔离
+- session 与当前角色卡有隔离校验：旧角色卡下的同名 session 不会在切卡后被静默继续使用
 - 动态角色卡名称、副标题与侧栏封面图
 - **泛化架构**：所有卡特定逻辑已从代码移到 `character-data.json["hints"]`，支持任意角色卡
 - API Key 支持环境变量引用（`$VAR` 或 `env:VAR`）
@@ -107,6 +108,9 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - 设置面板内可切换当前用户的角色卡
 - 设置面板内可直接导入新的角色卡文件（`.png` / `.json`）
 - 角色卡枚举范围只限于当前用户目录下的 `runtime-data/<user>/characters/`
+- 角色卡导入与聊天导入使用请求局部 override，避免并发导入时串写到其他角色卡目录
+- history 缓存按实际 `history.jsonl` 路径隔离，不再只按 `session_id` 复用
+- persona seed 默认只读取当前角色卡 source 与 session-local 层，不再静默回退到共享 `runtime/persona-seeds`
 - 当前默认且唯一用户会显示为 `default_user`
 - 当前暂不提供用户切换或用户管理 UI
 

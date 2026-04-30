@@ -165,12 +165,13 @@
 `POST /api/message` 在 backend 内部建议按这个顺序执行：
 
 1. 校验请求体
-2. 解析 / 锁定 `session_id`
-3. 检查 `(session_id, client_turn_id)` 是否已处理
-4. 调 runtime `handle_turn(session_id, text, meta)`
-5. runtime 返回 `reply + state_snapshot + debug`
-6. backend 写访问日志 / 模型 usage
-7. 返回 JSON 给前端
+2. 解析 `session_id`，确认它属于当前角色卡作用域；若同名 session 存在于其他角色卡下，拒绝请求
+3. 按解析后的 session 路径加锁
+4. 检查 `(session_id, client_turn_id)` 是否已处理
+5. 调 runtime `handle_turn(session_id, text, meta)`
+6. runtime 返回 `reply + state_snapshot + debug`
+7. backend 写访问日志 / 模型 usage
+8. 返回 JSON 给前端
 
 ---
 
