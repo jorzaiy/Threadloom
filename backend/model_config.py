@@ -10,17 +10,16 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 
 try:
-    from .paths import APP_ROOT, read_json_file, resolve_layered_source, user_config_root, user_presets_root
+    from .paths import APP_ROOT, DEFAULT_USER_ID, active_user_id, read_json_file, resolve_layered_source, user_config_root, user_presets_root
+    from .user_manager import is_multi_user_enabled
 except ImportError:
-    from paths import APP_ROOT, read_json_file, resolve_layered_source, user_config_root, user_presets_root
+    from paths import APP_ROOT, DEFAULT_USER_ID, active_user_id, read_json_file, resolve_layered_source, user_config_root, user_presets_root
+    from user_manager import is_multi_user_enabled
 
 GLOBAL_RUNTIME_CONFIG = APP_ROOT / 'config' / 'runtime.json'
 GLOBAL_RUNTIME_EXAMPLE = APP_ROOT / 'config' / 'runtime.example.json'
 GLOBAL_PROVIDERS_CONFIG = APP_ROOT / 'config' / 'providers.json'
 GLOBAL_PROVIDERS_EXAMPLE = APP_ROOT / 'config' / 'providers.example.json'
-USER_SITE_CONFIG = user_config_root() / 'site.json'
-USER_MODEL_RUNTIME_CONFIG = user_config_root() / 'model-runtime.json'
-LEGACY_USER_PROVIDERS_CONFIG = user_config_root() / 'providers.json'
 SITE_PROVIDER_NAME = 'site'
 SUPPORTED_PROVIDER_APIS = [
     {'value': 'openai-completions', 'label': 'OpenAI Chat Completions'},
@@ -94,13 +93,55 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
+def _user_site_config() -> Path:
+    return user_config_root() / 'site.json'
+
+
+def _user_model_runtime_config() -> Path:
+    return user_config_root() / 'model-runtime.json'
+
+
+def _legacy_user_providers_config() -> Path:
+    return user_config_root() / 'providers.json'
+
+
 def _resolve_api_key(value: str) -> str:
     text = str(value or '').strip()
     if text.startswith('$'):
+        if not _api_key_reference_allowed():
+            return ''
         return os.environ.get(text[1:], '')
     if text.startswith('env:'):
+        if not _api_key_reference_allowed():
+            return ''
         return os.environ.get(text[4:], '')
     return text
+
+
+def _is_api_key_reference(value: str) -> bool:
+    text = str(value or '').strip()
+    return text.startswith('$') or text.startswith('env:')
+
+
+def _api_key_reference_allowed() -> bool:
+    return not is_multi_user_enabled() or active_user_id() == DEFAULT_USER_ID
+
+
+def _validate_api_key_input(value: str) -> str:
+    text = str(value or '').strip()
+    if _is_api_key_reference(text) and not _api_key_reference_allowed():
+        raise ValueError('environment API key references are not allowed for ordinary users')
+    return text
+
+
+def _sanitize_seed_site(site: dict, *, from_global: bool) -> dict:
+    sanitized = dict(site)
+    api_key = str(sanitized.get('apiKey', '') or '').strip()
+    if from_global and is_multi_user_enabled() and active_user_id() != DEFAULT_USER_ID:
+        sanitized['apiKey'] = ''
+    elif _is_api_key_reference(api_key) and not _api_key_reference_allowed():
+        sanitized['apiKey'] = ''
+    return sanitized
 
 
 def _normalize_base_url(value: str, *, required: bool = True) -> str:
@@ -211,24 +252,36 @@ def _pick_legacy_site(store: dict) -> dict:
 
 
 def _load_site_store_raw() -> dict:
-    if USER_SITE_CONFIG.exists():
-        data = read_json(USER_SITE_CONFIG)
+    existing: dict = {}
+    site_config = _user_site_config()
+    if site_config.exists():
+        data = read_json(site_config)
+        existing = data if isinstance(data, dict) else {}
         if isinstance(data, dict) and isinstance(data.get('site'), dict):
             return data
-    legacy_user = read_json(LEGACY_USER_PROVIDERS_CONFIG) if LEGACY_USER_PROVIDERS_CONFIG.exists() else {}
+    legacy_providers = _legacy_user_providers_config()
+    legacy_user = read_json(legacy_providers) if legacy_providers.exists() else {}
     legacy_global = _global_provider_store()
-    seed = {'site': _pick_legacy_site(legacy_user if legacy_user else legacy_global)}
-    write_json(USER_SITE_CONFIG, seed)
+    from_global = not bool(legacy_user)
+    seed_site = _sanitize_seed_site(_pick_legacy_site(legacy_user if legacy_user else legacy_global), from_global=from_global)
+    seed = _site_store_with_site(existing, seed_site)
+    write_json(site_config, seed)
     return seed
 
 
 def load_site_store() -> dict:
     data = _load_site_store_raw()
     site = _pick_legacy_site(data)
-    normalized = {'site': site}
+    normalized = _site_store_with_site(data, site)
     if data != normalized:
-        write_json(USER_SITE_CONFIG, normalized)
+        write_json(_user_site_config(), normalized)
     return normalized
+
+
+def _site_store_with_site(existing: dict, site: dict) -> dict:
+    store = dict(existing) if isinstance(existing, dict) else {}
+    store['site'] = site
+    return store
 
 
 def _available_site_models(site: dict) -> list[str]:
@@ -236,8 +289,9 @@ def _available_site_models(site: dict) -> list[str]:
 
 
 def _legacy_model_source() -> dict:
-    if USER_MODEL_RUNTIME_CONFIG.exists():
-        data = read_json(USER_MODEL_RUNTIME_CONFIG)
+    model_config = _user_model_runtime_config()
+    if model_config.exists():
+        data = read_json(model_config)
         if isinstance(data, dict):
             return data
     return _global_runtime_store()
@@ -305,7 +359,8 @@ def _slim_runtime_from_legacy(source: dict, site: dict) -> dict:
 
 def load_user_model_store() -> dict:
     site = load_site_store()['site']
-    current = read_json(USER_MODEL_RUNTIME_CONFIG) if USER_MODEL_RUNTIME_CONFIG.exists() else {}
+    model_config = _user_model_runtime_config()
+    current = read_json(model_config) if model_config.exists() else {}
     if isinstance(current.get('narrator'), dict) and isinstance(current.get('state_keeper'), dict):
         available = _available_site_models(site)
         narrator_current = str(current.get('narrator', {}).get('model', '') or '').strip()
@@ -332,7 +387,7 @@ def load_user_model_store() -> dict:
         if isinstance(current.get('advanced_models'), dict):
             slim['advanced_models'] = copy.deepcopy(current['advanced_models'])
     if current != slim:
-        write_json(USER_MODEL_RUNTIME_CONFIG, slim)
+        write_json(_user_model_runtime_config(), slim)
     return slim
 
 
@@ -407,7 +462,7 @@ def delete_narrator_preset(preset_id: str) -> dict:
     remaining_ids = {item['id'] for item in remaining}
     if active_before == path.stem or active_before not in remaining_ids:
         store['active_preset'] = next((item['id'] for item in remaining), DEFAULT_ACTIVE_PRESET)
-        write_json(USER_MODEL_RUNTIME_CONFIG, store)
+        write_json(_user_model_runtime_config(), store)
     return get_model_config_snapshot()
 
 
@@ -477,13 +532,13 @@ def update_site_config(payload: dict) -> dict:
     replace_api_key = bool(payload.get('replace_api_key'))
     api_key_value = payload.get('apiKey', payload.get('api_key'))
     if replace_api_key:
-        site['apiKey'] = str(api_key_value or '').strip()
+        site['apiKey'] = _validate_api_key_input(str(api_key_value or ''))
     elif api_key_value not in (None, ''):
-        site['apiKey'] = str(api_key_value).strip()
+        site['apiKey'] = _validate_api_key_input(str(api_key_value))
     elif previous_base_url and next_base_url != previous_base_url:
         site['apiKey'] = ''
     site['models'] = _normalize_models(site.get('models', []), site['api'])
-    write_json(USER_SITE_CONFIG, {'site': site})
+    write_json(_user_site_config(), _site_store_with_site(store, site))
     return get_site_config_snapshot()
 
 
@@ -526,7 +581,7 @@ def discover_site_models() -> dict:
     except Exception as err:
         raise ValueError(f'provider model discovery failed: {err}') from err
     site['models'] = _extract_discovered_models(data if isinstance(data, dict) else {}, api_type)
-    write_json(USER_SITE_CONFIG, {'site': site})
+    write_json(_user_site_config(), _site_store_with_site(store, site))
     model_store = load_user_model_store()
     available = _available_site_models(site)
     changed = False
@@ -537,7 +592,7 @@ def discover_site_models() -> dict:
             model_store[role_name]['model'] = fallback
             changed = True
     if changed:
-        write_json(USER_MODEL_RUNTIME_CONFIG, model_store)
+        write_json(_user_model_runtime_config(), model_store)
     snapshot = get_site_config_snapshot()
     snapshot['discovered_models'] = snapshot['models']
     return snapshot
@@ -588,7 +643,7 @@ def update_model_config(payload: dict) -> dict:
         store['state_keeper'] = {
             'model': model_id,
         }
-    write_json(USER_MODEL_RUNTIME_CONFIG, store)
+    write_json(_user_model_runtime_config(), store)
     return get_model_config_snapshot()
 
 

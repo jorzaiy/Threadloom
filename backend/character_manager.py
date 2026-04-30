@@ -16,7 +16,7 @@ from paths import APP_ROOT, active_character_id, active_user_id, active_user_lab
 from runtime_store import invalidate_history_cache
 
 
-ACTIVE_CHARACTER_FILE = user_root() / 'config' / 'active-character.json'
+MAX_CHARACTER_IMPORT_BYTES = 16 * 1024 * 1024
 
 
 def _slug(text: str, fallback: str = 'character') -> str:
@@ -39,6 +39,10 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def current_user_character_root() -> Path:
     return user_root() / 'characters'
+
+
+def active_character_file() -> Path:
+    return user_root() / 'config' / 'active-character.json'
 
 
 def _character_cover_url(character_id: str) -> str | None:
@@ -84,7 +88,7 @@ def list_character_cards() -> list[dict]:
 
 
 def get_active_character_id() -> str:
-    stored = _read_json(ACTIVE_CHARACTER_FILE)
+    stored = _read_json(active_character_file())
     value = str(stored.get('character_id', '') or '').strip()
     if value:
         candidate = current_user_character_root() / value
@@ -98,7 +102,7 @@ def set_active_character(character_id: str) -> dict:
     target = current_user_character_root() / value
     if not target.exists():
         raise ValueError('character not found')
-    _write_json(ACTIVE_CHARACTER_FILE, {'character_id': value})
+    _write_json(active_character_file(), {'character_id': value})
     invalidate_card_hints_cache()
     invalidate_history_cache()
     return {
@@ -121,7 +125,7 @@ def delete_character_card(character_id: str) -> dict:
     active_id = get_active_character_id()
     if active_id == value:
         next_id = remaining[0]['character_id'] if remaining else ''
-        _write_json(ACTIVE_CHARACTER_FILE, {'character_id': next_id})
+        _write_json(active_character_file(), {'character_id': next_id})
     invalidate_card_hints_cache()
     invalidate_history_cache()
     return {
@@ -201,4 +205,6 @@ def import_character_card_base64(filename: str, content_base64: str, *, target_n
         file_bytes = b64decode(content_base64.encode('utf-8'), validate=True)
     except Exception as err:
         raise ValueError('invalid base64 file payload') from err
+    if len(file_bytes) > MAX_CHARACTER_IMPORT_BYTES:
+        raise ValueError('import file is too large')
     return import_character_card_upload(filename, file_bytes, target_name=target_name, set_active=set_active)
