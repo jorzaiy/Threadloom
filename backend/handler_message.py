@@ -89,7 +89,7 @@ def _secondary_narrator_model_cfg(primary_cfg: dict, keeper_cfg: dict) -> dict:
     return secondary
 
 
-def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, attempts_per_model: int = 3) -> tuple[str, dict, dict]:
+def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_attempts: int = 3) -> tuple[str, dict, dict]:
     primary_cfg = resolve_provider_model('narrator')
     keeper_cfg = resolve_provider_model('state_keeper')
     model_plan = [
@@ -98,11 +98,13 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, attempt
     ]
     attempts = []
     last_error = None
+    attempt_count = 0
     for role, model_cfg in model_plan:
-        for attempt_index in range(1, attempts_per_model + 1):
+        while attempt_count < max_attempts:
+            attempt_count += 1
             attempt = {
                 'role': role,
-                'attempt': attempt_index,
+                'attempt': attempt_count,
                 'model': _model_label(model_cfg),
             }
             try:
@@ -121,6 +123,14 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, attempt
                 attempt['finish_reason'] = finish_reason
                 attempts.append(attempt)
                 continue
+            if finish_reason in ('length', 'error') or looks_incomplete_reply(reply):
+                last_error = 'incomplete narrator reply'
+                attempt['ok'] = False
+                attempt['error'] = last_error
+                attempt['finish_reason'] = finish_reason or 'incomplete'
+                attempt['reply_excerpt'] = _trim_trace_text(reply, 500)
+                attempts.append(attempt)
+                continue
             attempt['ok'] = True
             attempt['finish_reason'] = finish_reason
             attempts.append(attempt)
@@ -135,13 +145,15 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, attempt
                 'all_failed': False,
             }
             return reply, usage, trace
+        if attempt_count >= max_attempts:
+            break
     trace = {
         'attempts': attempts,
         'provider_used': 'none',
         'model_used': None,
         'fallback_to_secondary': True,
         'all_failed': True,
-        'last_error': last_error,
+        'last_error': last_error or 'narrator failed after retries',
     }
     usage = {
         'model': _model_label(primary_cfg),
@@ -360,7 +372,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'narrator_retry': narrator_retry_trace,
                 'state_snapshot': build_state_snapshot(state),
                 'web': web_runtime_settings(),
-                'error': {'code': 'NARRATOR_UNAVAILABLE', 'message': 'narrator primary and secondary models failed'},
+                'error': {'code': 'NARRATOR_UNAVAILABLE', 'message': '正文生成不完整，已重试 3 次，未提交本轮'},
             }
             trace = copy.deepcopy(turn_trace)
             trace['mode'] = 'opening-choice-narrator-failed'
@@ -679,7 +691,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'narrator_retry': narrator_retry_trace,
             'state_snapshot': build_state_snapshot(state),
             'web': web_runtime_settings(),
-            'error': {'code': 'NARRATOR_UNAVAILABLE', 'message': 'narrator primary and secondary models failed'},
+            'error': {'code': 'NARRATOR_UNAVAILABLE', 'message': '正文生成不完整，已重试 3 次，未提交本轮'},
         }
         if debug_enabled:
             response['debug'] = {
@@ -753,16 +765,15 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     turn_trace['runtime']['state_fragment_final'] = copy.deepcopy(state_fragment)
 
     if completion_status == 'partial':
-        event_summary_item = None
-        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply, 'completion_status': completion_status})
         response = {
             'session_id': session_id,
             'turn_id': turn_id,
-            'reply': reply,
+            'reply': '',
             'usage': usage,
             'narrator_retry': narrator_retry_trace,
             'state_snapshot': build_state_snapshot(state),
             'web': web_runtime_settings(),
+            'error': {'code': 'NARRATOR_INCOMPLETE', 'message': '正文生成不完整，已重试 3 次，未提交本轮'},
         }
         if debug_enabled:
             response['debug'] = {
@@ -785,18 +796,14 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'system_npc_candidate_count': len(context.get('system_npc_candidates', []) or []),
                 'lorebook_npc_candidate_count': len(context.get('lorebook_npc_candidates', []) or []),
                 'npc_profile_count': len(context.get('npc_profiles', []) or []),
-                'event_summary_item': copy.deepcopy(event_summary_item),
                 'event_summary_count': len(load_event_summaries(session_id).get('items', [])),
             }
-        meta['last_turn_id'] += 1
-        if client_turn_id:
-            meta['processed_client_turn_ids'][client_turn_id] = response
-        save_meta(session_id, meta)
         turn_trace['post_turn'] = {
             'state': copy.deepcopy(state),
             'state_snapshot': build_state_snapshot(state),
+            'not_committed': True,
         }
-        return finalize_response(response)
+        return finalize_response(response, trace=turn_trace)
 
     state_error = None
     state_keeper_diagnostics = None

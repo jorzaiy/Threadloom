@@ -32,7 +32,7 @@ from regenerate_turn import regenerate_last_partial
 from session_lifecycle import delete_session, list_sessions, start_new_game
 from paths import DEFAULT_USER_ID, active_character_id, current_session_dir, find_character_session_dir, is_path_within_user_root, normalize_session_id, resolve_session_dir, reset_active_user_id, reset_multi_user_request_context, set_active_user_id, set_multi_user_request_context, slugify
 from player_profile import delete_user_avatar, load_base_player_profile, load_character_player_profile_override, resolve_user_avatar_path, save_base_player_profile, save_character_player_profile_override, save_user_avatar
-from runtime_store import build_entity_map, build_state_snapshot, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
+from runtime_store import build_entity_map, build_state_snapshot, filter_committed_history_items, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 from user_manager import (
     admin_has_password, create_user, delete_user, list_users, login, logout,
     is_multi_user_enabled, set_multi_user_enabled,
@@ -491,7 +491,7 @@ class Handler(BaseHTTPRequestHandler):
                         'web': web_runtime_settings(),
                     })
                 page_size = web_runtime_settings().get('history_page_size', 80)
-                all_messages = load_history(session_id)
+                all_messages = filter_committed_history_items(load_history(session_id))
                 total_count = len(all_messages)
                 end = total_count if before is None else min(before, total_count)
                 start = max(0, end - page_size)

@@ -185,11 +185,26 @@ def is_complete_assistant_item(item: dict) -> bool:
     return item.get('completion_status', 'complete') == 'complete'
 
 
+def filter_committed_history_items(items: list[dict]) -> list[dict]:
+    committed: list[dict] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get('role') == 'assistant' and not is_complete_assistant_item(item):
+            if committed and isinstance(committed[-1], dict) and committed[-1].get('role') == 'user':
+                committed.pop()
+            continue
+        committed.append(item)
+    return committed
+
+
 def append_history(session_id: str, item: dict) -> None:
     items = load_history(session_id)
     if isinstance(item, dict) and item.get('role') == 'user':
         while items and isinstance(items[-1], dict) and items[-1].get('role') == 'assistant' and not is_complete_assistant_item(items[-1]):
             items.pop()
+            if items and isinstance(items[-1], dict) and items[-1].get('role') == 'user':
+                items.pop()
     items.append(item)
     save_history(session_id, items)
 

@@ -10,7 +10,7 @@ from object_bootstrap_agent import load_object_registry
 from clue_bootstrap_agent import load_clue_registry
 from player_profile import load_effective_player_profile, render_runtime_player_profile_markdown
 from selector import build_selector_decision
-from runtime_store import is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history, load_persona_index, load_state, load_summary, load_summary_chunks
+from runtime_store import filter_committed_history_items, is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history, load_persona_index, load_state, load_summary, load_summary_chunks
 from paths import APP_ROOT, SHARED_ROOT, read_json_file, resolve_layered_source
 
 ROOT = SHARED_ROOT
@@ -671,11 +671,7 @@ def load_npc_profiles(npc_dir: Path, names: list[str], limit: int = 4) -> list[d
 def select_recent_history_window(items: list[dict], limit_pairs: int) -> list[dict]:
     if limit_pairs <= 0:
         return []
-    filtered = []
-    for item in items or []:
-        if item.get('role') == 'assistant' and not is_complete_assistant_item(item):
-            continue
-        filtered.append(item)
+    filtered = filter_committed_history_items(items)
     if not filtered:
         return []
 
