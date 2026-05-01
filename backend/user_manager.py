@@ -30,6 +30,7 @@ TOKEN_TTL = 7 * 24 * 3600  # 7 天
 MIN_PASSWORD_LENGTH = 12
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_LOCKOUT_SECONDS = 15 * 60
+MAX_ACTIVE_TOKENS_PER_USER = 10
 # Pre-computed bcrypt hash of a random throwaway value, used to keep the
 # response time of "user not found" comparable to "wrong password" so login
 # cannot be turned into a username oracle. Generated with bcrypt.gensalt(12).
@@ -114,6 +115,38 @@ def _prune_expired_sessions(sessions: object) -> dict:
 
 def _save_sessions(data: dict) -> None:
     _atomic_write(SESSIONS_FILE, _prune_expired_sessions(data))
+
+
+def _user_can_authenticate(users: dict, uid: str) -> bool:
+    user = users.get(uid)
+    return isinstance(user, dict) and not user.get('disabled_at')
+
+
+def _session_sort_time(entry: dict) -> float:
+    try:
+        return float(entry.get('last_seen_at') or entry.get('created_at') or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cap_user_sessions(sessions: dict, uid: str, *, keep_key: str) -> dict:
+    user_entries = [
+        (key, entry)
+        for key, entry in sessions.items()
+        if isinstance(entry, dict) and entry.get('user_id') == uid
+    ]
+    if len(user_entries) <= MAX_ACTIVE_TOKENS_PER_USER:
+        return sessions
+    user_entries.sort(key=lambda item: _session_sort_time(item[1]))
+    removable = len(user_entries) - MAX_ACTIVE_TOKENS_PER_USER
+    for key, _entry in user_entries:
+        if removable <= 0:
+            break
+        if key == keep_key:
+            continue
+        sessions.pop(key, None)
+        removable -= 1
+    return sessions
 
 
 def _hash_password(password: str) -> str:
@@ -229,12 +262,6 @@ def delete_user(user_id: str) -> None:
         users = _load_users()
         if uid not in users:
             raise ValueError(f'用户 "{uid}" 不存在')
-        del users[uid]
-        _save_users(users)
-        # 清除该用户的所有登录令牌
-        sessions = _load_sessions()
-        sessions = {k: v for k, v in sessions.items() if v.get('user_id') != uid}
-        _save_sessions(sessions)
         user_dir = RUNTIME_DATA_ROOT / uid
         if user_dir.exists():
             deleted_users_dir = _deleted_users_dir()
@@ -245,6 +272,66 @@ def delete_user(user_id: str) -> None:
                 target = deleted_users_dir / f'{uid}-{int(time.time())}-{counter}'
                 counter += 1
             shutil.move(str(user_dir), str(target))
+        del users[uid]
+        _save_users(users)
+        # 清除该用户的所有登录令牌
+        sessions = _load_sessions()
+        sessions = {k: v for k, v in sessions.items() if v.get('user_id') != uid}
+        _save_sessions(sessions)
+
+
+def disable_user(user_id: str, reason: str = '') -> None:
+    uid = _validate_user_id(user_id)
+    if uid == DEFAULT_USER_ID:
+        raise ValueError('不能禁用管理员用户')
+    with _SYSTEM_FILE_LOCK:
+        users = _load_users()
+        user = users.get(uid)
+        if not isinstance(user, dict):
+            raise ValueError(f'用户 "{uid}" 不存在')
+        user['disabled_at'] = time.time()
+        user['disabled_reason'] = str(reason or '').strip()[:200]
+        users[uid] = user
+        _save_users(users)
+        sessions = _load_sessions()
+        sessions = {k: v for k, v in sessions.items() if v.get('user_id') != uid}
+        _save_sessions(sessions)
+
+
+def enable_user(user_id: str) -> None:
+    uid = _validate_user_id(user_id)
+    if uid == DEFAULT_USER_ID:
+        raise ValueError('管理员用户不需要启用')
+    with _SYSTEM_FILE_LOCK:
+        users = _load_users()
+        user = users.get(uid)
+        if not isinstance(user, dict):
+            raise ValueError(f'用户 "{uid}" 不存在')
+        user.pop('disabled_at', None)
+        user.pop('disabled_reason', None)
+        users[uid] = user
+        _save_users(users)
+
+
+def list_user_storage_audit() -> dict:
+    with _SYSTEM_FILE_LOCK:
+        ensure_admin_exists()
+        users = _load_users()
+        registered = set(users)
+    runtime_dirs = []
+    for item in sorted(RUNTIME_DATA_ROOT.iterdir(), key=lambda path: path.name) if RUNTIME_DATA_ROOT.exists() else []:
+        if not item.is_dir() or item.name in {'_system', '_template'}:
+            continue
+        runtime_dirs.append(item.name)
+    orphan_dirs = [name for name in runtime_dirs if name not in registered]
+    missing_dirs = [uid for uid in sorted(registered) if not (RUNTIME_DATA_ROOT / uid).exists()]
+    deleted_root = _deleted_users_dir()
+    deleted_archives = [item.name for item in sorted(deleted_root.iterdir(), key=lambda path: path.name)] if deleted_root.exists() else []
+    return {
+        'orphan_dirs': orphan_dirs,
+        'missing_dirs': missing_dirs,
+        'deleted_archives': deleted_archives,
+    }
 
 
 def list_users() -> list[dict]:
@@ -257,6 +344,8 @@ def list_users() -> list[dict]:
                 'role': info.get('role', 'user'),
                 'created_at': info.get('created_at', 0),
                 'has_password': bool(info.get('password_hash')),
+                'disabled': bool(info.get('disabled_at')),
+                'disabled_at': info.get('disabled_at', 0),
             }
             for uid, info in users.items()
         ]
@@ -360,6 +449,8 @@ def login(user_id: str, password: str) -> str:
         # Lockout window applies before the bcrypt path so an attacker cannot
         # use the slow comparison itself as a workload check.
         if isinstance(user, dict):
+            if user.get('disabled_at'):
+                raise ValueError('账户已禁用')
             lockout_until = float(user.get('lockout_until') or 0)
             if lockout_until > now:
                 logger.warning('login blocked for %s, lockout active for %.0fs', uid, lockout_until - now)
@@ -399,12 +490,14 @@ def login(user_id: str, password: str) -> str:
 
         token = secrets.token_urlsafe(32)
         sessions = _load_sessions()
-        sessions[_hash_token(token)] = {
+        token_key = _hash_token(token)
+        sessions[token_key] = {
             'user_id': uid,
             'created_at': now,
             'last_seen_at': now,
             'expires_at': now + TOKEN_TTL,
         }
+        sessions = _cap_user_sessions(sessions, uid, keep_key=token_key)
         _save_sessions(sessions)
     return token
 
@@ -439,10 +532,17 @@ def validate_token(token: str) -> str | None:
             del sessions[token_key]
             _save_sessions(sessions)
             return None
+        uid = str(entry.get('user_id') or '')
+        ensure_admin_exists()
+        users = _load_users()
+        if not _user_can_authenticate(users, uid):
+            sessions.pop(token_key, None)
+            _save_sessions(sessions)
+            return None
         entry['last_seen_at'] = now
         sessions[token_key] = entry
         _save_sessions(sessions)
-        return entry['user_id']
+        return uid
 
 
 def resolve_user_from_request(headers: dict, *, allow_cookie: bool = True) -> str | None:

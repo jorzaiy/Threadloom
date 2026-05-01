@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 from io import BytesIO
 from http.client import HTTPMessage
@@ -207,6 +208,7 @@ class MultiUserFoundationTests(unittest.TestCase):
                 paths.RUNTIME_DATA_ROOT = temp_root
 
                 user_manager.create_user('user-a', 'secure-password-123')
+                (temp_root / 'user-a').mkdir(parents=True, exist_ok=True)
                 token = user_manager.login('user-a', 'secure-password-123')
                 self.assertEqual(user_manager.validate_token(token), 'user-a')
 
@@ -219,7 +221,7 @@ class MultiUserFoundationTests(unittest.TestCase):
                 self.assertEqual(user_manager.validate_token(new_token), 'user-a')
 
                 listed = [item for item in user_manager.list_users() if item['user_id'] == 'user-a'][0]
-                self.assertEqual(set(listed), {'user_id', 'role', 'created_at', 'has_password'})
+                self.assertEqual(set(listed), {'user_id', 'role', 'created_at', 'has_password', 'disabled', 'disabled_at'})
                 self.assertTrue(listed['has_password'])
             finally:
                 user_manager.RUNTIME_DATA_ROOT = original_user_root
@@ -259,6 +261,36 @@ class MultiUserFoundationTests(unittest.TestCase):
                 user_manager.SESSIONS_FILE = original_sessions_file
                 paths.RUNTIME_DATA_ROOT = original_paths_root
 
+    def test_delete_user_preserves_account_when_archive_move_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_user_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_paths_root = paths.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                paths.RUNTIME_DATA_ROOT = temp_root
+
+                user_manager.create_user('user-a', 'secure-password-123')
+                (temp_root / 'user-a').mkdir(parents=True, exist_ok=True)
+                token = user_manager.login('user-a', 'secure-password-123')
+                with mock.patch.object(user_manager.shutil, 'move', side_effect=OSError('move failed')):
+                    with self.assertRaises(OSError):
+                        user_manager.delete_user('user-a')
+
+                users = json.loads(user_manager.USERS_FILE.read_text(encoding='utf-8'))
+                self.assertIn('user-a', users)
+                self.assertTrue((temp_root / 'user-a').exists())
+                self.assertEqual(user_manager.validate_token(token), 'user-a')
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_user_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+                paths.RUNTIME_DATA_ROOT = original_paths_root
+
     def test_concurrent_logins_preserve_all_sessions(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             original_root = user_manager.RUNTIME_DATA_ROOT
@@ -266,11 +298,13 @@ class MultiUserFoundationTests(unittest.TestCase):
             original_sessions_file = user_manager.SESSIONS_FILE
             original_hash_password = getattr(user_manager, '_hash_password')
             original_verify_password = getattr(user_manager, '_verify_password')
+            original_cap = user_manager.MAX_ACTIVE_TOKENS_PER_USER
             temp_root = Path(temp_dir)
             try:
                 user_manager.RUNTIME_DATA_ROOT = temp_root
                 user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
                 user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                user_manager.MAX_ACTIVE_TOKENS_PER_USER = 100
                 setattr(user_manager, '_hash_password', lambda password: f'hash:{password}')
                 setattr(user_manager, '_verify_password', lambda password, hashed: hashed == f'hash:{password}')
                 user_manager.set_admin_password('secure-password-123')
@@ -298,6 +332,7 @@ class MultiUserFoundationTests(unittest.TestCase):
                 user_manager.RUNTIME_DATA_ROOT = original_root
                 user_manager.USERS_FILE = original_users_file
                 user_manager.SESSIONS_FILE = original_sessions_file
+                user_manager.MAX_ACTIVE_TOKENS_PER_USER = original_cap
                 setattr(user_manager, '_hash_password', original_hash_password)
                 setattr(user_manager, '_verify_password', original_verify_password)
 
@@ -1093,16 +1128,22 @@ class MultiUserFoundationTests(unittest.TestCase):
 
             missing = make_post_handler('/api/multi-user', {'enabled': False})
             server.Handler.do_POST(missing)
+            self.assertIsNotNone(missing.sent)
+            assert missing.sent is not None
             self.assertEqual(missing.sent[0], 400)
             self.assertEqual(toggles, [])
 
             wrong = make_post_handler('/api/multi-user', {'enabled': False, 'password': 'wrong-password-123'})
             server.Handler.do_POST(wrong)
+            self.assertIsNotNone(wrong.sent)
+            assert wrong.sent is not None
             self.assertEqual(wrong.sent[0], 401)
             self.assertEqual(toggles, [])
 
             ok = make_post_handler('/api/multi-user', {'enabled': False, 'password': 'correct-password-123'})
             server.Handler.do_POST(ok)
+            self.assertIsNotNone(ok.sent)
+            assert ok.sent is not None
             self.assertEqual(ok.sent[0], 200)
             self.assertEqual(toggles, [False])
         finally:
@@ -1258,6 +1299,134 @@ class MultiUserFoundationTests(unittest.TestCase):
                     user_manager.login('user-a', 'secure-password-123')
                 user_manager.login('user-a', 'secure-password-456')
             finally:
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+                paths.RUNTIME_DATA_ROOT = original_paths_root
+
+    def test_disabled_user_cannot_login_or_validate_existing_token(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_paths_root = paths.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                paths.RUNTIME_DATA_ROOT = temp_root
+
+                user_manager.create_user('user-a', 'secure-password-123')
+                token = user_manager.login('user-a', 'secure-password-123')
+                self.assertEqual(user_manager.validate_token(token), 'user-a')
+                user_manager.disable_user('user-a', 'offboarded')
+                self.assertIsNone(user_manager.validate_token(token))
+                with self.assertRaises(ValueError):
+                    user_manager.login('user-a', 'secure-password-123')
+                listed = [item for item in user_manager.list_users() if item['user_id'] == 'user-a'][0]
+                self.assertTrue(listed['disabled'])
+
+                user_manager.enable_user('user-a')
+                token_after_enable = user_manager.login('user-a', 'secure-password-123')
+                self.assertEqual(user_manager.validate_token(token_after_enable), 'user-a')
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+                paths.RUNTIME_DATA_ROOT = original_paths_root
+
+    def test_validate_token_rejects_session_for_missing_user(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                user_manager._ensure_system_dir()
+                token = 'stale-user-token'
+                user_manager.SESSIONS_FILE.write_text(json.dumps({
+                    user_manager._hash_token(token): {
+                        'user_id': 'deleted-user',
+                        'created_at': __import__('time').time(),
+                        'expires_at': __import__('time').time() + 3600,
+                    }
+                }), encoding='utf-8')
+                self.assertIsNone(user_manager.validate_token(token))
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+
+    def test_login_caps_active_tokens_per_user(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_paths_root = paths.RUNTIME_DATA_ROOT
+            original_cap = user_manager.MAX_ACTIVE_TOKENS_PER_USER
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                paths.RUNTIME_DATA_ROOT = temp_root
+                user_manager.MAX_ACTIVE_TOKENS_PER_USER = 2
+
+                user_manager.create_user('user-a', 'secure-password-123')
+                first = user_manager.login('user-a', 'secure-password-123')
+                second = user_manager.login('user-a', 'secure-password-123')
+                third = user_manager.login('user-a', 'secure-password-123')
+                self.assertIsNone(user_manager.validate_token(first))
+                self.assertEqual(user_manager.validate_token(second), 'user-a')
+                self.assertEqual(user_manager.validate_token(third), 'user-a')
+            finally:
+                user_manager.MAX_ACTIVE_TOKENS_PER_USER = original_cap
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+                paths.RUNTIME_DATA_ROOT = original_paths_root
+
+    def test_login_token_cap_tolerates_malformed_session_timestamps(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_paths_root = paths.RUNTIME_DATA_ROOT
+            original_cap = user_manager.MAX_ACTIVE_TOKENS_PER_USER
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                paths.RUNTIME_DATA_ROOT = temp_root
+                user_manager.MAX_ACTIVE_TOKENS_PER_USER = 2
+
+                user_manager.create_user('user-a', 'secure-password-123')
+                now = __import__('time').time()
+                user_manager._save_sessions({
+                    'bad-timestamp': {
+                        'user_id': 'user-a',
+                        'created_at': now,
+                        'last_seen_at': 'not-a-number',
+                        'expires_at': now + 3600,
+                    },
+                    'old-good': {
+                        'user_id': 'user-a',
+                        'created_at': now,
+                        'last_seen_at': now - 10,
+                        'expires_at': now + 3600,
+                    },
+                })
+                token = user_manager.login('user-a', 'secure-password-123')
+                self.assertEqual(user_manager.validate_token(token), 'user-a')
+                sessions = json.loads(user_manager.SESSIONS_FILE.read_text(encoding='utf-8'))
+                self.assertLessEqual(len(sessions), 2)
+            finally:
+                user_manager.MAX_ACTIVE_TOKENS_PER_USER = original_cap
                 user_manager.RUNTIME_DATA_ROOT = original_root
                 user_manager.USERS_FILE = original_users_file
                 user_manager.SESSIONS_FILE = original_sessions_file
