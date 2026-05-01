@@ -9,18 +9,16 @@ const input = document.getElementById('input');
 const regenerateBtn = document.getElementById('regenerateBtn');
 const statusBar = document.getElementById('statusBar');
 const topbarContext = document.getElementById('topbarContext');
+const topbarSessionMenu = document.getElementById('topbarSessionMenu');
 const brandSettingsTrigger = document.getElementById('brandSettingsTrigger');
 const debugFloatPanel = document.getElementById('debugFloatPanel');
 const debugBackdrop = document.getElementById('debugBackdrop');
-const sessionBackdrop = document.getElementById('sessionBackdrop');
 const debugCloseBtn = document.getElementById('debugCloseBtn');
 const debugToggleBtn = document.getElementById('debugToggleBtn');
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settingsPanel');
 const settingsBackdrop = document.getElementById('settingsBackdrop');
 const settingsCloseBtn = document.getElementById('settingsCloseBtn');
-const sessionIndicator = document.getElementById('sessionIndicator');
-const sessionIndicatorLabel = document.getElementById('sessionIndicatorLabel');
 const characterScopeEl = document.getElementById('characterScope');
 const characterSelectEl = document.getElementById('characterSelect');
 const settingsCharacterSelectEl = document.getElementById('settingsCharacterSelect');
@@ -29,7 +27,6 @@ const characterCoverEl = document.getElementById('characterCover');
 const characterCoverFallbackEl = document.getElementById('characterCoverFallback');
 const sessionDockPanel = document.getElementById('sessionDockPanel');
 const sessionDockList = document.getElementById('sessionDockList');
-const sessionDockCloseBtn = document.getElementById('sessionDockCloseBtn');
 const historyToolbar = document.getElementById('historyToolbar');
 const loadEarlierBtn = document.getElementById('loadEarlierBtn');
 const saveModelConfigBtn = document.getElementById('saveModelConfigBtn');
@@ -169,7 +166,7 @@ async function saveCharacterProfileDraft() {
   let override;
   try {
     override = JSON.parse(sourceInput.value || '{}');
-  } catch (err) {
+  } catch {
     const targetNote = profileEditorMode === 'override' ? profileEditorNote : characterProfileDraftNote;
     const message = `JSON 解析失败：${err.message}`;
     if (targetNote) {
@@ -227,18 +224,14 @@ function switchSettingsTab(tabName) {
 
 function toggleSessionDock(forceOpen) {
   if (!sessionDockPanel) return;
-  const isOpen = !sessionDockPanel.hidden;
+  const isOpen = sessionDockPanel.getAttribute('aria-hidden') !== 'true';
   const nextOpen = typeof forceOpen === 'boolean' ? forceOpen : !isOpen;
-  sessionDockPanel.hidden = !nextOpen;
-  if (sessionBackdrop) sessionBackdrop.hidden = !nextOpen;
-  sessionIndicator?.setAttribute('aria-expanded', String(nextOpen));
   sessionDockPanel.setAttribute('aria-hidden', String(!nextOpen));
+  topbarContext?.setAttribute('aria-expanded', String(nextOpen));
 }
 
 function updateSessionIndicator() {
-  if (sessionIndicatorLabel) {
-    sessionIndicatorLabel.textContent = currentSessionId || '未选择';
-  }
+  topbarContext?.setAttribute('aria-label', `${currentUserDisplayName()} · ${currentCharacterDisplayName()} · ${currentSessionId || '未选择会话'}`);
 }
 
 function renderTopbarContext() {
@@ -514,7 +507,7 @@ async function loadCharacters() {
 }
 
 function renderSessionLists() {
-  renderSessionList(sessionDockList, { closeDockOnSelect: true, noteEl: null, activeLimit: 5 });
+  renderSessionList(sessionDockList, { closeDockOnSelect: false, noteEl: null, activeLimit: 5 });
   renderSessionList(settingsSessionList, { closeDockOnSelect: false, noteEl: settingsSessionNote, activeLimit: 20 });
 }
 
@@ -1797,11 +1790,11 @@ composer.addEventListener('submit', async (e) => {
       scrollToLatest({ smooth: false });
     }
     setStatus('已更新', 'ok');
-  } catch (err) {
+  } catch {
     pendingUserMessage = null;
     input.value = originalText;
     renderMessages(lastHistoryItems);
-    setStatus(`错误：${err.message}`, 'error');
+    setStatus('发送失败', 'error');
   } finally {
     submitButton.disabled = false;
   }
@@ -1857,32 +1850,12 @@ brandSettingsTrigger?.addEventListener('keydown', (event) => {
   openSettings('connection');
 });
 
-topbarContext?.addEventListener('click', (event) => {
-  event.preventDefault();
-  event.stopPropagation();
-  openSettings('world');
-});
-
-topbarContext?.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  event.preventDefault();
-  openSettings('world');
-});
-
-sessionIndicator?.addEventListener('click', (event) => {
-  event.preventDefault();
-  event.stopPropagation();
-  toggleSessionDock();
-});
-
-sessionBackdrop?.addEventListener('click', () => toggleSessionDock(false));
-sessionDockCloseBtn?.addEventListener('click', () => toggleSessionDock(false));
-
-document.addEventListener('click', (e) => {
-  const target = e.target;
-  if (!(target instanceof Node)) return;
-  if (sessionDockPanel?.hidden) return;
-  if (sessionDockPanel.contains(target) || sessionIndicator?.contains(target) || sessionBackdrop?.contains(target)) return;
+topbarSessionMenu?.addEventListener('mouseenter', () => toggleSessionDock(true));
+topbarSessionMenu?.addEventListener('mouseleave', () => toggleSessionDock(false));
+topbarSessionMenu?.addEventListener('focusin', () => toggleSessionDock(true));
+topbarSessionMenu?.addEventListener('focusout', (event) => {
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof Node && topbarSessionMenu.contains(nextTarget)) return;
   toggleSessionDock(false);
 });
 
@@ -2790,6 +2763,12 @@ const createUserBtnEl = document.getElementById('createUserBtn');
 const refreshUsersBtnEl = document.getElementById('refreshUsersBtn');
 const userManagementNoteEl = document.getElementById('userManagementNote');
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}
+
 async function loadUsersList() {
   if (!userListContainerEl) return;
   if (!authState.multiUserEnabled || authState.role !== 'admin') {
@@ -2798,26 +2777,37 @@ async function loadUsersList() {
   }
   try {
     const data = await apiJson('/api/users');
-    const users = Array.isArray(data.users) ? data.users : [];
-    userListContainerEl.innerHTML = users.map(user => {
-      const roleTag = user.role === 'admin' ? '<span class="user-role-tag admin">管理员</span>' : '<span class="user-role-tag">普通用户</span>';
-      const created = user.created_at ? new Date(user.created_at * 1000).toLocaleString('zh-CN') : '';
-      const isAdminRow = user.user_id === 'default-user';
-      const actions = isAdminRow
-        ? `<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="${user.user_id}">重置密码</button>`
-        : `<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="${user.user_id}">重置密码</button><button type="button" class="subtle-danger" data-user-action="delete" data-user-id="${user.user_id}">删除</button>`;
-      return `
+      const users = Array.isArray(data.users) ? data.users : [];
+      const storage = data.storage || {};
+      const storageNote = [
+        ...(Array.isArray(storage.orphan_dirs) && storage.orphan_dirs.length ? [`孤儿目录：${storage.orphan_dirs.map(escapeHtml).join(', ')}`] : []),
+        ...(Array.isArray(storage.deleted_archives) && storage.deleted_archives.length ? [`已归档删除用户：${storage.deleted_archives.length}`] : []),
+      ].join('；');
+      userListContainerEl.innerHTML = users.map(user => {
+        const roleTag = user.role === 'admin' ? '<span class="user-role-tag admin">管理员</span>' : '<span class="user-role-tag">普通用户</span>';
+        const statusTag = user.disabled ? '<span class="user-role-tag">已禁用</span>' : '';
+        const created = user.created_at ? new Date(user.created_at * 1000).toLocaleString('zh-CN') : '';
+        const userId = escapeHtml(user.user_id);
+        const isAdminRow = user.user_id === 'default-user';
+        const lifecycleAction = user.disabled
+          ? `<button type="button" class="subtle-btn" data-user-action="enable" data-user-id="${userId}">启用</button>`
+          : `<button type="button" class="subtle-btn" data-user-action="disable" data-user-id="${userId}">禁用</button>`;
+        const actions = isAdminRow
+          ? `<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="${userId}">重置密码</button>`
+          : `<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="${userId}">重置密码</button>${lifecycleAction}<button type="button" class="subtle-danger" data-user-action="delete" data-user-id="${userId}">归档删除</button>`;
+        return `
         <div class="user-list-row">
           <div class="user-meta">
-            <span class="user-id">${user.user_id}</span>
+            <span class="user-id">${userId}</span>
             ${roleTag}
+            ${statusTag}
             <span class="muted small">${created}</span>
           </div>
           <div class="user-actions">${actions}</div>
         </div>
       `;
-    }).join('');
-    if (userManagementNoteEl) userManagementNoteEl.textContent = '';
+      }).join('') + (storageNote ? `<p class="muted small">${storageNote}</p>` : '');
+      if (userManagementNoteEl) userManagementNoteEl.textContent = storageNote || '';
   } catch (err) {
     if (userManagementNoteEl) userManagementNoteEl.textContent = `加载失败：${err.message}`;
   }
@@ -2833,10 +2823,21 @@ if (userListContainerEl) {
     if (userManagementNoteEl) userManagementNoteEl.textContent = '';
     try {
       if (action === 'delete') {
-        if (!window.confirm(`确认删除用户 "${userId}"？该用户的所有 session 与 token 将被清空。`)) return;
+        if (!window.confirm(`确认归档删除用户 "${userId}"？该用户会从账号列表移除，数据目录会移动到 _system/deleted-users。通常请优先使用“禁用”。`)) return;
         await apiJson('/api/users', {
           method: 'POST',
           body: JSON.stringify({ action: 'delete', user_id: userId }),
+        });
+      } else if (action === 'disable') {
+        if (!window.confirm(`确认禁用用户 "${userId}"？该用户将立即注销，但数据目录会保留。`)) return;
+        await apiJson('/api/users', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'disable', user_id: userId }),
+        });
+      } else if (action === 'enable') {
+        await apiJson('/api/users', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'enable', user_id: userId }),
         });
       } else if (action === 'reset') {
         const password = await showPasswordPrompt({
