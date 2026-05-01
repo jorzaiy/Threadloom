@@ -1968,3 +1968,167 @@ button:active {
 .wizard-step[hidden] {
   display: none;
 }
+
+/* ── Multi-user UI ───────────────────────────────────────── */
+
+.login-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at top left, rgba(209, 227, 211, 0.34), transparent 28%),
+    radial-gradient(circle at top right, rgba(224, 208, 187, 0.22), transparent 26%),
+    linear-gradient(180deg, #f9f6f1 0%, var(--background) 100%);
+  z-index: 10000;
+}
+
+.login-form {
+  width: min(360px, calc(100vw - 32px));
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 28px 28px 24px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-title {
+  margin: 0 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 1.4rem;
+}
+
+.login-title .brand-logo {
+  width: 32px;
+  height: 32px;
+}
+
+.login-hint {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.92rem;
+}
+
+.login-field input {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 0.96rem;
+}
+
+.login-error {
+  min-height: 1.2em;
+  color: var(--danger);
+  font-size: 0.88rem;
+}
+
+.login-form button.primary {
+  margin-top: 6px;
+  background: var(--primary);
+  color: #fff;
+  padding: 11px 16px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+}
+
+.auth-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 12px;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.auth-indicator-label {
+  white-space: nowrap;
+}
+
+.auth-logout-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.auth-logout-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.multi-user-status {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.user-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  gap: 10px;
+}
+
+.user-list-row .user-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-list-row .user-id {
+  font-weight: 600;
+}
+
+.user-list-row .user-role-tag {
+  align-self: flex-start;
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-variant);
+  color: var(--text);
+}
+
+.user-list-row .user-role-tag.admin {
+  background: var(--primary-soft);
+}
+
+.user-list-row .user-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}

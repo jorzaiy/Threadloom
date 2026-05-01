@@ -455,7 +455,16 @@ async function apiJson(url, options = {}) {
   if (options.body && !options.headers?.['Content-Type']) {
     options.headers = { ...options.headers, 'Content-Type': 'application/json' };
   }
+  const token = getAuthToken();
+  if (token) {
+    options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
+  }
   const res = await fetch(url, options);
+  if (res.status === 401) {
+    clearAuthToken();
+    showLoginScreen();
+    throw new Error('请先登录');
+  }
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data?.error?.message || `request failed: ${url}`);
@@ -2294,16 +2303,44 @@ function _readFileBase64(file) {
 async function checkAuth() {
   try {
     const data = await apiJson('/api/auth/me');
-    currentUserId = data.user_id || 'default-user';
+    authState.userId = data.user_id || 'default-user';
+    authState.role = data.role || 'admin';
+    authState.multiUserEnabled = !!data.multi_user_enabled;
+    authState.adminHasPassword = !!data.admin_has_password;
+    currentUserId = authState.userId;
+    return data;
   } catch (_err) {
+    authState.userId = '';
+    authState.role = 'admin';
+    authState.multiUserEnabled = false;
+    authState.adminHasPassword = false;
     currentUserId = 'default-user';
+    return null;
   }
 }
 
 (async function init() {
   setStatus('初始化中...', 'working');
   try {
-    await checkAuth();
+    const me = await checkAuth();
+    // multi-user enabled but unauthenticated → defer the rest of the boot to
+    // the login flow; runMainBoot() picks up after a successful login.
+    if (authState.multiUserEnabled && !authState.userId) {
+      showLoginScreen();
+      return;
+    }
+    await runMainBoot();
+  } catch (err) {
+    console.error('init failed', err);
+    setStatus('初始化失败', 'error');
+  }
+})();
+
+async function runMainBoot() {
+  hideLoginScreen();
+  applyRoleBasedUI();
+  setStatus('初始化中...', 'working');
+  try {
     resetSidePanels();
     await Promise.all([
       loadSessions(),
@@ -2318,17 +2355,404 @@ async function checkAuth() {
     toggleSessionDock(false);
     jumpToConversationEnd();
 
-    // LLM 首次设置引导：检测未配置时自动弹出设置面板
     const needsSetup = !siteConfig.base_url || siteConfig.status !== 'ready';
-    if (needsSetup) {
+    // Only the admin can fix a missing site config; for ordinary users the
+    // setup wizard is meaningless because the controls are read-only.
+    if (needsSetup && authState.role === 'admin') {
       openSettings('connection');
       const guide = document.getElementById('llmSetupGuide');
       if (guide) guide.hidden = false;
       setStatus('请先配置 LLM 连接', 'warning');
+    } else if (needsSetup) {
+      setStatus('管理员尚未配置站点连接', 'warning');
     } else {
       setStatus('就绪', 'ok');
     }
   } catch (err) {
-    setStatus(`错误：${err.message}`, 'error');
+    console.error('boot failed', err);
+    setStatus('载入失败：' + (err?.message || err), 'error');
   }
-})();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Multi-user auth + settings glue
+// ─────────────────────────────────────────────────────────────
+
+const AUTH_TOKEN_KEY = 'tl_session_token';
+
+const authState = {
+  userId: '',
+  role: 'admin',
+  multiUserEnabled: false,
+  adminHasPassword: false,
+};
+
+function getAuthToken() {
+  try { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch (_e) { return ''; }
+}
+function setAuthToken(token) {
+  try { localStorage.setItem(AUTH_TOKEN_KEY, token); } catch (_e) {}
+}
+function clearAuthToken() {
+  try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (_e) {}
+}
+
+const loginScreenEl = document.getElementById('loginScreen');
+const appShellEl = document.getElementById('appShell');
+const loginFormEl = document.getElementById('loginForm');
+const loginUserIdEl = document.getElementById('loginUserId');
+const loginPasswordEl = document.getElementById('loginPassword');
+const loginErrorEl = document.getElementById('loginError');
+const authIndicatorEl = document.getElementById('authIndicator');
+const authIndicatorLabelEl = document.getElementById('authIndicatorLabel');
+const logoutBtnEl = document.getElementById('logoutBtn');
+
+function showLoginScreen() {
+  if (loginScreenEl) loginScreenEl.hidden = false;
+  if (appShellEl) appShellEl.hidden = true;
+  if (loginUserIdEl) loginUserIdEl.value = '';
+  if (loginPasswordEl) loginPasswordEl.value = '';
+  if (loginErrorEl) loginErrorEl.textContent = '';
+  if (loginUserIdEl) loginUserIdEl.focus();
+}
+function hideLoginScreen() {
+  if (loginScreenEl) loginScreenEl.hidden = true;
+  if (appShellEl) appShellEl.hidden = false;
+}
+
+function applyRoleBasedUI() {
+  // In single-user mode the admin (default-user) is always implicit, so no
+  // login indicator and no role-based gating is necessary.
+  if (!authState.multiUserEnabled) {
+    if (authIndicatorEl) authIndicatorEl.hidden = true;
+    document.querySelectorAll('.admin-only').forEach(el => { el.hidden = false; });
+    document.querySelectorAll('[data-admin-disable]').forEach(el => { el.disabled = false; });
+    return;
+  }
+  if (authIndicatorEl) authIndicatorEl.hidden = false;
+  if (authIndicatorLabelEl) {
+    const tag = authState.role === 'admin' ? '管理员' : '用户';
+    authIndicatorLabelEl.textContent = `${tag} · ${authState.userId}`;
+  }
+  if (logoutBtnEl) logoutBtnEl.hidden = false;
+
+  const isAdmin = authState.role === 'admin';
+  document.querySelectorAll('.admin-only').forEach(el => { el.hidden = !isAdmin; });
+  document.querySelectorAll('[data-admin-disable]').forEach(el => { el.disabled = !isAdmin; });
+  // 站点连接 / provider 是 admin-only 写。普通用户看到只读字段。
+  const adminWriteFields = [
+    'siteBaseUrl', 'siteApiKey', 'siteApiType',
+    'saveSiteConfigBtn', 'discoverSiteModelsBtn',
+  ];
+  adminWriteFields.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.tagName === 'BUTTON') {
+      el.hidden = !isAdmin;
+    } else {
+      el.disabled = !isAdmin;
+      if (!isAdmin) el.classList.add('readonly-input'); else el.classList.remove('readonly-input');
+    }
+  });
+}
+
+if (loginFormEl) {
+  loginFormEl.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (loginErrorEl) loginErrorEl.textContent = '';
+    const userId = (loginUserIdEl?.value || '').trim();
+    const password = loginPasswordEl?.value || '';
+    if (!userId || !password) {
+      if (loginErrorEl) loginErrorEl.textContent = '请输入用户名和密码';
+      return;
+    }
+    try {
+      const data = await apiJson('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, password }),
+      });
+      setAuthToken(data.token);
+      await checkAuth();
+      await runMainBoot();
+    } catch (err) {
+      if (loginErrorEl) loginErrorEl.textContent = err.message || '登录失败';
+    }
+  });
+}
+
+if (logoutBtnEl) {
+  logoutBtnEl.addEventListener('click', async () => {
+    try { await apiJson('/api/auth/logout', { method: 'POST', body: '{}' }); } catch (_e) {}
+    clearAuthToken();
+    showLoginScreen();
+  });
+}
+
+// ── Change-password ─────────────────────────────────────────
+const changePasswordFormEl = document.getElementById('changePasswordForm');
+const changePasswordOldEl = document.getElementById('changePasswordOld');
+const changePasswordNewEl = document.getElementById('changePasswordNew');
+const changePasswordConfirmEl = document.getElementById('changePasswordConfirm');
+const changePasswordNoteEl = document.getElementById('changePasswordNote');
+
+if (changePasswordFormEl) {
+  changePasswordFormEl.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (changePasswordNoteEl) changePasswordNoteEl.textContent = '';
+    const oldPwd = changePasswordOldEl?.value || '';
+    const newPwd = changePasswordNewEl?.value || '';
+    const confirmPwd = changePasswordConfirmEl?.value || '';
+    if (newPwd !== confirmPwd) {
+      if (changePasswordNoteEl) changePasswordNoteEl.textContent = '两次输入的新密码不一致';
+      return;
+    }
+    if (newPwd.length < 12) {
+      if (changePasswordNoteEl) changePasswordNoteEl.textContent = '新密码至少需要 12 个字符';
+      return;
+    }
+    try {
+      await apiJson('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ old_password: oldPwd, new_password: newPwd }),
+      });
+      if (changePasswordNoteEl) changePasswordNoteEl.textContent = '密码已更新；其他设备已被注销。';
+      changePasswordFormEl.reset();
+    } catch (err) {
+      if (changePasswordNoteEl) changePasswordNoteEl.textContent = err.message || '更新失败';
+    }
+  });
+}
+
+// ── Multi-user toggle wizard ────────────────────────────────
+const multiUserStatusEl = document.getElementById('multiUserStatus');
+const multiUserToggleBtnEl = document.getElementById('multiUserToggleBtn');
+const multiUserNoteEl = document.getElementById('multiUserNote');
+
+function renderMultiUserStatus() {
+  if (!multiUserStatusEl || !multiUserToggleBtnEl) return;
+  if (authState.multiUserEnabled) {
+    multiUserStatusEl.textContent = '当前为多用户模式。';
+    multiUserToggleBtnEl.textContent = '关闭多用户模式';
+  } else if (authState.adminHasPassword) {
+    multiUserStatusEl.textContent = '当前为单用户模式。点击下方按钮启用多用户。';
+    multiUserToggleBtnEl.textContent = '启用多用户模式';
+  } else {
+    multiUserStatusEl.textContent = '尚未设置管理员密码；启用多用户前需要设置。';
+    multiUserToggleBtnEl.textContent = '设置管理员密码并启用多用户';
+  }
+}
+
+async function silentReLogin(password) {
+  try {
+    const data = await apiJson('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: 'default-user', password }),
+    });
+    setAuthToken(data.token);
+    await checkAuth();
+    return true;
+  } catch (err) {
+    console.warn('silent re-login failed', err);
+    return false;
+  }
+}
+
+async function enableMultiUserWizard() {
+  if (multiUserNoteEl) multiUserNoteEl.textContent = '';
+  let password = '';
+  if (!authState.adminHasPassword) {
+    password = window.prompt('请设置管理员密码（至少 12 位）');
+    if (!password) return;
+    const confirmPwd = window.prompt('请再次输入以确认密码');
+    if (password !== confirmPwd) {
+      if (multiUserNoteEl) multiUserNoteEl.textContent = '两次输入不一致';
+      return;
+    }
+    if (password.length < 12) {
+      if (multiUserNoteEl) multiUserNoteEl.textContent = '密码至少需要 12 位';
+      return;
+    }
+    try {
+      await apiJson('/api/users', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'set_admin_password', password }),
+      });
+    } catch (err) {
+      if (multiUserNoteEl) multiUserNoteEl.textContent = '设置密码失败：' + err.message;
+      return;
+    }
+  } else {
+    password = window.prompt('请输入管理员密码以确认启用多用户');
+    if (!password) return;
+  }
+  try {
+    await apiJson('/api/multi-user', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: true }),
+    });
+  } catch (err) {
+    if (multiUserNoteEl) multiUserNoteEl.textContent = '启用失败：' + err.message;
+    return;
+  }
+  // 后端清空所有 sessions 包含当前 admin token；用刚输入的密码静默重登。
+  const ok = await silentReLogin(password);
+  if (!ok) {
+    clearAuthToken();
+    showLoginScreen();
+    return;
+  }
+  await runMainBoot();
+}
+
+async function disableMultiUserWizard() {
+  if (multiUserNoteEl) multiUserNoteEl.textContent = '';
+  const password = window.prompt('关闭多用户模式将注销所有用户。请输入管理员密码以确认。');
+  if (!password) return;
+  try {
+    await apiJson('/api/multi-user', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: false }),
+    });
+  } catch (err) {
+    if (multiUserNoteEl) multiUserNoteEl.textContent = '关闭失败：' + err.message;
+    return;
+  }
+  // sessions 已被清空；单用户模式下 admin 仍有密码 → silent re-login 仍走密码校验。
+  const ok = await silentReLogin(password);
+  if (!ok) {
+    clearAuthToken();
+    showLoginScreen();
+    return;
+  }
+  await runMainBoot();
+}
+
+if (multiUserToggleBtnEl) {
+  multiUserToggleBtnEl.addEventListener('click', async () => {
+    if (authState.multiUserEnabled) {
+      await disableMultiUserWizard();
+    } else {
+      await enableMultiUserWizard();
+    }
+  });
+}
+
+// ── User management (admin only) ────────────────────────────
+const userListContainerEl = document.getElementById('userListContainer');
+const createUserBtnEl = document.getElementById('createUserBtn');
+const refreshUsersBtnEl = document.getElementById('refreshUsersBtn');
+const userManagementNoteEl = document.getElementById('userManagementNote');
+
+async function loadUsersList() {
+  if (!userListContainerEl) return;
+  if (!authState.multiUserEnabled || authState.role !== 'admin') {
+    userListContainerEl.innerHTML = '';
+    return;
+  }
+  try {
+    const data = await apiJson('/api/users');
+    const users = Array.isArray(data.users) ? data.users : [];
+    userListContainerEl.innerHTML = users.map(user => {
+      const roleTag = user.role === 'admin' ? '<span class="user-role-tag admin">管理员</span>' : '<span class="user-role-tag">普通用户</span>';
+      const created = user.created_at ? new Date(user.created_at * 1000).toLocaleString('zh-CN') : '';
+      const isAdminRow = user.user_id === 'default-user';
+      const actions = isAdminRow
+        ? '<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="' + user.user_id + '">重置密码</button>'
+        : '<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="' + user.user_id + '">重置密码</button>'
+          + '<button type="button" class="subtle-danger" data-user-action="delete" data-user-id="' + user.user_id + '">删除</button>';
+      return `
+        <div class="user-list-row">
+          <div class="user-meta">
+            <span class="user-id">${user.user_id}</span>
+            ${roleTag}
+            <span class="muted small">${created}</span>
+          </div>
+          <div class="user-actions">${actions}</div>
+        </div>
+      `;
+    }).join('');
+    if (userManagementNoteEl) userManagementNoteEl.textContent = '';
+  } catch (err) {
+    if (userManagementNoteEl) userManagementNoteEl.textContent = '加载失败：' + err.message;
+  }
+}
+
+if (userListContainerEl) {
+  userListContainerEl.addEventListener('click', async (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const action = target.getAttribute('data-user-action');
+    const userId = target.getAttribute('data-user-id');
+    if (!action || !userId) return;
+    if (userManagementNoteEl) userManagementNoteEl.textContent = '';
+    try {
+      if (action === 'delete') {
+        if (!window.confirm(`确认删除用户 "${userId}"？该用户的所有 session 与 token 将被清空。`)) return;
+        await apiJson('/api/users', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'delete', user_id: userId }),
+        });
+      } else if (action === 'reset') {
+        const password = window.prompt(`为用户 "${userId}" 设置新密码（至少 12 位）`);
+        if (!password) return;
+        if (password.length < 12) {
+          if (userManagementNoteEl) userManagementNoteEl.textContent = '密码至少需要 12 位';
+          return;
+        }
+        if (userId === 'default-user') {
+          await apiJson('/api/users', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'set_admin_password', password }),
+          });
+        } else {
+          await apiJson('/api/users', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'reset_password', user_id: userId, password }),
+          });
+        }
+      }
+      await loadUsersList();
+    } catch (err) {
+      if (userManagementNoteEl) userManagementNoteEl.textContent = err.message;
+    }
+  });
+}
+
+if (createUserBtnEl) {
+  createUserBtnEl.addEventListener('click', async () => {
+    const userId = window.prompt('新用户名（字母/数字/下划线/短横线，1-64 位）');
+    if (!userId) return;
+    const password = window.prompt('为新用户设置初始密码（至少 12 位）');
+    if (!password) return;
+    if (password.length < 12) {
+      if (userManagementNoteEl) userManagementNoteEl.textContent = '密码至少需要 12 位';
+      return;
+    }
+    if (userManagementNoteEl) userManagementNoteEl.textContent = '';
+    try {
+      await apiJson('/api/users', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'create', user_id: userId, password }),
+      });
+      await loadUsersList();
+    } catch (err) {
+      if (userManagementNoteEl) userManagementNoteEl.textContent = err.message;
+    }
+  });
+}
+
+if (refreshUsersBtnEl) {
+  refreshUsersBtnEl.addEventListener('click', () => loadUsersList());
+}
+
+// 当用户切到"用户管理"或"账号"tab 时刷新对应数据
+document.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (!target.matches('.settings-tab-btn')) return;
+  const tab = target.getAttribute('data-tab');
+  if (tab === 'users') {
+    renderMultiUserStatus();
+    loadUsersList();
+  }
+});
