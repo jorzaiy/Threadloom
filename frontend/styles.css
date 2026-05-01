@@ -23,6 +23,14 @@
   box-sizing: border-box;
 }
 
+/* HTML's hidden attribute should always win, no matter what later
+   class-level CSS sets display to. Keeping this near the top makes the
+   rule available before .login-screen / .password-prompt-modal redefine
+   `display: flex` for their visible state. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   height: 100vh;
