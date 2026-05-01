@@ -397,5 +397,6 @@ http://127.0.0.1:8765
 - **[doc/audit/SECURITY_AUDIT_2026-04-29.md](doc/audit/SECURITY_AUDIT_2026-04-29.md)** - 安全审计与修复记录
 - **[doc/audit/ISOLATION_AND_KEEPER_FIX_2026-04-30.md](doc/audit/ISOLATION_AND_KEEPER_FIX_2026-04-30.md)** - 信息隔离与 keeper 写入路径加固
 - **[doc/audit/MULTI_USER_HARDENING_2026-05-01.md](doc/audit/MULTI_USER_HARDENING_2026-05-01.md)** - 多用户后端安全加固（SSRF 防护、登录限速、Cookie/CSRF 边界、per-user 配额）
+- **[doc/audit/RUNTIME_GENERICITY_AND_TRACE_2026-05-01.md](doc/audit/RUNTIME_GENERICITY_AND_TRACE_2026-05-01.md)** - runtime 泛化、对象流转与 turn audit 可观察性整理
 - **[doc/MULTI_USER_UI_PLAN.md](doc/MULTI_USER_UI_PLAN.md)** - 多用户 UI 实施计划（七项决策、用户流程、后端/前端切片、手动验证清单）
 - **[doc/audit/MULTI_USER_UI_SHIPPED_2026-05-01.md](doc/audit/MULTI_USER_UI_SHIPPED_2026-05-01.md)** - 多用户 UI 上线记录（与 plan 的差异、commit 索引、未做项）
