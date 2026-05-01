@@ -152,7 +152,6 @@
         <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="import">导入资产</button>
         <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="user">玩家设定</button>
         <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="connection">模型连接</button>
-        <button class="settings-tab-btn admin-only" role="tab" aria-selected="false" data-tab="users" hidden>用户管理</button>
         <button class="settings-tab-btn" role="tab" aria-selected="false" data-tab="account">账号</button>
       </nav>
 
@@ -334,39 +333,12 @@
             </section>
           </div>
 
-          <!-- Tab: 用户管理 (admin only) -->
-          <div class="settings-tab-panel" data-tab-panel="users">
-            <section class="settings-subsection">
-              <div class="settings-section-head">
-                <h3>多用户模式</h3>
-                <p>启用后所有用户必须登录；普通用户只能选择模型与 preset，站点设置由你统一维护。</p>
-              </div>
-              <div class="settings-row">
-                <div id="multiUserStatus" class="multi-user-status"></div>
-                <button id="multiUserToggleBtn" type="button">启用多用户模式</button>
-              </div>
-              <div id="multiUserNote" class="inline-feedback"></div>
-            </section>
-            <section class="settings-subsection">
-              <div class="settings-section-head">
-                <h3>用户列表</h3>
-                <p>管理员可以创建普通用户、重置密码或删除账号。default-user 是管理员，不可删除。</p>
-              </div>
-              <div id="userListContainer" class="user-list"></div>
-              <div class="settings-actions">
-                <button id="createUserBtn" type="button">新建用户</button>
-                <button id="refreshUsersBtn" type="button" class="subtle-btn">刷新</button>
-              </div>
-              <div id="userManagementNote" class="inline-feedback"></div>
-            </section>
-          </div>
-
-          <!-- Tab: 账号 -->
+          <!-- Tab: 账号（所有用户：改密 / admin 还看到多用户与用户管理） -->
           <div class="settings-tab-panel" data-tab-panel="account">
             <section class="settings-subsection">
               <div class="settings-section-head">
-                <h3>账号</h3>
-                <p>修改当前账号的密码。提交后其他设备的会话将立即失效，本设备保持登录。</p>
+                <h3>我的账号</h3>
+                <p>修改当前账号的密码。提交后其他设备的会话立即失效，本设备保持登录。单用户模式且尚未设置密码时，"当前密码"留空。</p>
               </div>
               <form id="changePasswordForm" class="account-form" autocomplete="off">
                 <label class="login-field">
@@ -386,6 +358,29 @@
                 </div>
                 <div id="changePasswordNote" class="inline-feedback"></div>
               </form>
+            </section>
+            <section class="settings-subsection admin-only" hidden>
+              <div class="settings-section-head">
+                <h3>多用户模式</h3>
+                <p>启用后所有用户必须登录；普通用户只能选择模型与 preset，站点设置由你统一维护。启用 / 关闭都会强制全员重新登录。</p>
+              </div>
+              <div class="settings-row">
+                <div id="multiUserStatus" class="multi-user-status"></div>
+                <button id="multiUserToggleBtn" type="button">启用多用户模式</button>
+              </div>
+              <div id="multiUserNote" class="inline-feedback"></div>
+            </section>
+            <section class="settings-subsection admin-only" hidden>
+              <div class="settings-section-head">
+                <h3>用户管理</h3>
+                <p>管理员可以创建普通用户、重置密码或删除账号。default-user 是管理员，不可删除。</p>
+              </div>
+              <div id="userListContainer" class="user-list"></div>
+              <div class="settings-actions">
+                <button id="createUserBtn" type="button">新建用户</button>
+                <button id="refreshUsersBtn" type="button" class="subtle-btn">刷新</button>
+              </div>
+              <div id="userManagementNote" class="inline-feedback"></div>
             </section>
           </div>
 

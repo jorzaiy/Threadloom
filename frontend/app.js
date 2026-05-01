@@ -2886,14 +2886,16 @@ if (refreshUsersBtnEl) {
   refreshUsersBtnEl.addEventListener('click', () => loadUsersList());
 }
 
-// 当用户切到"用户管理"或"账号"tab 时刷新对应数据
+// 切到"账号"tab 时刷新多用户状态与用户列表（仅 admin 看得到这两个 section）
 document.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   if (!target.matches('.settings-tab-btn')) return;
   const tab = target.getAttribute('data-tab');
-  if (tab === 'users') {
+  if (tab === 'account') {
     renderMultiUserStatus();
-    loadUsersList();
+    if (authState.role === 'admin' && authState.multiUserEnabled) {
+      loadUsersList();
+    }
   }
 });
