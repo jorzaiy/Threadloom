@@ -11,7 +11,8 @@ from backend.actor_registry import update_actor_registry
 from backend.arbiter_state import merge_arbiter_state
 from backend.state_keeper import _call_state_keeper_llm, _merge_keeper_fill, _parse_fill_payload
 from backend.state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, normalize_carryover_signals, normalize_keeper_object_label
-from backend.handler_message import _keeper_fallback_bootstrapped
+from backend.handler_message import _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _store_turn_audit
+from backend.summary_chunks import _fallback_chunk, _normalize_chunk
 
 
 class StateFragmentTest(unittest.TestCase):
@@ -826,6 +827,55 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertFalse(_looks_like_environment_entity('陆姑娘', '当前场景人物'))
         self.assertTrue(_looks_like_environment_entity('轻功', '技能'))
+
+    def test_object_heavy_turn_detects_known_object_transfer(self):
+        state = {'tracked_objects': [{'object_id': 'obj_01', 'label': '铜牌', 'kind': 'token'}]}
+
+        self.assertTrue(_is_object_heavy_turn('继续看着', '林越放回铜牌，退回门边。', state))
+        self.assertFalse(_is_object_heavy_turn('继续看着', '林越看向库房，退回门边。', state))
+        self.assertFalse(_is_object_heavy_turn('继续看着', '林越放回银簪，退回门边。', state))
+
+    def test_turn_audit_is_compact_and_stored_in_meta(self):
+        context = {
+            'context_audit': {
+                'selector_version': 2,
+                'inject_lorebook_text': True,
+                'event_hits': [{'event_id': 'evt_0001', 'summary': '很长的正文不应进入审计'}],
+                'summary_chunk_hits': [{'chunk_id': 'chunk_0001', 'dense_summary': ['正文']}],
+            },
+            'lorebook_injection': {'items': [{'id': 'entry_1', 'content': '不应进入审计'}], 'total_chars': 20, 'mode': 'selected'},
+            'lorebook_text': '全文不应进入审计',
+            'system_npc_candidates': [{'name': '甲'}],
+            'selected_summary_chunks': [{'chunk_id': 'chunk_0001'}],
+            'event_summaries': [{'event_id': 'evt_0001'}],
+        }
+
+        audit = _build_turn_audit(context, turn_id='turn-0001', prompt_stats=[{'label': 'A', 'chars': 3}], force_full_keeper=True, force_full_keeper_reason='object_heavy_turn', state_keeper_diagnostics={'provider_used': 'llm'})
+        meta: dict[str, Any] = {}
+        _store_turn_audit(meta, audit)
+
+        self.assertEqual(meta['last_turn_audit']['selector']['event_hit_ids'], ['evt_0001'])
+        self.assertEqual(meta['turn_audits'][0]['keeper']['provider_used'], 'llm')
+        self.assertNotIn('content', str(meta['last_turn_audit']['lorebook_injection']))
+
+    def test_summary_chunk_keeps_metadata_generic_and_payload_driven(self):
+        pairs = [
+            ('继续观察', '【傍晚，旧渡口库房】\n顾青衣看着林越把铜牌放回木匣。'),
+        ]
+
+        fallback = _fallback_chunk(chunk_id='chunk_0001', turn_start=1, turn_end=1, pairs=pairs)
+        normalized = _normalize_chunk({
+            'dense_summary': ['林越在旧渡口库房放回铜牌。'],
+            'actors_mentioned': ['林越'],
+            'objects_mentioned': ['铜牌'],
+            'locations': ['旧渡口库房'],
+        }, chunk_id='chunk_0001', turn_start=1, turn_end=1, pairs=pairs, provider='llm')
+
+        self.assertEqual(fallback['actors_mentioned'], [])
+        self.assertEqual(fallback['objects_mentioned'], [])
+        self.assertEqual(fallback['locations'], ['旧渡口库房'])
+        self.assertEqual(normalized['actors_mentioned'], ['林越'])
+        self.assertEqual(normalized['objects_mentioned'], ['铜牌'])
 
     def test_extract_reply_skeleton_skips_main_event_without_terminal_punctuation(self):
         # P3.8 regression: previously the first paragraph was sliced to 100 chars

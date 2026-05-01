@@ -10,7 +10,7 @@ try:
     from .continuity_hints import normalized_hint_entries
     from .important_npc_tracker import update_important_npcs
     from .thread_tracker import apply_thread_tracker
-    from .runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
+    from .runtime_store import append_event_summary, append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
     from .actor_registry import update_actor_registry
     from .summary_updater import update_summary
     from .summary_chunks import update_summary_chunks
@@ -26,6 +26,7 @@ try:
     from .state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from .persona_updater import update_persona
     from .state_fragment import merge_state_skeleton
+    from .event_ledger import build_event_summary_item
 except ImportError:
     from arbiter_runtime import run_arbiter
     from arbiter_state import merge_arbiter_state
@@ -33,7 +34,7 @@ except ImportError:
     from continuity_hints import normalized_hint_entries
     from important_npc_tracker import update_important_npcs
     from thread_tracker import apply_thread_tracker
-    from runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
+    from runtime_store import append_event_summary, append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
     from actor_registry import update_actor_registry
     from summary_updater import update_summary
     from summary_chunks import update_summary_chunks
@@ -49,9 +50,16 @@ except ImportError:
     from state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from persona_updater import update_persona
     from state_fragment import merge_state_skeleton
+    from event_ledger import build_event_summary_item
 
 
 TRACE_PROMPT_LIMIT = 4000
+OBJECT_TRANSFER_TERMS = (
+    '递给', '交给', '塞给', '接过', '拿走', '夺过', '收走', '放下', '放回', '搁下', '摆回',
+    '收起', '亮出', '摸出', '掏出', '握住', '拿起', '取出', '归还', '还给', '落到', '交回',
+)
+
+
 def _trim_trace_text(text: str, limit: int = TRACE_PROMPT_LIMIT) -> str:
     value = str(text or '')
     if len(value) <= limit:
@@ -232,6 +240,89 @@ def _trace_context_excerpt(context: dict) -> dict:
         'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
         'recent_history_count': len(context.get('recent_history', []) or []),
     }
+
+
+def _safe_count(value) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _compact_selector_audit(selector: dict) -> dict:
+    if not isinstance(selector, dict):
+        return {}
+    return {
+        'selector_version': selector.get('selector_version'),
+        'inject_lorebook_text': bool(selector.get('inject_lorebook_text')),
+        'inject_npc_candidates': bool(selector.get('inject_npc_candidates')),
+        'inject_summary': bool(selector.get('inject_summary')),
+        'event_hit_count': _safe_count(selector.get('event_hits')),
+        'summary_chunk_hit_count': _safe_count(selector.get('summary_chunk_hits')),
+        'npc_profile_target_count': _safe_count(selector.get('npc_profile_targets')),
+        'npc_roster_count': _safe_count(selector.get('npc_roster')),
+        'event_hit_ids': [str(item.get('event_id', '') or '') for item in (selector.get('event_hits') or []) if isinstance(item, dict) and item.get('event_id')][:8],
+        'summary_chunk_ids': [str(item.get('chunk_id', '') or '') for item in (selector.get('summary_chunk_hits') or []) if isinstance(item, dict) and item.get('chunk_id')][:8],
+    }
+
+
+def _compact_lorebook_audit(lorebook_injection: dict) -> dict:
+    if not isinstance(lorebook_injection, dict):
+        return {}
+    items = lorebook_injection.get('items', []) if isinstance(lorebook_injection.get('items', []), list) else []
+    return {
+        'item_count': len(items),
+        'total_chars': lorebook_injection.get('total_chars', 0),
+        'mode': lorebook_injection.get('mode'),
+        'item_ids': [str(item.get('id', item.get('title', '')) or '') for item in items if isinstance(item, dict)][:8],
+        'foundation_count': _safe_count((lorebook_injection.get('foundation') or {}).get('items') if isinstance(lorebook_injection.get('foundation'), dict) else []),
+    }
+
+
+def _build_turn_audit(context: dict, *, turn_id: str, prompt_stats: list[dict], force_full_keeper: bool = False, force_full_keeper_reason: str = '', state_keeper_diagnostics: dict | None = None) -> dict:
+    selector = context.get('context_audit', {}) if isinstance(context, dict) else {}
+    lorebook_injection = context.get('lorebook_injection', {}) if isinstance(context, dict) else {}
+    return {
+        'version': 1,
+        'turn_id': turn_id,
+        'selector': _compact_selector_audit(selector),
+        'lorebook_injection': _compact_lorebook_audit(lorebook_injection),
+        'narrator_injection': {
+            'prompt_block_stats': copy.deepcopy(prompt_stats),
+            'lorebook_text_injected': bool((context or {}).get('lorebook_text', '')),
+            'system_npc_candidate_count': _safe_count((context or {}).get('system_npc_candidates')),
+            'lorebook_npc_candidate_count': _safe_count((context or {}).get('lorebook_npc_candidates')),
+            'npc_profile_count': _safe_count((context or {}).get('npc_profiles')),
+            'selected_summary_chunk_count': _safe_count((context or {}).get('selected_summary_chunks')),
+            'event_summary_count': _safe_count((context or {}).get('event_summaries')),
+        },
+        'keeper': {
+            'force_full_keeper': bool(force_full_keeper),
+            'force_full_keeper_reason': force_full_keeper_reason,
+            'provider_used': (state_keeper_diagnostics or {}).get('provider_used') if isinstance(state_keeper_diagnostics, dict) else None,
+        },
+    }
+
+
+def _is_object_heavy_turn(user_text: str, reply: str, state: dict, state_fragment: dict | None = None) -> bool:
+    combined = f'{user_text}\n{reply}'
+    if state_fragment:
+        combined += '\n' + str(state_fragment.get('main_event', '') or '')
+        combined += '\n' + ' '.join(str(item.get('text', '') if isinstance(item, dict) else item) for item in (state_fragment.get('carryover_signals', []) or []))
+    if not any(term in combined for term in OBJECT_TRANSFER_TERMS):
+        return False
+    labels = [str(item.get('label', '') or '').strip() for item in (state.get('tracked_objects', []) or []) if isinstance(item, dict) and str(item.get('label', '') or '').strip()]
+    if labels and any(label in combined for label in labels):
+        return True
+    return False
+
+
+def _store_turn_audit(meta: dict, audit: dict) -> None:
+    if not isinstance(audit, dict) or not audit:
+        return
+    meta['last_turn_audit'] = audit
+    audits = meta.get('turn_audits', [])
+    if not isinstance(audits, list):
+        audits = []
+    audits.append(audit)
+    meta['turn_audits'] = audits[-20:]
 
 
 def _build_turn_trace_base(session_id: str, turn_id: str, *, ts: int, client_turn_id: str, text: str, request_meta: dict, prev_state: dict, meta: dict) -> dict:
@@ -811,8 +902,9 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     cfg = load_runtime_config()
     consolidate_every = cfg.get('memory', {}).get('consolidate_every_turns', 3)
     is_consolidation_turn = consolidate_every > 0 and current_turn_num % consolidate_every == 0
+    force_full_keeper_for_objects = _is_object_heavy_turn(text, reply, state, state_fragment)
 
-    if is_first_turn or needs_keeper_bootstrap or is_consolidation_turn:
+    if is_first_turn or needs_keeper_bootstrap or is_consolidation_turn or force_full_keeper_for_objects:
         try:
             state, state_keeper_trace = call_state_keeper(
                 session_id,
@@ -822,6 +914,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 return_trace=True,
             )
             state_keeper_diagnostics = state.get('state_keeper_diagnostics', {})
+            if force_full_keeper_for_objects:
+                state_keeper_diagnostics['forced_full_keeper_reason'] = 'object_heavy_turn'
             if is_first_turn or needs_keeper_bootstrap:
                 state_keeper_diagnostics['bootstrap_turn'] = True
             state['state_keeper_bootstrapped'] = True
@@ -829,6 +923,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             state_error = str(err)
             fragment_state = build_state_from_fragment(state, state_fragment, session_id)
             fragment_state['state_keeper_diagnostics'] = _state_keeper_failure_diagnostics(err, state_error)
+            if force_full_keeper_for_objects:
+                fragment_state['state_keeper_diagnostics']['forced_full_keeper_reason'] = 'object_heavy_turn'
             fragment_state['state_keeper_bootstrapped'] = _keeper_fallback_bootstrapped(fragment_state, skeleton_keeper_diagnostics)
             state = fragment_state
             state_keeper_diagnostics = fragment_state['state_keeper_diagnostics']
@@ -885,9 +981,25 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     # us collapse the prior intermediate save into this final write.
     save_state(session_id, state)
     summary_chunk_result = update_summary_chunks(session_id)
-    event_summary_item = None
+    event_summary_item = build_event_summary_item(
+        turn_id=turn_id,
+        ledger={'summary_text': state.get('main_event', ''), 'provider': 'state_keeper'},
+        onstage_names=state.get('onstage_npcs', []),
+        tracked_objects=state.get('tracked_objects', []),
+        carryover_clues=state.get('carryover_clues', []),
+    )
+    if event_summary_item.get('summary'):
+        append_event_summary(session_id, event_summary_item)
     summary_text = update_summary(session_id)
     persona_counts = update_persona(session_id, context.get('continuity_candidates', []))
+    turn_audit = _build_turn_audit(
+        context,
+        turn_id=turn_id,
+        prompt_stats=prompt_stats,
+        force_full_keeper=force_full_keeper_for_objects,
+        force_full_keeper_reason='object_heavy_turn' if force_full_keeper_for_objects else '',
+        state_keeper_diagnostics=state_keeper_diagnostics if isinstance(state_keeper_diagnostics, dict) else {},
+    )
 
     response = {
         'session_id': session_id,
@@ -895,6 +1007,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'reply': reply,
         'usage': usage,
         'state_snapshot': build_state_snapshot(state),
+        'meta': {'turn_audit': turn_audit},
         'web': web_runtime_settings(),
     }
     if debug_enabled:
@@ -944,6 +1057,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             }
 
     meta['last_turn_id'] += 1
+    _store_turn_audit(meta, turn_audit)
     if client_turn_id:
         meta['processed_client_turn_ids'][client_turn_id] = response
     save_meta(session_id, meta)

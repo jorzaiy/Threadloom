@@ -64,25 +64,43 @@ def _compact(value: str, limit: int = 260) -> str:
     return text[:limit]
 
 
+def _dedupe_limited(values: list[str], limit: int) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        text = _compact(value, 40)
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _extract_chunk_metadata(text: str) -> dict[str, list[str]]:
+    value = str(text or '')
+    locations: list[str] = []
+    for header in re.findall(r'【([^】]{2,40})】', value):
+        parts = [part.strip() for part in re.split(r'[，,、/｜|]', header) if part.strip()]
+        if len(parts) >= 2:
+            locations.append(parts[-1])
+    return {
+        'actors_mentioned': [],
+        'locations': locations,
+        'objects_mentioned': [],
+    }
+
+
 def _fallback_chunk(*, chunk_id: str, turn_start: int, turn_end: int, pairs: list[tuple[str, str]], provider: str = 'heuristic') -> dict:
     dense = []
     for idx, (user_text, assistant_text) in enumerate(pairs, start=turn_start):
         dense.append(f'第{idx}轮：用户动作：{_compact(user_text, 90)}；世界反馈：{_compact(assistant_text, 180)}')
     text = '\n'.join(' '.join(pair) for pair in pairs)
     keywords = []
-    preferred_tokens = (
-        '茶摊', '药铺', '掌柜', '摊主', '老汉', '灰衣', '灰衣男人', '受伤', '伤药', '止血',
-        '陌生面孔', '可疑买卖', '鞋底', '泥痕', '腰间', '旧渡', '巷口', '坊门', '差役',
-        '皂隶', '小伙计', '包袱', '油纸包', '跟踪', '监视', '传闻', '线索'
-    )
-    for token in preferred_tokens:
-        if token in text and token not in keywords:
-            keywords.append(token)
     for token in re.findall(r'[\u4e00-\u9fff]{2,8}', text):
         if token not in keywords:
             keywords.append(token)
         if len(keywords) >= 36:
             break
+    extracted = _extract_chunk_metadata(text)
     return {
         'chunk_id': chunk_id,
         'turn_start': turn_start,
@@ -90,9 +108,9 @@ def _fallback_chunk(*, chunk_id: str, turn_start: int, turn_end: int, pairs: lis
         'dense_summary': dense[:18],
         'key_events': dense[:6],
         'unresolved': [],
-        'locations': [],
-        'actors_mentioned': [],
-        'objects_mentioned': [],
+        'locations': extracted['locations'],
+        'actors_mentioned': extracted['actors_mentioned'],
+        'objects_mentioned': extracted['objects_mentioned'],
         'keywords': keywords,
         'provider': provider,
     }
@@ -126,6 +144,10 @@ def _normalize_chunk(payload: dict, *, chunk_id: str, turn_start: int, turn_end:
                 break
         if cleaned:
             out[field] = cleaned
+    extracted = _extract_chunk_metadata('\n'.join(' '.join(pair) for pair in pairs))
+    for field in ('locations', 'actors_mentioned', 'objects_mentioned'):
+        if not out.get(field):
+            out[field] = extracted[field]
     out['provider'] = provider
     return out
 
