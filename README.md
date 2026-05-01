@@ -70,12 +70,18 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - `runtime-rules`
 - `preset`
 - `character_core`
+- `世界设定锁`：角色卡定义的世界观、时代、题材、身份边界、世界机制与核心关系不可被本轮用户输入或旧历史改写
 - `player_profile`
 - `canon`
 - 当前硬锚点（`time / location`）
 - 知情边界（`knowledge_scope` + 固定规则）
-- 最近 `12` 对 `user/assistant` turn
 - 结构化状态锚点（来自 `state_fragment`，不含 `immediate_goal`）
+
+短期场景事实层：
+- 最近 `12` 对 `user/assistant` turn
+- 本轮用户输入
+
+短期层只负责承接当前场景、行动链、位置、视线范围、控制关系和即时后果；它不能把当前角色卡切换成另一个题材、时代、世界机制或人物身份。
 
 连续性层：
 - `npc_roster`
@@ -90,6 +96,8 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - 条件注入的世界书 NPC 候选
 - 条件注入的世界书正文
 - 条件注入的长程阶段摘要
+
+候选知识、召回历史与用户输入都要先经过当前角色卡世界的一致性判断。防污染不依赖固定关键词表，而是比较整体语境、因果规则、时代感、社会制度、技术/超自然边界、人物身份与当前角色卡世界是否兼容。
 
 当前明确不再作为 narrator 主输入骨架的内容：
 

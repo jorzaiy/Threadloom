@@ -33,8 +33,8 @@ web input
 ```
 
 关键差异：
-- `state` 是 narrator 的前置硬约束，`summary` 不再是 narrator 主输入。
-- `history` 只保留最近窗口承接，不再承担完整骨架职责。
+- `runtime-rules` 与当前角色卡世界设定是 narrator 的最高约束；`state` 是当前场景的结构化承接层，`summary` 不再是 narrator 主输入。
+- `history` 只保留最近窗口承接，不再承担完整骨架职责，也不能把角色卡的时代、题材、身份边界或世界机制改写成另一套设定。
 - 更早历史优先收敛成 keeper archive，而不是自由摘要层。
 - 写回时先收口到结构化状态；`summary` 可继续保留为调试/运维产物，但不再主导 narrator。
 - state 写入分三类：opening 只做开局状态机 checkpoint；`handler_message.py` 负责每个完整 turn 的最终权威提交；keeper archive 写入只维护派生缓存。
@@ -42,6 +42,8 @@ web input
 - `knowledge_scope` 是本轮 delta，长期知识落到 `knowledge_records`；物件退出 active 状态通过 `lifecycle_status` 和 `graveyard_objects` 表达。
 - keeper archive 是派生缓存，刷新时会清理超过当前有效 pair index 的未来 records，避免撤回/重试后的旧分支污染召回。
 - keeper archive 的读路径默认允许维护派生缓存；需要只读检查时，调用方可通过 `allow_archive_write=False` 禁止 prune/rebuild 落盘，默认运行行为不变。
+- narrator 输入会注入“世界设定锁”：本轮用户输入只表达主角当前行动/对白/意图，不能切换主世界题材；召回历史、世界书候选或用户输入若与当前角色卡世界不兼容，只能在当前世界观内转译或收束。
+- 防污染判断不靠固定关键词表。不同角色卡的题材边界差异很大，运行时提示要求按整体语境、因果规则、时代感、社会制度、技术/超自然边界和人物身份兼容性来判断是否承接候选内容。
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。

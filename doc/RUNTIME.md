@@ -11,11 +11,12 @@
 每轮都读取：
 - `runtime-rules`
 - active preset
+- 当前角色卡核心与世界约束字段
 - `state`
 - `scene persona seeds`
 - 最近 `12` 对 recent history
 
-这些是当前回合的最低事实层，必须每轮都以它们为准。
+这些不是同一优先级：`runtime-rules`、当前角色卡世界观、时代、题材、身份边界和世界机制是最高约束；recent history 与本轮用户输入只负责短期场景承接，不能反向改写角色卡世界。
 
 ### 中等刷新（默认每 12 轮）
 
@@ -54,6 +55,7 @@
 - 必须先于 `canon/state/persona` 与最近窗口进入上下文
 - 不能依赖当前聊天 session 惯性补全
 - 不应被在线会话中的临时 steering 或历史承接覆盖
+- 明确角色卡世界设定优先于本轮用户输入和最近窗口；如果用户输入或旧历史要求切换题材、时代、身份边界或世界机制，narrator 只能在当前角色卡世界内转译，不得把冲突前提写成主世界事实
 
 ### Step 1. 读取事实源
 
@@ -121,12 +123,15 @@
 
 输入源包括：
 - 当前 scene facts
+- 当前角色卡核心与 `世界设定锁`
 - 当前 onstage / relevant NPC
 - persona hooks
 - relevant lore
 - available cast / 可调入世界书人物
 - correction rules
 - 当前用户输入
+
+`世界设定锁` 是 narrator prompt 的强约束块。它要求候选世界书、召回历史与用户输入先做整体语境兼容性判断；防污染不使用固定关键词黑名单，而是比较因果规则、时代感、社会制度、技术/超自然边界、人物身份与当前角色卡世界是否兼容。
 
 输出：
 - `NarratorInput`

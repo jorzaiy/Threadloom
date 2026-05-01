@@ -103,8 +103,11 @@
 - `summary` 当前仍保留为 session-local 写回 / 调试产物
 - `summary` 当前不再作为 narrator 主输入
 - narrator 当前主输入收敛为：
-  - 最近 `12` 对 turn 的 rolling window
+  - `runtime-rules`、当前角色卡核心与世界设定锁
+  - 最近 `12` 对 turn 的 rolling window，作为短期场景事实而不是最高世界事实
   - 命中的 keeper archive 结构记录
+- 角色卡定义的世界观、时代、题材、身份边界、世界机制与核心关系优先于用户本轮输入、最近历史和候选世界书。用户输入只驱动当前行动/对白/意图，不能把主世界改写成另一套设定。
+- 防污染不使用固定关键词黑名单；不同角色卡的边界由角色卡内容本身决定，narrator 需要按整体语境、因果规则、时代感、社会制度、技术/超自然边界和人物身份兼容性判断候选内容是否可承接。
 
 当前 keeper 写回质量边界：
 - `skeleton keeper` 只维护 `time / location / main_event / onstage_npcs / immediate_goal` 最小骨架。
