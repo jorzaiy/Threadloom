@@ -451,6 +451,15 @@ function validateRuntimeDraft(draft) {
   return '';
 }
 
+// 401 from these endpoints is a business-level credential error (wrong
+// password, locked account, missing old password). The caller wants to
+// surface backend's actual message — do NOT auto-clear token / hop to
+// login screen.
+const AUTH_BUSINESS_PATHS = new Set([
+  '/api/auth/login',
+  '/api/auth/change-password',
+]);
+
 async function apiJson(url, options = {}) {
   if (options.body && !options.headers?.['Content-Type']) {
     options.headers = { ...options.headers, 'Content-Type': 'application/json' };
@@ -460,12 +469,17 @@ async function apiJson(url, options = {}) {
     options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
   }
   const res = await fetch(url, options);
+  let data = null;
+  try { data = await res.json(); } catch (_e) { data = null; }
   if (res.status === 401) {
+    if (AUTH_BUSINESS_PATHS.has(url)) {
+      // Pass the backend message through (e.g. "账户暂时锁定...").
+      throw new Error(data?.error?.message || '认证失败');
+    }
     clearAuthToken();
     showLoginScreen();
-    throw new Error('请先登录');
+    throw new Error(data?.error?.message || '请先登录');
   }
-  const data = await res.json();
   if (!res.ok) {
     throw new Error(data?.error?.message || `request failed: ${url}`);
   }
@@ -2337,6 +2351,13 @@ async function checkAuth() {
 })();
 
 async function runMainBoot() {
+  // Self-heal: if the user is in single-user mode, clear any stale token
+  // left over from an earlier multi-user session and make sure we are not
+  // sitting on the login overlay. checkAuth() has already run by the time
+  // we get here so authState is authoritative.
+  if (!authState.multiUserEnabled) {
+    if (getAuthToken()) clearAuthToken();
+  }
   hideLoginScreen();
   applyRoleBasedUI();
   setStatus('初始化中...', 'working');
@@ -2557,21 +2578,99 @@ async function silentReLogin(password) {
   }
 }
 
+// ── Password modal (replaces window.prompt) ────────────────
+const passwordPromptBackdrop = document.getElementById('passwordPromptBackdrop');
+const passwordPromptModal = document.getElementById('passwordPromptModal');
+const passwordPromptForm = document.getElementById('passwordPromptForm');
+const passwordPromptTitle = document.getElementById('passwordPromptTitle');
+const passwordPromptHint = document.getElementById('passwordPromptHint');
+const passwordPromptInput1 = document.getElementById('passwordPromptInput1');
+const passwordPromptInput2 = document.getElementById('passwordPromptInput2');
+const passwordPromptField2 = document.getElementById('passwordPromptField2');
+const passwordPromptLabel1 = document.getElementById('passwordPromptLabel1');
+const passwordPromptLabel2 = document.getElementById('passwordPromptLabel2');
+const passwordPromptError = document.getElementById('passwordPromptError');
+const passwordPromptCancelBtn = document.getElementById('passwordPromptCancelBtn');
+
+let _activePasswordPrompt = null;
+
+function showPasswordPrompt({ title, hint, label1 = '密码', label2 = '', requireConfirm = false, minLength = 0 }) {
+  return new Promise((resolve) => {
+    if (_activePasswordPrompt) {
+      _activePasswordPrompt(null);
+      _activePasswordPrompt = null;
+    }
+    if (passwordPromptTitle) passwordPromptTitle.textContent = title || '输入密码';
+    if (passwordPromptHint) passwordPromptHint.textContent = hint || '';
+    if (passwordPromptLabel1) passwordPromptLabel1.textContent = label1;
+    if (passwordPromptLabel2) passwordPromptLabel2.textContent = label2 || '确认密码';
+    if (passwordPromptInput1) passwordPromptInput1.value = '';
+    if (passwordPromptInput2) passwordPromptInput2.value = '';
+    if (passwordPromptError) passwordPromptError.textContent = '';
+    if (passwordPromptField2) passwordPromptField2.hidden = !requireConfirm;
+    if (passwordPromptBackdrop) passwordPromptBackdrop.hidden = false;
+    if (passwordPromptModal) passwordPromptModal.hidden = false;
+    setTimeout(() => passwordPromptInput1?.focus(), 0);
+    _activePasswordPrompt = (value) => {
+      if (passwordPromptBackdrop) passwordPromptBackdrop.hidden = true;
+      if (passwordPromptModal) passwordPromptModal.hidden = true;
+      _activePasswordPrompt = null;
+      resolve(value);
+    };
+    passwordPromptForm._validateAndSubmit = () => {
+      const pwd1 = passwordPromptInput1?.value || '';
+      const pwd2 = passwordPromptInput2?.value || '';
+      if (!pwd1) {
+        if (passwordPromptError) passwordPromptError.textContent = '密码不能为空';
+        return;
+      }
+      if (minLength && pwd1.length < minLength) {
+        if (passwordPromptError) passwordPromptError.textContent = `密码至少需要 ${minLength} 位`;
+        return;
+      }
+      if (requireConfirm && pwd1 !== pwd2) {
+        if (passwordPromptError) passwordPromptError.textContent = '两次输入不一致';
+        return;
+      }
+      if (_activePasswordPrompt) _activePasswordPrompt(pwd1);
+    };
+  });
+}
+
+if (passwordPromptForm) {
+  passwordPromptForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (typeof passwordPromptForm._validateAndSubmit === 'function') {
+      passwordPromptForm._validateAndSubmit();
+    }
+  });
+}
+if (passwordPromptCancelBtn) {
+  passwordPromptCancelBtn.addEventListener('click', () => {
+    if (_activePasswordPrompt) _activePasswordPrompt(null);
+  });
+}
+if (passwordPromptBackdrop) {
+  passwordPromptBackdrop.addEventListener('click', () => {
+    if (_activePasswordPrompt) _activePasswordPrompt(null);
+  });
+}
+
 async function enableMultiUserWizard() {
   if (multiUserNoteEl) multiUserNoteEl.textContent = '';
+  // Re-fetch authState so the bootstrap branch decision uses live data.
+  await checkAuth();
   let password = '';
   if (!authState.adminHasPassword) {
-    password = window.prompt('请设置管理员密码（至少 12 位）');
+    password = await showPasswordPrompt({
+      title: '设置管理员密码',
+      hint: '启用多用户前必须先设置管理员密码（至少 12 位）。请妥善保存：忘记后只能停服后手动改 users.json 重置。',
+      label1: '新密码',
+      label2: '确认新密码',
+      requireConfirm: true,
+      minLength: 12,
+    });
     if (!password) return;
-    const confirmPwd = window.prompt('请再次输入以确认密码');
-    if (password !== confirmPwd) {
-      if (multiUserNoteEl) multiUserNoteEl.textContent = '两次输入不一致';
-      return;
-    }
-    if (password.length < 12) {
-      if (multiUserNoteEl) multiUserNoteEl.textContent = '密码至少需要 12 位';
-      return;
-    }
     try {
       await apiJson('/api/users', {
         method: 'POST',
@@ -2581,9 +2680,34 @@ async function enableMultiUserWizard() {
       if (multiUserNoteEl) multiUserNoteEl.textContent = '设置密码失败：' + err.message;
       return;
     }
+    // Refresh authState so a follow-up retry in the same session knows the
+    // password is now set.
+    await checkAuth();
   } else {
-    password = window.prompt('请输入管理员密码以确认启用多用户');
+    password = await showPasswordPrompt({
+      title: '确认启用多用户',
+      hint: '请输入管理员密码确认。启用后所有用户必须重新登录。',
+      label1: '管理员密码',
+    });
     if (!password) return;
+    // Verify the password BEFORE flipping the toggle so a wrong/forgotten
+    // password cannot lock the admin out. /api/multi-user only checks the
+    // admin token, not the password — without this gate the wizard would
+    // happily enable multi-user with garbage input and the silent re-login
+    // would then fail, stranding the user on the login screen.
+    try {
+      const data = await apiJson('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: 'default-user', password }),
+      });
+      // Adopt the freshly issued token so subsequent state-changing calls
+      // stay authenticated even if some intermediate logic invalidated the
+      // previous one.
+      setAuthToken(data.token);
+    } catch (err) {
+      if (multiUserNoteEl) multiUserNoteEl.textContent = '密码错误：' + err.message;
+      return;
+    }
   }
   try {
     await apiJson('/api/multi-user', {
@@ -2606,8 +2730,25 @@ async function enableMultiUserWizard() {
 
 async function disableMultiUserWizard() {
   if (multiUserNoteEl) multiUserNoteEl.textContent = '';
-  const password = window.prompt('关闭多用户模式将注销所有用户。请输入管理员密码以确认。');
+  const password = await showPasswordPrompt({
+    title: '关闭多用户模式',
+    hint: '关闭后所有其他用户立即注销，他们的 sessions 与 token 全部清空。请输入管理员密码确认。',
+    label1: '管理员密码',
+  });
   if (!password) return;
+  // Verify password first; same reason as enable — /api/multi-user does not
+  // re-check it, and a wrong password would strand the admin on the login
+  // page after the toggle wipes sessions.
+  try {
+    const data = await apiJson('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: 'default-user', password }),
+    });
+    setAuthToken(data.token);
+  } catch (err) {
+    if (multiUserNoteEl) multiUserNoteEl.textContent = '密码错误：' + err.message;
+    return;
+  }
   try {
     await apiJson('/api/multi-user', {
       method: 'POST',
@@ -2617,7 +2758,7 @@ async function disableMultiUserWizard() {
     if (multiUserNoteEl) multiUserNoteEl.textContent = '关闭失败：' + err.message;
     return;
   }
-  // sessions 已被清空；单用户模式下 admin 仍有密码 → silent re-login 仍走密码校验。
+  // sessions 已被清空；single-user mode 下 admin 仍有密码 → silent re-login 仍走密码校验。
   const ok = await silentReLogin(password);
   if (!ok) {
     clearAuthToken();

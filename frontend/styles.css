@@ -2132,3 +2132,40 @@ button:active {
   flex-direction: column;
   gap: 12px;
 }
+
+.password-prompt-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10500;
+  pointer-events: none;
+}
+
+.password-prompt-modal:not([hidden]) {
+  pointer-events: auto;
+}
+
+.password-prompt-form {
+  width: min(380px, calc(100vw - 32px));
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 24px 24px 20px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.password-prompt-title {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.password-prompt-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}

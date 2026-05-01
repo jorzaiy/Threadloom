@@ -416,6 +416,27 @@
       </div>
     </aside>
 
+    <div id="passwordPromptBackdrop" class="settings-backdrop" hidden></div>
+    <div id="passwordPromptModal" class="password-prompt-modal" role="dialog" aria-modal="true" hidden>
+      <form id="passwordPromptForm" class="password-prompt-form">
+        <h2 id="passwordPromptTitle" class="password-prompt-title">输入密码</h2>
+        <p id="passwordPromptHint" class="password-prompt-hint"></p>
+        <label class="login-field">
+          <span id="passwordPromptLabel1">密码</span>
+          <input id="passwordPromptInput1" type="password" autocomplete="off" required />
+        </label>
+        <label class="login-field" id="passwordPromptField2">
+          <span id="passwordPromptLabel2">确认密码</span>
+          <input id="passwordPromptInput2" type="password" autocomplete="off" required />
+        </label>
+        <div id="passwordPromptError" class="login-error" role="alert"></div>
+        <div class="settings-actions">
+          <button id="passwordPromptCancelBtn" type="button" class="subtle-btn">取消</button>
+          <button id="passwordPromptSubmitBtn" type="submit">确认</button>
+        </div>
+      </form>
+    </div>
+
     <script src="/app.js"></script>
   </body>
 </html>
