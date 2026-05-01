@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from urllib.parse import quote
 
 try:
     from .character_assets import resolve_character_cover_path
@@ -107,14 +108,15 @@ def load_character_card_meta() -> dict:
     data = _read_json_file(character_data_path())
     core = data.get('coreDescription', {}) if isinstance(data.get('coreDescription', {}), dict) else {}
     cover_path = resolve_character_cover_path()
+    character_id = active_character_id()
     return {
         'user_id': active_user_label(),
-        'character_id': active_character_id(),
+        'character_id': character_id,
         'name': str(data.get('name', '') or core.get('title', '') or '未命名角色卡').strip(),
         'title': str(core.get('title', '') or data.get('name', '') or '未命名角色卡').strip(),
         'subtitle': str(core.get('tagline', '') or data.get('role', '') or '').strip(),
         'summary': str(core.get('summary', '') or '').strip(),
-        'cover_url': '/character-cover' if cover_path else None,
+        'cover_url': f'/character-cover?character_id={quote(character_id)}&variant=cover-small' if cover_path else None,
         'has_cover': bool(cover_path),
     }
 
