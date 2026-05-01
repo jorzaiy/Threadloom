@@ -26,6 +26,7 @@ from backend import runtime_store
 from backend import model_config
 from backend import player_profile
 from backend import server
+from backend import session_lifecycle
 
 
 class BusinessRejectHandler(server.Handler):
@@ -270,13 +271,13 @@ class MultiUserFoundationTests(unittest.TestCase):
         original_resolve_user_from_request = server.resolve_user_from_request
         try:
             server.is_multi_user_enabled = lambda: True
-            server.resolve_user_from_request = lambda headers: None
+            server.resolve_user_from_request = lambda headers, **kwargs: None
 
             _, token, ok = server.begin_request_user_context('/api/state', 'GET', {})
             self.assertFalse(ok)
             self.assertIsNone(token)
 
-            server.resolve_user_from_request = lambda headers: paths.DEFAULT_USER_ID
+            server.resolve_user_from_request = lambda headers, **kwargs: paths.DEFAULT_USER_ID
             uid, token, ok = server.begin_request_user_context('/api/state', 'GET', {'Authorization': 'Bearer token'})
             self.assertTrue(ok)
             self.assertEqual(uid, paths.DEFAULT_USER_ID)
@@ -414,7 +415,7 @@ class MultiUserFoundationTests(unittest.TestCase):
         original_resolve_user_from_request = server.resolve_user_from_request
         try:
             server.is_multi_user_enabled = lambda: False
-            server.resolve_user_from_request = lambda headers: paths.DEFAULT_USER_ID
+            server.resolve_user_from_request = lambda headers, **kwargs: paths.DEFAULT_USER_ID
             handler = make_business_reject_handler({'session_id': 's1', 'user_id': 'user-a'})
             server.Handler.do_POST(handler)
             sent = handler.sent
@@ -652,7 +653,7 @@ class MultiUserFoundationTests(unittest.TestCase):
                 shared_profile.parent.mkdir(parents=True, exist_ok=True)
                 shared_profile.write_text(json.dumps({'name': 'shared-private'}), encoding='utf-8')
                 server.is_multi_user_enabled = lambda: True
-                server.resolve_user_from_request = lambda headers: 'user-a'
+                server.resolve_user_from_request = lambda headers, **kwargs: 'user-a'
 
                 handler = make_get_handler('/api/user-profile')
                 server.Handler.do_GET(handler)
@@ -896,6 +897,271 @@ class MultiUserFoundationTests(unittest.TestCase):
                 finally:
                     paths.reset_active_character_override(token)
             finally:
+                paths.RUNTIME_DATA_ROOT = original_runtime_root
+
+    def test_login_locks_account_after_failure_threshold(self):
+        # H2: per-user lockout after N consecutive failed logins, releasing only
+        # after the cooldown elapses or an admin resets the password.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_paths_root = paths.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                paths.RUNTIME_DATA_ROOT = temp_root
+
+                user_manager.create_user('user-a', 'secure-password-123')
+                for _ in range(user_manager.LOGIN_FAILURE_LIMIT):
+                    with self.assertRaises(ValueError):
+                        user_manager.login('user-a', 'wrong-password-xxx')
+                # Account is now locked even with correct password.
+                with self.assertRaises(ValueError) as ctx:
+                    user_manager.login('user-a', 'secure-password-123')
+                self.assertIn('锁定', str(ctx.exception))
+
+                # Admin password reset clears the lockout.
+                user_manager.reset_user_password('user-a', 'secure-password-456')
+                token = user_manager.login('user-a', 'secure-password-456')
+                self.assertEqual(user_manager.validate_token(token), 'user-a')
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+                paths.RUNTIME_DATA_ROOT = original_paths_root
+
+    def test_login_unknown_user_runs_dummy_bcrypt_to_hide_existence(self):
+        # H3: ``user_not_found`` and ``wrong_password`` paths must both verify
+        # against a bcrypt hash so response time cannot be used as a username
+        # oracle.
+        called_with: list[str] = []
+
+        def fake_verify(password: str, hashed: str) -> bool:
+            called_with.append(hashed)
+            return False
+
+        original_verify = getattr(user_manager, '_verify_password')
+        original_users_file = user_manager.USERS_FILE
+        original_sessions_file = user_manager.SESSIONS_FILE
+        original_root = user_manager.RUNTIME_DATA_ROOT
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                setattr(user_manager, '_verify_password', fake_verify)
+
+                with self.assertRaises(ValueError):
+                    user_manager.login('non-existent-user', 'whatever-password')
+            finally:
+                setattr(user_manager, '_verify_password', original_verify)
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+        self.assertEqual(called_with, [user_manager._DUMMY_PASSWORD_HASH])
+
+    def test_save_sessions_prunes_expired_entries(self):
+        # M3: _save_sessions filters out expired entries so abandoned tokens
+        # don't accumulate in sessions.json.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                user_manager._ensure_system_dir()
+
+                now = time.time() if False else __import__('time').time()
+                fresh_key = 'fresh-token-hash'
+                stale_key = 'stale-token-hash'
+                payload = {
+                    fresh_key: {'user_id': 'user-a', 'created_at': now, 'last_seen_at': now, 'expires_at': now + 3600},
+                    stale_key: {'user_id': 'user-b', 'created_at': now - 99999, 'last_seen_at': now - 99999, 'expires_at': now - 1},
+                }
+                user_manager._save_sessions(payload)
+                saved = json.loads(user_manager.SESSIONS_FILE.read_text(encoding='utf-8'))
+                self.assertIn(fresh_key, saved)
+                self.assertNotIn(stale_key, saved)
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.SESSIONS_FILE = original_sessions_file
+
+    def test_enabling_multi_user_wipes_existing_sessions(self):
+        # M5: switching multi-user ON must close the bootstrap window where a
+        # default-user empty-password token could carry into multi-user state.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+
+                user_manager.set_admin_password('secure-password-123')
+                token = user_manager.login(paths.DEFAULT_USER_ID, 'secure-password-123')
+                self.assertEqual(user_manager.validate_token(token), paths.DEFAULT_USER_ID)
+
+                user_manager.set_multi_user_enabled(True)
+                self.assertIsNone(user_manager.validate_token(token))
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+
+    def test_post_request_rejects_cookie_session_token(self):
+        # M1: cookie auth must not satisfy a POST/DELETE so a browser-issued
+        # cross-site request cannot ride a session_token cookie.
+        original_is_multi_user_enabled = server.is_multi_user_enabled
+        try:
+            server.is_multi_user_enabled = lambda: True
+            captured: dict = {}
+
+            def fake_resolve(headers, *, allow_cookie=True):
+                captured['allow_cookie'] = allow_cookie
+                return None
+
+            original_resolve = server.resolve_user_from_request
+            server.resolve_user_from_request = fake_resolve
+            try:
+                server.begin_request_user_context('/api/message', 'POST', {'Cookie': 'session_token=abc'})
+            finally:
+                server.resolve_user_from_request = original_resolve
+            self.assertFalse(captured['allow_cookie'])
+        finally:
+            server.is_multi_user_enabled = original_is_multi_user_enabled
+
+    def test_get_request_still_accepts_cookie_session_token(self):
+        # M1 sanity: GET endpoints continue to honour the cookie path so SSE
+        # / EventSource flows that cannot set custom headers still work.
+        original_is_multi_user_enabled = server.is_multi_user_enabled
+        try:
+            server.is_multi_user_enabled = lambda: True
+            captured: dict = {}
+
+            def fake_resolve(headers, *, allow_cookie=True):
+                captured['allow_cookie'] = allow_cookie
+                return paths.DEFAULT_USER_ID
+
+            original_resolve = server.resolve_user_from_request
+            server.resolve_user_from_request = fake_resolve
+            try:
+                _, token, ok = server.begin_request_user_context('/api/state', 'GET', {'Cookie': 'session_token=abc'})
+                self.assertTrue(ok)
+                if token is not None:
+                    paths.reset_active_user_id(token)
+            finally:
+                server.resolve_user_from_request = original_resolve
+            self.assertTrue(captured['allow_cookie'])
+        finally:
+            server.is_multi_user_enabled = original_is_multi_user_enabled
+
+    def test_session_locks_release_when_no_caller_holds_them(self):
+        # M2: SESSION_LOCKS is a WeakValueDictionary; once no caller holds the
+        # lock, the entry is GC-eligible. Otherwise the dict would grow once
+        # per session_id seen for the lifetime of the process.
+        import gc as _gc
+        handler = make_get_handler('/api/state')
+        lock = handler._session_lock('session-weakref-test')
+        with lock:
+            pass
+        del lock
+        _gc.collect()
+        # The exact key encoding depends on the resolver, so verify by total
+        # active count: no entries should reference the test session.
+        for key in list(server.SESSION_LOCKS.keys()):
+            self.assertNotIn('session-weakref-test', key)
+
+    def test_session_quota_enforced_for_ordinary_multi_user_user(self):
+        # M4: ordinary users in multi-user mode are bounded; default-user is
+        # exempt; single-user mode has no quota.
+        original_max = session_lifecycle.MAX_SESSIONS_PER_CHARACTER_FOR_USER
+        original_runtime_root = paths.RUNTIME_DATA_ROOT
+        original_is_multi_user_enabled = session_lifecycle.is_multi_user_enabled
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir) / 'runtime-data'
+            try:
+                session_lifecycle.MAX_SESSIONS_PER_CHARACTER_FOR_USER = 2
+                paths.RUNTIME_DATA_ROOT = temp_root
+                session_lifecycle.is_multi_user_enabled = lambda: True
+                sessions_root = paths.character_sessions_root(character_id='char-a', user_id='user-a')
+                sessions_root.mkdir(parents=True)
+                (sessions_root / 'session-1').mkdir()
+                (sessions_root / 'session-2').mkdir()
+                # archive- folders don't count
+                (sessions_root / 'archive-stale').mkdir()
+
+                token_user = paths.set_active_character_override('char-a')
+                try:
+                    with paths.active_user_context('user-a'):
+                        with self.assertRaises(ValueError):
+                            session_lifecycle._enforce_session_quota()
+                    # default-user is exempt even when multi-user is on.
+                    default_sessions = paths.character_sessions_root(character_id='char-a', user_id=paths.DEFAULT_USER_ID)
+                    default_sessions.mkdir(parents=True)
+                    (default_sessions / 'session-1').mkdir()
+                    (default_sessions / 'session-2').mkdir()
+                    (default_sessions / 'session-3').mkdir()
+                    with paths.active_user_context(paths.DEFAULT_USER_ID):
+                        session_lifecycle._enforce_session_quota()
+                finally:
+                    paths.reset_active_character_override(token_user)
+
+                # single-user mode: no quota at all
+                session_lifecycle.is_multi_user_enabled = lambda: False
+                token_solo = paths.set_active_character_override('char-a')
+                try:
+                    with paths.active_user_context('user-a'):
+                        session_lifecycle._enforce_session_quota()
+                finally:
+                    paths.reset_active_character_override(token_solo)
+            finally:
+                session_lifecycle.MAX_SESSIONS_PER_CHARACTER_FOR_USER = original_max
+                session_lifecycle.is_multi_user_enabled = original_is_multi_user_enabled
+                paths.RUNTIME_DATA_ROOT = original_runtime_root
+
+    def test_character_card_quota_enforced_for_ordinary_multi_user_user(self):
+        # M4: a non-default-user under multi-user mode cannot import beyond the
+        # cap; default-user and single-user mode bypass.
+        original_max = character_manager.MAX_CHARACTER_CARDS_FOR_USER
+        original_runtime_root = paths.RUNTIME_DATA_ROOT
+        original_is_multi_user_enabled = character_manager.is_multi_user_enabled
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir) / 'runtime-data'
+            try:
+                character_manager.MAX_CHARACTER_CARDS_FOR_USER = 2
+                paths.RUNTIME_DATA_ROOT = temp_root
+                character_manager.is_multi_user_enabled = lambda: True
+                user_a_chars = temp_root / 'user-a' / 'characters'
+                user_a_chars.mkdir(parents=True)
+                (user_a_chars / 'char-1').mkdir()
+                (user_a_chars / 'char-2').mkdir()
+
+                with paths.active_user_context('user-a'):
+                    with self.assertRaises(ValueError):
+                        character_manager._enforce_character_quota()
+
+                # default-user exempt
+                default_chars = temp_root / paths.DEFAULT_USER_ID / 'characters'
+                default_chars.mkdir(parents=True)
+                for n in ('a', 'b', 'c', 'd'):
+                    (default_chars / n).mkdir()
+                with paths.active_user_context(paths.DEFAULT_USER_ID):
+                    character_manager._enforce_character_quota()
+
+                # single-user mode: no quota
+                character_manager.is_multi_user_enabled = lambda: False
+                with paths.active_user_context('user-a'):
+                    character_manager._enforce_character_quota()
+            finally:
+                character_manager.MAX_CHARACTER_CARDS_FOR_USER = original_max
+                character_manager.is_multi_user_enabled = original_is_multi_user_enabled
                 paths.RUNTIME_DATA_ROOT = original_runtime_root
 
 

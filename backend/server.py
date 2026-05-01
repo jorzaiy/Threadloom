@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import sys
+import weakref
 from base64 import b64decode
 from contextvars import Token
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,7 +46,11 @@ PORT = 8765
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 MAX_CHAT_IMPORT_BYTES = 16 * 1024 * 1024
-SESSION_LOCKS: dict[str, threading.Lock] = {}
+# WeakValueDictionary so a session_id's lock disappears once no caller holds
+# it, instead of accumulating one entry per session_id ever seen for the
+# lifetime of the process. Concurrent callers naturally pin the same lock
+# alive while the ``with`` block is active.
+SESSION_LOCKS: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
 SESSION_LOCKS_GUARD = threading.Lock()
 
 
@@ -89,7 +94,11 @@ def _public_paths_for_method(method: str) -> set[str]:
 
 def begin_request_user_context(path: str, method: str, headers: dict[str, str]) -> tuple[str | None, Token[str] | None, bool]:
     public_paths = _public_paths_for_method(method)
-    uid = resolve_user_from_request(headers)
+    # State-changing requests refuse Cookie auth so a browser-issued cross-site
+    # POST cannot ride a session_token cookie. Bearer header is required for
+    # POST/DELETE/PUT regardless of how the frontend stores the token.
+    allow_cookie = method == 'GET'
+    uid = resolve_user_from_request(headers, allow_cookie=allow_cookie)
     if is_multi_user_enabled() and uid is None and path not in public_paths:
         return None, None, False
     token = set_active_user_id(uid or DEFAULT_USER_ID)
@@ -304,14 +313,13 @@ class Handler(BaseHTTPRequestHandler):
             return lock
 
     def _extract_token(self) -> str:
+        # Bearer-only: admin auth paths must not honour browser-issued cookies
+        # because admin actions are state-changing and CSRF-relevant. Cookie
+        # auth remains available for ordinary GET requests via
+        # ``begin_request_user_context``'s allow_cookie branch.
         auth = self.headers.get('Authorization', '')
         if auth.startswith('Bearer '):
             return auth[7:]
-        cookie = self.headers.get('Cookie', '')
-        for part in cookie.split(';'):
-            part = part.strip()
-            if part.startswith('session_token='):
-                return part[len('session_token='):]
         return ''
 
     def _authenticated_admin_user(self) -> str | None:

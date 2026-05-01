@@ -14,11 +14,16 @@ from card_importer import extract_card_json, import_card_to_target, load_raw_car
 from lorebook_distiller import rebuild_lorebook_distillation
 from name_sanitizer import invalidate_protagonist_names_cache
 from player_profile import build_player_profile_override_draft, load_base_player_profile
-from paths import APP_ROOT, active_character_id, active_user_id, active_user_label, character_root, normalize_session_id, read_json_file, slugify, user_root
+from paths import APP_ROOT, DEFAULT_USER_ID, active_character_id, active_user_id, active_user_label, character_root, normalize_session_id, read_json_file, slugify, user_root
 from runtime_store import invalidate_history_cache
+from user_manager import is_multi_user_enabled
 
 
 MAX_CHARACTER_IMPORT_BYTES = 16 * 1024 * 1024
+# Multi-user resource ceiling. Default-user (admin) imports as many cards as
+# they like; ordinary users are capped so a single account cannot exhaust disk
+# by spamming card imports.
+MAX_CHARACTER_CARDS_FOR_USER = 10
 CHARACTER_IMPORT_LOCK = threading.RLock()
 
 
@@ -161,8 +166,24 @@ def rebuild_character_lorebook(character_id: str) -> dict:
     }
 
 
+def _enforce_character_quota() -> None:
+    if not is_multi_user_enabled():
+        return
+    if active_user_id() == DEFAULT_USER_ID:
+        return
+    root = current_user_character_root()
+    if not root.exists():
+        return
+    count = sum(1 for entry in root.iterdir() if entry.is_dir())
+    if count >= MAX_CHARACTER_CARDS_FOR_USER:
+        raise ValueError(
+            f'character card quota exhausted: at most {MAX_CHARACTER_CARDS_FOR_USER} cards per user'
+        )
+
+
 def import_character_card_upload(filename: str, file_bytes: bytes, *, target_name: str = '', set_active: bool = True) -> dict:
     with CHARACTER_IMPORT_LOCK:
+        _enforce_character_quota()
         return _import_character_card_upload(filename, file_bytes, target_name=target_name, set_active=set_active)
 
 

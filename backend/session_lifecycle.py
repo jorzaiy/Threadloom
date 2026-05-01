@@ -11,16 +11,44 @@ from pathlib import Path
 try:
     from .bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from .opening import build_opening_reply, initialize_opening_state
-    from .paths import current_session_owner_context, iter_session_dirs, normalize_session_id, resolve_session_dir
+    from .paths import DEFAULT_USER_ID, active_user_id, current_session_owner_context, current_sessions_root, iter_session_dirs, normalize_session_id, resolve_session_dir
     from .runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, session_paths
+    from .user_manager import is_multi_user_enabled
 except ImportError:
     from bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from opening import build_opening_reply, initialize_opening_state
-    from paths import current_session_owner_context, iter_session_dirs, normalize_session_id, resolve_session_dir
+    from paths import DEFAULT_USER_ID, active_user_id, current_session_owner_context, current_sessions_root, iter_session_dirs, normalize_session_id, resolve_session_dir
     from runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, session_paths
+    from user_manager import is_multi_user_enabled
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# Multi-user resource ceilings. Default-user (admin) is exempt; ordinary users
+# are bounded so a single account cannot exhaust disk/memory by spawning an
+# unbounded number of game sessions per character.
+MAX_SESSIONS_PER_CHARACTER_FOR_USER = 50
+
+
+def _enforce_session_quota() -> None:
+    if not is_multi_user_enabled():
+        return
+    if active_user_id() == DEFAULT_USER_ID:
+        return
+    root = current_sessions_root()
+    if not root.exists():
+        return
+    count = 0
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith('archive-'):
+            continue
+        count += 1
+        if count >= MAX_SESSIONS_PER_CHARACTER_FOR_USER:
+            raise ValueError(
+                f'session quota exhausted: at most {MAX_SESSIONS_PER_CHARACTER_FOR_USER} sessions per character'
+            )
 
 
 def _character_session_prefix() -> str:
@@ -89,6 +117,7 @@ def _session_last_message_ts(session_dir: Path) -> int:
 
 def start_new_game(session_id: str) -> dict:
     session_id = normalize_session_id(session_id)
+    _enforce_session_quota()
     new_session_id = _new_session_id(session_id)
     ensure_session_dirs(new_session_id)
 

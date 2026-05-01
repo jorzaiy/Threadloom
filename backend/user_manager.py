@@ -262,6 +262,8 @@ def reset_user_password(user_id: str, password: str) -> None:
         if uid not in users:
             raise ValueError(f'用户 "{uid}" 不存在')
         users[uid]['password_hash'] = _hash_password(pwd)
+        users[uid]['failed_logins'] = 0
+        users[uid]['lockout_until'] = 0
         _save_users(users)
         sessions = _load_sessions()
         sessions = {k: v for k, v in sessions.items() if v.get('user_id') != uid}
@@ -275,6 +277,8 @@ def set_admin_password(password: str) -> None:
         ensure_admin_exists()
         users = _load_users()
         users[DEFAULT_USER_ID]['password_hash'] = _hash_password(pwd)
+        users[DEFAULT_USER_ID]['failed_logins'] = 0
+        users[DEFAULT_USER_ID]['lockout_until'] = 0
         _save_users(users)
         sessions = _load_sessions()
         sessions = {k: v for k, v in sessions.items() if v.get('user_id') != DEFAULT_USER_ID}
@@ -378,11 +382,15 @@ def validate_token(token: str) -> str | None:
         return entry['user_id']
 
 
-def resolve_user_from_request(headers: dict) -> str | None:
+def resolve_user_from_request(headers: dict, *, allow_cookie: bool = True) -> str | None:
     """从请求头提取当前用户。
 
     - 多用户关闭时：返回 default-user（单用户产品面兼容）
     - 多用户开启时：仅在令牌有效时返回对应 user_id；否则返回 None
+
+    ``allow_cookie`` 默认 True 仅供 GET / EventSource 等无法定制 header 的场景；
+    state-changing 请求 (POST/DELETE/PUT) 应传 ``allow_cookie=False``，强制
+    Bearer 头，以避免浏览器自动附 Cookie 触发 CSRF。
     """
     if not is_multi_user_enabled():
         return DEFAULT_USER_ID
@@ -390,7 +398,7 @@ def resolve_user_from_request(headers: dict) -> str | None:
     auth = headers.get('Authorization', headers.get('authorization', ''))
     if auth.startswith('Bearer '):
         token = auth[7:]
-    if not token:
+    if not token and allow_cookie:
         cookie = headers.get('Cookie', headers.get('cookie', ''))
         for part in cookie.split(';'):
             part = part.strip()
