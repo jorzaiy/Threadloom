@@ -90,20 +90,17 @@ const profileEditorCancelBtn = document.getElementById('profileEditorCancelBtn')
 const profileEditorCloseBtn = document.getElementById('profileEditorCloseBtn');
 const profileEditorNote = document.getElementById('profileEditorNote');
 
-let lastDebug = null;
 let lastCharacterCard = null;
 let shouldStickToBottom = true;
 let pendingUserMessage = null;
 let lastHistoryItems = [];
 let historyHasMore = false;
 let historyNextBefore = null;
-let historyTotalCount = 0;
 let isLoadingEarlierHistory = false;
 let historyRevealAllowed = false;
 let inlineHistoryVisible = false;
 let currentSessionId = '';
 let sessionItems = [];
-let isWaitingForResponse = false;
 let webConfig = {
   default_debug: false,
   history_page_size: 80,
@@ -134,12 +131,12 @@ let modelConfig = {
   },
 };
 let characterItems = [];
-let currentUserId = 'default-user';
 let userProfile = {};
 let userAvatarUrl = null;
 let currentCharacterProfileOverride = {};
 let profileEditorMode = '';
 let presetEditorId = '';
+let _chatImportContentB64 = null;
 
 function hideCharacterProfileDraft() {
   if (charWizardStep3) charWizardStep3.hidden = true;
@@ -220,8 +217,12 @@ function closeSettings() {
 function switchSettingsTab(tabName) {
   const tabBtns = document.querySelectorAll('.settings-tabs .settings-tab-btn');
   const tabPanels = document.querySelectorAll('.settings-tab-panel');
-  tabBtns.forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tabName)));
-  tabPanels.forEach(p => p.dataset.active = String(p.dataset.tabPanel === tabName));
+  tabBtns.forEach((b) => {
+    b.setAttribute('aria-selected', String(b.dataset.tab === tabName));
+  });
+  tabPanels.forEach((p) => {
+    p.dataset.active = String(p.dataset.tabPanel === tabName);
+  });
 }
 
 function toggleSessionDock(forceOpen) {
@@ -300,10 +301,10 @@ function setStatus(text, kind = 'info') {
 function renderCharacterCard(card) {
   const incomingCard = (card && typeof card === 'object') ? card : null;
   if (incomingCard && (incomingCard.name || incomingCard.title || incomingCard.cover_url || incomingCard.subtitle || incomingCard.summary)) {
-    lastCharacterCard = {
-      ...lastCharacterCard,
-      ...incomingCard,
-    };
+    const sameCard = lastCharacterCard
+      && incomingCard.user_id === lastCharacterCard.user_id
+      && incomingCard.character_id === lastCharacterCard.character_id;
+    lastCharacterCard = sameCard ? {...lastCharacterCard, ...incomingCard} : {...incomingCard};
   }
   const effectiveCard = lastCharacterCard || incomingCard;
   const name = effectiveCard?.name || effectiveCard?.title || '未命名角色卡';
@@ -477,6 +478,7 @@ async function apiJson(url, options = {}) {
       throw new Error(data?.error?.message || '认证失败');
     }
     clearAuthToken();
+    clearClientUserState();
     showLoginScreen();
     throw new Error(data?.error?.message || '请先登录');
   }
@@ -1157,8 +1159,11 @@ function renderMessages(items) {
 function renderMarkdown(text) {
   if (typeof marked !== 'undefined') {
     const root = document.createElement('div');
-    root.innerHTML = marked.parse(text, { breaks: true, gfm: true });
-    root.querySelectorAll('script, iframe, object, embed, link, meta, style, form').forEach(node => node.remove());
+    const escaped = String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    root.innerHTML = marked.parse(escaped, { breaks: true, gfm: true });
+    root.querySelectorAll('script, iframe, object, embed, link, meta, style, form').forEach((node) => {
+      node.remove();
+    });
     root.querySelectorAll('*').forEach(node => {
       for (const attr of [...node.attributes]) {
         const name = attr.name.toLowerCase();
@@ -1173,37 +1178,6 @@ function renderMarkdown(text) {
     return root.innerHTML;
   }
   return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function showTypingIndicator() {
-  const article = document.createElement('article');
-  article.className = 'msg assistant msg-typing';
-  const label = document.createElement('div');
-  label.className = 'msg-label';
-  label.textContent = 'World';
-  const body = document.createElement('div');
-  body.className = 'msg-body typing-indicator';
-  body.innerHTML = `
-    <span class="typing-indicator-label">正在思考</span>
-    <span class="typing-dots">
-      <span></span>
-      <span></span>
-      <span></span>
-    </span>
-  `;
-  article.appendChild(label);
-  article.appendChild(body);
-  messagesEl.appendChild(article);
-  if (shouldStickToBottom) {
-    scrollToLatest({ smooth: false });
-  }
-}
-
-function hideTypingIndicator() {
-  const typing = messagesEl.querySelector('.msg-typing');
-  if (typing) {
-    typing.remove();
-  }
 }
 
 function scrollToLatest(options = {}) {
@@ -1529,7 +1503,6 @@ function renderState(state) {
 
 function renderDebug(debug) {
   if (!debugEl) return;
-  lastDebug = debug || null;
   if (regenerateBtn) {
     const isPartial = debug && debug.completion_status === 'partial';
     regenerateBtn.hidden = !isPartial;
@@ -1611,7 +1584,6 @@ async function loadHistory() {
     pendingUserMessage = null;
     historyHasMore = false;
     historyNextBefore = null;
-    historyTotalCount = 0;
     historyRevealAllowed = false;
     renderMessages([]);
     updateHistoryToolbarVisibility();
@@ -1624,7 +1596,6 @@ async function loadHistory() {
   pendingUserMessage = null;
   historyHasMore = Boolean(data.has_more);
   historyNextBefore = data.next_before;
-  historyTotalCount = Number(data.total_count || 0);
   renderCharacterCard(data.character_card || lastCharacterCard);
   updateSessionIndicator();
   renderMessages(data.messages || []);
@@ -1647,7 +1618,6 @@ async function loadEarlierHistory() {
     applyWebConfig(data.web || {});
     historyHasMore = Boolean(data.has_more);
     historyNextBefore = data.next_before;
-    historyTotalCount = Number(data.total_count || 0);
     lastHistoryItems = [...(data.messages || []), ...lastHistoryItems];
     renderMessages(lastHistoryItems);
     requestAnimationFrame(() => {
@@ -1788,12 +1758,7 @@ async function deleteSession(targetSessionId = sessionId()) {
 }
 
 async function loadEntity(entityId) {
-  const res = await fetch(`/api/entity?session_id=${encodeURIComponent(sessionId())}&entity_id=${encodeURIComponent(entityId)}`);
-  const data = await res.json();
-  if (!res.ok) {
-    entityEl.textContent = JSON.stringify(data, null, 2);
-    return;
-  }
+  const data = await apiJson(`/api/entity?session_id=${encodeURIComponent(sessionId())}&entity_id=${encodeURIComponent(entityId)}`);
   entityEl.textContent = JSON.stringify(data.entity || data, null, 2);
 }
 
@@ -1806,7 +1771,6 @@ composer.addEventListener('submit', async (e) => {
   submitButton.disabled = true;
   setStatus('发送中...', 'working');
   pendingUserMessage = text;
-  isWaitingForResponse = true;
   input.value = '';
   shouldStickToBottom = true;
   renderMessages(lastHistoryItems);
@@ -1823,7 +1787,6 @@ composer.addEventListener('submit', async (e) => {
       })
     });
     pendingUserMessage = null;
-    isWaitingForResponse = false;
     shouldStickToBottom = true;
     await loadHistory();
     renderState(data.state_snapshot || {});
@@ -1836,7 +1799,6 @@ composer.addEventListener('submit', async (e) => {
     setStatus('已更新', 'ok');
   } catch (err) {
     pendingUserMessage = null;
-    isWaitingForResponse = false;
     input.value = originalText;
     renderMessages(lastHistoryItems);
     setStatus(`错误：${err.message}`, 'error');
@@ -1934,8 +1896,12 @@ settingsBackdrop?.addEventListener('click', closeSettings);
   tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const target = btn.dataset.tab;
-      tabBtns.forEach(b => b.setAttribute('aria-selected', 'false'));
-      tabPanels.forEach(p => p.dataset.active = 'false');
+      tabBtns.forEach((b) => {
+        b.setAttribute('aria-selected', 'false');
+      });
+      tabPanels.forEach((p) => {
+        p.dataset.active = 'false';
+      });
       btn.setAttribute('aria-selected', 'true');
       const panel = document.querySelector(`.settings-tab-panel[data-tab-panel="${target}"]`);
       if (panel) panel.dataset.active = 'true';
@@ -2212,7 +2178,6 @@ skipCharacterProfileDraftBtn?.addEventListener('click', () => {
 });
 
 /* --- 聊天记录导入 --- */
-let _chatImportContentB64 = null;
 
 chatWizardStartBtn?.addEventListener('click', () => {
   if (chatWizardStep1) chatWizardStep1.hidden = true;
@@ -2251,7 +2216,7 @@ chatImportPreviewBtn?.addEventListener('click', async () => {
       const _ic = document.createElement('b'); _ic.textContent = resp.inferred_character || '未知';
       const _ec = document.createElement('b'); _ec.textContent = resp.expected_character || '当前角色';
       p.append('角色名：', _ic, ' | 期望：', _ec,
-        ` | 消息：${resp.message_count || 0} 条` + (ok ? ' ✓ 匹配' : ' ⚠ 不匹配（名称不一致）'));
+        ` | 消息：${resp.message_count || 0} 条${ok ? ' ✓ 匹配' : ' ⚠ 不匹配（名称不一致）'}`);
     }
     chatImportBtn.disabled = !resp.match;
     if (chatWizardStep2) chatWizardStep2.hidden = true;
@@ -2321,14 +2286,12 @@ async function checkAuth() {
     authState.role = data.role || 'admin';
     authState.multiUserEnabled = !!data.multi_user_enabled;
     authState.adminHasPassword = !!data.admin_has_password;
-    currentUserId = authState.userId;
     return data;
   } catch (_err) {
     authState.userId = '';
     authState.role = 'admin';
     authState.multiUserEnabled = false;
     authState.adminHasPassword = false;
-    currentUserId = 'default-user';
     return null;
   }
 }
@@ -2336,7 +2299,7 @@ async function checkAuth() {
 (async function init() {
   setStatus('初始化中...', 'working');
   try {
-    const me = await checkAuth();
+    await checkAuth();
     // multi-user enabled but unauthenticated → defer the rest of the boot to
     // the login flow; runMainBoot() picks up after a successful login.
     if (authState.multiUserEnabled && !authState.userId) {
@@ -2358,7 +2321,7 @@ async function runMainBoot() {
   if (!authState.multiUserEnabled) {
     if (getAuthToken()) clearAuthToken();
   }
-  hideLoginScreen();
+  clearClientUserState();
   applyRoleBasedUI();
   setStatus('初始化中...', 'working');
   try {
@@ -2372,6 +2335,7 @@ async function runMainBoot() {
     ]);
     await loadHistory();
     await loadState();
+    hideLoginScreen();
     closeSettings();
     toggleSessionDock(false);
     jumpToConversationEnd();
@@ -2391,7 +2355,7 @@ async function runMainBoot() {
     }
   } catch (err) {
     console.error('boot failed', err);
-    setStatus('载入失败：' + (err?.message || err), 'error');
+    setStatus(`载入失败：${err?.message || err}`, 'error');
   }
 }
 
@@ -2418,6 +2382,46 @@ function clearAuthToken() {
   try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (_e) {}
 }
 
+function clearClientUserState() {
+  pendingUserMessage = null;
+  lastHistoryItems = [];
+  historyHasMore = false;
+  historyNextBefore = null;
+  historyTotalCount = 0;
+  isLoadingEarlierHistory = false;
+  historyRevealAllowed = false;
+  inlineHistoryVisible = false;
+  currentSessionId = '';
+  sessionItems = [];
+  isWaitingForResponse = false;
+  coverLoadToken += 1;
+  lastCharacterCard = null;
+  lastCharacterCoverUrl = null;
+  characterItems = [];
+  userProfile = {};
+  userAvatarUrl = null;
+  currentCharacterProfileOverride = {};
+  profileEditorMode = '';
+  presetEditorId = '';
+  _chatImportContentB64 = null;
+  if (messagesEl) messagesEl.innerHTML = '';
+  resetSidePanels();
+  renderState({});
+  updateSessionIndicator();
+  if (profileEditorInput) profileEditorInput.value = '';
+  if (profileEditorNote) profileEditorNote.textContent = '';
+  closeProfileEditor();
+  if (chatImportPreview) {
+    chatImportPreview.textContent = '';
+    chatImportPreview.hidden = true;
+  }
+  if (chatImportBtn) chatImportBtn.disabled = true;
+  if (chatImportFileInput) chatImportFileInput.value = '';
+  if (characterImportFileInput) characterImportFileInput.value = '';
+  if (characterImportNameInput) characterImportNameInput.value = '';
+  if (loginErrorEl) loginErrorEl.textContent = '';
+}
+
 const loginScreenEl = document.getElementById('loginScreen');
 const appShellEl = document.getElementById('appShell');
 const loginFormEl = document.getElementById('loginForm');
@@ -2429,6 +2433,7 @@ const authIndicatorLabelEl = document.getElementById('authIndicatorLabel');
 const logoutBtnEl = document.getElementById('logoutBtn');
 
 function showLoginScreen() {
+  clearClientUserState();
   if (loginScreenEl) loginScreenEl.hidden = false;
   if (appShellEl) appShellEl.hidden = true;
   if (loginUserIdEl) loginUserIdEl.value = '';
@@ -2505,6 +2510,7 @@ if (logoutBtnEl) {
   logoutBtnEl.addEventListener('click', async () => {
     try { await apiJson('/api/auth/logout', { method: 'POST', body: '{}' }); } catch (_e) {}
     clearAuthToken();
+    clearClientUserState();
     showLoginScreen();
   });
 }
@@ -2677,7 +2683,7 @@ async function enableMultiUserWizard() {
         body: JSON.stringify({ action: 'set_admin_password', password }),
       });
     } catch (err) {
-      if (multiUserNoteEl) multiUserNoteEl.textContent = '设置密码失败：' + err.message;
+      if (multiUserNoteEl) multiUserNoteEl.textContent = `设置密码失败：${err.message}`;
       return;
     }
     // Refresh authState so a follow-up retry in the same session knows the
@@ -2705,17 +2711,17 @@ async function enableMultiUserWizard() {
       // previous one.
       setAuthToken(data.token);
     } catch (err) {
-      if (multiUserNoteEl) multiUserNoteEl.textContent = '密码错误：' + err.message;
+      if (multiUserNoteEl) multiUserNoteEl.textContent = `密码错误：${err.message}`;
       return;
     }
   }
   try {
     await apiJson('/api/multi-user', {
       method: 'POST',
-      body: JSON.stringify({ enabled: true }),
+      body: JSON.stringify({ enabled: true, password }),
     });
   } catch (err) {
-    if (multiUserNoteEl) multiUserNoteEl.textContent = '启用失败：' + err.message;
+    if (multiUserNoteEl) multiUserNoteEl.textContent = `启用失败：${err.message}`;
     return;
   }
   // 后端清空所有 sessions 包含当前 admin token；用刚输入的密码静默重登。
@@ -2746,16 +2752,16 @@ async function disableMultiUserWizard() {
     });
     setAuthToken(data.token);
   } catch (err) {
-    if (multiUserNoteEl) multiUserNoteEl.textContent = '密码错误：' + err.message;
+    if (multiUserNoteEl) multiUserNoteEl.textContent = `密码错误：${err.message}`;
     return;
   }
   try {
     await apiJson('/api/multi-user', {
       method: 'POST',
-      body: JSON.stringify({ enabled: false }),
+      body: JSON.stringify({ enabled: false, password }),
     });
   } catch (err) {
-    if (multiUserNoteEl) multiUserNoteEl.textContent = '关闭失败：' + err.message;
+    if (multiUserNoteEl) multiUserNoteEl.textContent = `关闭失败：${err.message}`;
     return;
   }
   // sessions 已被清空；single-user mode 下 admin 仍有密码 → silent re-login 仍走密码校验。
@@ -2798,9 +2804,8 @@ async function loadUsersList() {
       const created = user.created_at ? new Date(user.created_at * 1000).toLocaleString('zh-CN') : '';
       const isAdminRow = user.user_id === 'default-user';
       const actions = isAdminRow
-        ? '<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="' + user.user_id + '">重置密码</button>'
-        : '<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="' + user.user_id + '">重置密码</button>'
-          + '<button type="button" class="subtle-danger" data-user-action="delete" data-user-id="' + user.user_id + '">删除</button>';
+        ? `<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="${user.user_id}">重置密码</button>`
+        : `<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="${user.user_id}">重置密码</button><button type="button" class="subtle-danger" data-user-action="delete" data-user-id="${user.user_id}">删除</button>`;
       return `
         <div class="user-list-row">
           <div class="user-meta">
@@ -2814,7 +2819,7 @@ async function loadUsersList() {
     }).join('');
     if (userManagementNoteEl) userManagementNoteEl.textContent = '';
   } catch (err) {
-    if (userManagementNoteEl) userManagementNoteEl.textContent = '加载失败：' + err.message;
+    if (userManagementNoteEl) userManagementNoteEl.textContent = `加载失败：${err.message}`;
   }
 }
 
@@ -2834,7 +2839,14 @@ if (userListContainerEl) {
           body: JSON.stringify({ action: 'delete', user_id: userId }),
         });
       } else if (action === 'reset') {
-        const password = window.prompt(`为用户 "${userId}" 设置新密码（至少 12 位）`);
+        const password = await showPasswordPrompt({
+          title: `重置 ${userId} 的密码`,
+          hint: '请输入至少 12 位的新密码。',
+          label1: '新密码',
+          label2: '确认新密码',
+          requireConfirm: true,
+          minLength: 12,
+        });
         if (!password) return;
         if (password.length < 12) {
           if (userManagementNoteEl) userManagementNoteEl.textContent = '密码至少需要 12 位';
@@ -2863,7 +2875,14 @@ if (createUserBtnEl) {
   createUserBtnEl.addEventListener('click', async () => {
     const userId = window.prompt('新用户名（字母/数字/下划线/短横线，1-64 位）');
     if (!userId) return;
-    const password = window.prompt('为新用户设置初始密码（至少 12 位）');
+    const password = await showPasswordPrompt({
+      title: `为 ${userId} 设置初始密码`,
+      hint: '请输入至少 12 位的初始密码。',
+      label1: '初始密码',
+      label2: '确认密码',
+      requireConfirm: true,
+      minLength: 12,
+    });
     if (!password) return;
     if (password.length < 12) {
       if (userManagementNoteEl) userManagementNoteEl.textContent = '密码至少需要 12 位';
