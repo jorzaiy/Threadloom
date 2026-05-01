@@ -63,6 +63,20 @@
             <div class="composer-footer">
               <div class="composer-status-row">
                 <div id="statusBar" class="status-bar">就绪</div>
+                <div id="mobileSessionMenu" class="mobile-session-menu">
+                  <button id="mobileSessionToggle" class="mobile-session-toggle" type="button" aria-label="切换会话" aria-haspopup="true" aria-expanded="false" aria-controls="mobileSessionPanel">
+                    <span class="material-symbols-outlined">keyboard_arrow_up</span>
+                  </button>
+                  <div id="mobileSessionPanel" class="mobile-session-panel" role="menu" aria-labelledby="mobileSessionToggle" aria-hidden="true">
+                    <div class="session-dock-heading">
+                      <div>
+                        <span>Session</span>
+                        <small>切换、删除或开始新游戏</small>
+                      </div>
+                    </div>
+                    <div id="mobileSessionList" class="session-dock-list"></div>
+                  </div>
+                </div>
                 <div class="topbar-actions bottom-controls">
                   <button id="debugToggleBtn" class="icon-btn settings-icon-btn" type="button" aria-label="状态面板">
                     <span class="material-symbols-outlined">explore</span>

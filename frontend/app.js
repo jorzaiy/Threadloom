@@ -27,6 +27,10 @@ const characterCoverEl = document.getElementById('characterCover');
 const characterCoverFallbackEl = document.getElementById('characterCoverFallback');
 const sessionDockPanel = document.getElementById('sessionDockPanel');
 const sessionDockList = document.getElementById('sessionDockList');
+const mobileSessionMenu = document.getElementById('mobileSessionMenu');
+const mobileSessionToggle = document.getElementById('mobileSessionToggle');
+const mobileSessionPanel = document.getElementById('mobileSessionPanel');
+const mobileSessionList = document.getElementById('mobileSessionList');
 const historyToolbar = document.getElementById('historyToolbar');
 const loadEarlierBtn = document.getElementById('loadEarlierBtn');
 const saveModelConfigBtn = document.getElementById('saveModelConfigBtn');
@@ -226,8 +230,36 @@ function toggleSessionDock(forceOpen) {
   if (!sessionDockPanel) return;
   const isOpen = sessionDockPanel.getAttribute('aria-hidden') !== 'true';
   const nextOpen = typeof forceOpen === 'boolean' ? forceOpen : !isOpen;
+  if (nextOpen && topbarSessionMenu?.dataset.suppressed === 'true') return;
   sessionDockPanel.setAttribute('aria-hidden', String(!nextOpen));
   topbarContext?.setAttribute('aria-expanded', String(nextOpen));
+}
+
+function toggleMobileSessionDock(forceOpen) {
+  if (!mobileSessionPanel) return;
+  const isOpen = mobileSessionPanel.getAttribute('aria-hidden') !== 'true';
+  const nextOpen = typeof forceOpen === 'boolean' ? forceOpen : !isOpen;
+  mobileSessionPanel.setAttribute('aria-hidden', String(!nextOpen));
+  mobileSessionToggle?.setAttribute('aria-expanded', String(nextOpen));
+}
+
+let sessionDockCloseTimer = null;
+
+function openSessionDock() {
+  if (sessionDockCloseTimer) {
+    clearTimeout(sessionDockCloseTimer);
+    sessionDockCloseTimer = null;
+  }
+  toggleSessionDock(true);
+}
+
+function closeSessionDockSoon() {
+  if (sessionDockCloseTimer) clearTimeout(sessionDockCloseTimer);
+  sessionDockCloseTimer = setTimeout(() => {
+    sessionDockCloseTimer = null;
+    topbarSessionMenu?.removeAttribute('data-suppressed');
+    toggleSessionDock(false);
+  }, 180);
 }
 
 function updateSessionIndicator() {
@@ -508,6 +540,7 @@ async function loadCharacters() {
 
 function renderSessionLists() {
   renderSessionList(sessionDockList, { closeDockOnSelect: false, noteEl: null, activeLimit: 5 });
+  renderSessionList(mobileSessionList, { closeDockOnSelect: true, noteEl: null, activeLimit: 5 });
   renderSessionList(settingsSessionList, { closeDockOnSelect: false, noteEl: settingsSessionNote, activeLimit: 20 });
 }
 
@@ -538,7 +571,10 @@ function renderSessionList(target, { closeDockOnSelect = false, noteEl = null, a
         await loadHistory();
         await loadState();
         renderSessionLists();
-        if (closeDockOnSelect) toggleSessionDock(false);
+        if (closeDockOnSelect) {
+          toggleSessionDock(false);
+          toggleMobileSessionDock(false);
+        }
         if (noteEl) {
           noteEl.textContent = `已切换到：${item.session_id}`;
           noteEl.dataset.kind = 'ok';
@@ -597,7 +633,10 @@ function renderSessionList(target, { closeDockOnSelect = false, noteEl = null, a
     try {
       await startNewGame();
       renderSessionLists();
-      if (closeDockOnSelect) toggleSessionDock(false);
+      if (closeDockOnSelect) {
+        toggleSessionDock(false);
+        toggleMobileSessionDock(false);
+      }
       if (noteEl) {
         noteEl.textContent = '新游戏已开始';
         noteEl.dataset.kind = 'ok';
@@ -1850,13 +1889,55 @@ brandSettingsTrigger?.addEventListener('keydown', (event) => {
   openSettings('connection');
 });
 
-topbarSessionMenu?.addEventListener('mouseenter', () => toggleSessionDock(true));
-topbarSessionMenu?.addEventListener('mouseleave', () => toggleSessionDock(false));
-topbarSessionMenu?.addEventListener('focusin', () => toggleSessionDock(true));
+topbarContext?.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (sessionDockCloseTimer) {
+    clearTimeout(sessionDockCloseTimer);
+    sessionDockCloseTimer = null;
+  }
+  topbarSessionMenu?.setAttribute('data-suppressed', 'true');
+  toggleSessionDock(false);
+  openSettings('world');
+});
+
+topbarContext?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  if (sessionDockCloseTimer) {
+    clearTimeout(sessionDockCloseTimer);
+    sessionDockCloseTimer = null;
+  }
+  topbarSessionMenu?.setAttribute('data-suppressed', 'true');
+  toggleSessionDock(false);
+  openSettings('world');
+});
+
+topbarSessionMenu?.addEventListener('mouseenter', openSessionDock);
+topbarSessionMenu?.addEventListener('mouseleave', closeSessionDockSoon);
+sessionDockPanel?.addEventListener('mouseenter', openSessionDock);
+sessionDockPanel?.addEventListener('mouseleave', closeSessionDockSoon);
+topbarSessionMenu?.addEventListener('focusin', openSessionDock);
 topbarSessionMenu?.addEventListener('focusout', (event) => {
   const nextTarget = event.relatedTarget;
   if (nextTarget instanceof Node && topbarSessionMenu.contains(nextTarget)) return;
   toggleSessionDock(false);
+});
+
+mobileSessionToggle?.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleMobileSessionDock();
+});
+
+mobileSessionMenu?.addEventListener('click', (event) => {
+  event.stopPropagation();
+});
+
+document.addEventListener('click', (event) => {
+  const target = event.target;
+  if (target instanceof Node && mobileSessionMenu?.contains(target)) return;
+  toggleMobileSessionDock(false);
 });
 
 settingsCloseBtn?.addEventListener('click', closeSettings);
@@ -2036,6 +2117,7 @@ document.addEventListener('keydown', (e) => {
     closeSettings();
     closeDebugPanel();
     toggleSessionDock(false);
+    toggleMobileSessionDock(false);
   }
 });
 
