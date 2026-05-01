@@ -1146,6 +1146,72 @@ def _entity_lookup_by_name(entities: list[dict]) -> dict[str, dict]:
     return lookup
 
 
+def _actor_canonical_lookup(actors: dict) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    if not isinstance(actors, dict):
+        return lookup
+    for actor_id, actor in actors.items():
+        if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
+            continue
+        canonical = sanitize_runtime_name(actor.get('name', ''))
+        if not canonical:
+            continue
+        aliases = dedupe_names([canonical] + list(actor.get('aliases', []) or []), limit=12)
+        record = {
+            'actor_id': str(actor_id or actor.get('actor_id', '') or '').strip(),
+            'name': canonical,
+            'aliases': aliases,
+        }
+        for raw_name in aliases:
+            name = sanitize_runtime_name(raw_name)
+            if name and name not in lookup:
+                lookup[name] = record
+    return lookup
+
+
+def _canonicalize_actor_name(name: str, actor_lookup: dict[str, dict[str, Any]]) -> str:
+    clean = sanitize_runtime_name(name)
+    if not clean:
+        return ''
+    record = actor_lookup.get(clean)
+    if not record:
+        return clean
+    return str(record.get('name', '') or clean).strip() or clean
+
+
+def _canonicalize_actor_names(names: list[str], actor_lookup: dict[str, dict[str, Any]], *, limit: int = 6) -> list[str]:
+    out: list[str] = []
+    for name in names or []:
+        canonical = _canonicalize_actor_name(str(name or ''), actor_lookup)
+        if canonical and canonical not in out:
+            out.append(canonical)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _canonicalize_scene_entities_with_actors(entities: list[dict], actor_lookup: dict[str, dict[str, Any]]) -> list[dict]:
+    if not actor_lookup:
+        return entities
+    out: list[dict] = []
+    for item in entities or []:
+        if not isinstance(item, dict):
+            continue
+        current = dict(item)
+        names = [current.get('primary_label', '')] + list(current.get('aliases', []) or [])
+        matched = next((actor_lookup.get(sanitize_runtime_name(name)) for name in names if actor_lookup.get(sanitize_runtime_name(name))), None)
+        if matched:
+            previous_primary = sanitize_runtime_name(current.get('primary_label', ''))
+            canonical = str(matched.get('name', '') or previous_primary).strip()
+            aliases = dedupe_names(list(current.get('aliases', []) or []) + list(matched.get('aliases', []) or []) + [previous_primary, canonical], limit=12)
+            current['primary_label'] = canonical
+            current['aliases'] = [alias for alias in aliases if alias != canonical]
+            if not str(current.get('possible_link', '') or '').strip() and matched.get('actor_id'):
+                current['possible_link'] = matched['actor_id']
+        out.append(current)
+    return out
+
+
 def _apply_object_entity_bindings(state: dict) -> dict:
     entities = [dict(item) for item in (state.get('scene_entities', []) or []) if isinstance(item, dict)]
     objects = [dict(item) for item in (state.get('tracked_objects', []) or []) if isinstance(item, dict)]
@@ -1479,6 +1545,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     prev_actors = prev.get('actors', {}) if isinstance(prev.get('actors', {}), dict) else {}
     current_actors = current.get('actors', {}) if isinstance(current.get('actors', {}), dict) else {}
     current['actors'] = {**current_actors, **prev_actors}
+    actor_canonical_lookup = _actor_canonical_lookup(current['actors'])
     for key in ('actor_context_index',):
         value = current.get(key, prev.get(key, {}))
         if not isinstance(value, dict):
@@ -1553,6 +1620,12 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
 
     if isinstance(current.get('scene_entities', []), list):
         current['scene_entities'] = _filter_scene_entities_with_person_evidence(current.get('scene_entities', []), current, prev)
+        current['scene_entities'] = _canonicalize_scene_entities_with_actors(current['scene_entities'], actor_canonical_lookup)
+
+    if isinstance(current.get('onstage_npcs', []), list):
+        current['onstage_npcs'] = _canonicalize_actor_names(current.get('onstage_npcs', []), actor_canonical_lookup, limit=6)
+    if isinstance(current.get('relevant_npcs', []), list):
+        current['relevant_npcs'] = _canonicalize_actor_names(current.get('relevant_npcs', []), actor_canonical_lookup, limit=6)
 
     entity_onstage_names = _derive_names_from_scene_entities(current.get('scene_entities', []), onstage_only=True)
     if entity_onstage_names:
@@ -1751,6 +1824,9 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             _promote_degraded_candidates(candidate_entities, prev.get('scene_entities', []), prev),
             prev,
         )
+        current['scene_entities'] = _canonicalize_scene_entities_with_actors(current['scene_entities'], actor_canonical_lookup)
+    current['onstage_npcs'] = _canonicalize_actor_names(current.get('onstage_npcs', []), actor_canonical_lookup, limit=6)
+    current['relevant_npcs'] = _canonicalize_actor_names(current.get('relevant_npcs', []), actor_canonical_lookup, limit=6)
 
     current['scene_entities'] = merge_scene_entities(
         prev.get('scene_entities', []),

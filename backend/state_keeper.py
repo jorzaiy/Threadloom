@@ -1101,7 +1101,9 @@ def _looks_like_environment_entity(name: str, role_label: str) -> bool:
     text = f'{name} {role_label}'.strip()
     if not text:
         return True
-    if name in {'姑娘', '陆姑娘', '路上', '猛地', '忍不住', '不知', '轻功', '自保', '一声'}:
+    if name in {'姑娘', '路上', '猛地', '忍不住', '不知', '自保', '一声'}:
+        return True
+    if name.endswith(('功', '术', '法')) and len(name) <= 4 and any(token in role_label for token in ('技能', '能力', '招式', '动作')):
         return True
     env_tokens = get_environment_tokens()
     if env_tokens and any(token in name for token in env_tokens):

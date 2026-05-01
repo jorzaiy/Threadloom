@@ -656,6 +656,52 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['possession_state'][0]['holder'], '林越')
         self.assertEqual(normalized['possession_state'][0]['holder_actor_id'], 'npc_002')
 
+    def test_scene_entities_canonicalize_actor_aliases(self):
+        state: dict[str, Any] = {
+            'actors': {
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '维克托·奥古斯特',
+                    'aliases': ['维克托', '教官'],
+                },
+            },
+            'onstage_npcs': ['维克托'],
+            'scene_entities': [
+                {
+                    'entity_id': 'scene_npc_01',
+                    'primary_label': '维克托',
+                    'aliases': ['维克托'],
+                    'role_label': '当前互动核心人物',
+                    'onstage': True,
+                    'possible_link': None,
+                }
+            ],
+        }
+
+        normalized = normalize_state_dict(state)
+
+        self.assertEqual(normalized['onstage_npcs'], ['维克托·奥古斯特'])
+        self.assertEqual(normalized['scene_entities'][0]['primary_label'], '维克托·奥古斯特')
+        self.assertIn('维克托', normalized['scene_entities'][0]['aliases'])
+        self.assertEqual(normalized['scene_entities'][0]['possible_link'], 'npc_001')
+
+    def test_possession_holder_alias_canonicalizes_to_actor_name(self):
+        state: dict[str, Any] = {
+            'actors': {
+                'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '维克托·奥古斯特', 'aliases': ['维克托']},
+            },
+            'onstage_npcs': ['维克托'],
+            'scene_entities': [{'entity_id': 'scene_npc_01', 'primary_label': '维克托', 'aliases': ['维克托'], 'onstage': True}],
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '手枪', 'kind': 'weapon'}],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '维克托', 'status': 'holding'}],
+        }
+
+        normalized = normalize_state_dict(state)
+
+        self.assertEqual(normalized['possession_state'][0]['holder'], '维克托·奥古斯特')
+        self.assertEqual(normalized['possession_state'][0]['holder_actor_id'], 'npc_001')
+
     def test_possession_invalid_holder_does_not_override_old_holder(self):
         prev: dict[str, Any] = {
             'actors': {'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '顾青衣', 'aliases': []}},
@@ -774,6 +820,12 @@ class StateFragmentTest(unittest.TestCase):
         # Clues from baseline must persist when not contradicted by signals.
         self.assertIn('纸封未拆', merged['carryover_clues'])
         self.assertIn('账册中夹有暗号', merged['carryover_clues'])
+
+    def test_state_keeper_environment_filter_is_not_card_name_specific(self):
+        from backend.state_keeper import _looks_like_environment_entity
+
+        self.assertFalse(_looks_like_environment_entity('陆姑娘', '当前场景人物'))
+        self.assertTrue(_looks_like_environment_entity('轻功', '技能'))
 
     def test_extract_reply_skeleton_skips_main_event_without_terminal_punctuation(self):
         # P3.8 regression: previously the first paragraph was sliced to 100 chars

@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'backend'))
 
 import keeper_archive
 import keeper_record_retriever
-from mid_context_agent import build_mid_window_digest
+from mid_context_agent import build_mid_window_digest, _is_mid_context_object_relevant
 
 
 def _history(pair_count: int) -> list[dict]:
@@ -62,6 +62,30 @@ class KeeperArchiveWindowTests(unittest.TestCase):
         self.assertEqual(record['window']['to_turn'], 'turn-0010')
         self.assertEqual(record['window']['end_pair_index'], 10)
         self.assertIn('第10轮', record['history_digest'][-1]['user'])
+
+    def test_mid_digest_object_filter_is_salience_based_not_label_based(self):
+        self.assertTrue(_is_mid_context_object_relevant({'label': '包', 'kind': 'container', 'story_relevant': True}))
+        self.assertTrue(_is_mid_context_object_relevant({'label': '铜板', 'kind': 'currency', 'story_relevant': True}))
+        self.assertFalse(_is_mid_context_object_relevant({'label': '零钱', 'kind': 'currency'}))
+
+        digest = build_mid_window_digest(
+            history=_history(5),
+            hard_anchors={
+                'tracked_objects': [
+                    {'label': '包', 'kind': 'container', 'story_relevant': True},
+                    {'label': '零钱', 'kind': 'currency'},
+                    {'label': '铜牌', 'kind': 'key_item'},
+                ],
+            },
+            max_pairs=5,
+            use_llm=False,
+            exclude_recent_pairs=0,
+        )
+
+        labels = [item['label'] for item in digest['tracked_objects']]
+        self.assertIn('包', labels)
+        self.assertIn('铜牌', labels)
+        self.assertNotIn('零钱', labels)
 
     def test_keeper_archive_ignores_partial_assistant_pairs(self):
         with patch.object(keeper_archive, 'load_history', return_value=_history_with_partial()), \

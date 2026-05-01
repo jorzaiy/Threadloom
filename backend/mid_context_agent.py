@@ -110,7 +110,7 @@ def _heuristic_digest(mid_pairs: list[tuple[dict, dict]], hard_anchors: dict, fr
                 'kind': str(item.get('kind', '') or 'item').strip() or 'item',
             }
             for item in (hard.get('tracked_objects', []) or [])[:3]
-            if isinstance(item, dict) and item.get('label') and str(item.get('label', '') or '').strip() not in {'包', '铜板'}
+            if _is_mid_context_object_relevant(item)
         ],
         'open_loops': _dedupe(loops, limit=4),
         'history_digest': [
@@ -121,6 +121,24 @@ def _heuristic_digest(mid_pairs: list[tuple[dict, dict]], hard_anchors: dict, fr
             for user_item, assistant_item in mid_pairs[-3:]
         ],
     }
+
+
+def _is_mid_context_object_relevant(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return False
+    label = str(item.get('label', '') or '').strip()
+    if not label:
+        return False
+    if item.get('story_relevant') is True:
+        return True
+    kind = str(item.get('kind', '') or 'item').strip().lower()
+    if kind in {'currency', 'money'}:
+        return False
+    if item.get('story_relevant') is False and kind in {'', 'item', 'misc', 'unknown'}:
+        return False
+    if len(label) <= 1 and kind in {'', 'item', 'misc', 'unknown'}:
+        return False
+    return True
 
 
 def _score_events(mid_pairs: list[tuple[dict, dict]]) -> list[str]:
