@@ -490,6 +490,9 @@ class MultiUserFoundationTests(unittest.TestCase):
                 paths.RUNTIME_DATA_ROOT = original_runtime_root
 
     def test_site_config_updates_use_active_user_path(self):
+        # New global contract: only default-user (admin) may update_site_config.
+        # The write always lands in default-user/config/site.json regardless of
+        # who is calling; ordinary users hit a permission error.
         with tempfile.TemporaryDirectory() as temp_dir:
             original_runtime_root = paths.RUNTIME_DATA_ROOT
             original_user_manager_root = user_manager.RUNTIME_DATA_ROOT
@@ -503,18 +506,29 @@ class MultiUserFoundationTests(unittest.TestCase):
                 default_site.write_text(json.dumps({'multi_user_enabled': True}), encoding='utf-8')
                 self.assertTrue(user_manager.is_multi_user_enabled())
 
+                # Ordinary users are rejected.
                 with paths.active_user_context('user-a'):
+                    with self.assertRaises(model_config.SiteConfigPermissionError):
+                        model_config.update_site_config({
+                            'baseUrl': 'https://example.com',
+                            'api': 'openai-completions',
+                            'replace_api_key': True,
+                            'apiKey': 'direct-key',
+                        })
+
+                # Admin write lands in the global file, not under another user.
+                with paths.active_user_context(paths.DEFAULT_USER_ID):
                     model_config.update_site_config({
                         'baseUrl': 'https://example.com',
                         'api': 'openai-completions',
                         'replace_api_key': True,
                         'apiKey': 'direct-key',
                     })
-
-                self.assertTrue(user_site.exists())
+                self.assertFalse(user_site.exists())
                 saved_default = json.loads(default_site.read_text(encoding='utf-8'))
                 self.assertTrue(saved_default['multi_user_enabled'])
-                self.assertNotIn('site', saved_default)
+                self.assertEqual(saved_default['site']['baseUrl'], 'https://example.com')
+                self.assertEqual(saved_default['site']['apiKey'], 'direct-key')
             finally:
                 paths.RUNTIME_DATA_ROOT = original_runtime_root
                 user_manager.RUNTIME_DATA_ROOT = original_user_manager_root
@@ -544,10 +558,12 @@ class MultiUserFoundationTests(unittest.TestCase):
                 with paths.active_user_context('user-a'):
                     store = model_config.load_site_store()
 
+                # Ordinary users see the same admin-owned site config; the env-
+                # reference apiKey is sanitized to empty for them. They never
+                # write their own site.json under the new global contract.
                 self.assertEqual(store['site']['apiKey'], '')
                 user_site = runtime_root / 'user-a' / 'config' / 'site.json'
-                saved = json.loads(user_site.read_text(encoding='utf-8'))
-                self.assertEqual(saved['site']['apiKey'], '')
+                self.assertFalse(user_site.exists())
             finally:
                 paths.RUNTIME_DATA_ROOT = original_paths_root
                 user_manager.RUNTIME_DATA_ROOT = original_user_manager_root
@@ -1125,6 +1141,120 @@ class MultiUserFoundationTests(unittest.TestCase):
                 session_lifecycle.MAX_SESSIONS_PER_CHARACTER_FOR_USER = original_max
                 session_lifecycle.is_multi_user_enabled = original_is_multi_user_enabled
                 paths.RUNTIME_DATA_ROOT = original_runtime_root
+
+    def test_change_own_password_keeps_current_token_revokes_others(self):
+        # Q3: self-service change-password keeps the current Bearer alive but
+        # revokes any other token belonging to the same user, so an old device
+        # cannot continue acting under the previous credentials.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_paths_root = paths.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                paths.RUNTIME_DATA_ROOT = temp_root
+
+                user_manager.create_user('user-a', 'secure-password-123')
+                token_kept = user_manager.login('user-a', 'secure-password-123')
+                token_other = user_manager.login('user-a', 'secure-password-123')
+                self.assertEqual(user_manager.validate_token(token_kept), 'user-a')
+                self.assertEqual(user_manager.validate_token(token_other), 'user-a')
+
+                user_manager.change_own_password(
+                    'user-a',
+                    'secure-password-123',
+                    'secure-password-456',
+                    keep_token=token_kept,
+                )
+
+                self.assertEqual(user_manager.validate_token(token_kept), 'user-a')
+                self.assertIsNone(user_manager.validate_token(token_other))
+                with self.assertRaises(ValueError):
+                    user_manager.login('user-a', 'secure-password-123')
+                user_manager.login('user-a', 'secure-password-456')
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+                paths.RUNTIME_DATA_ROOT = original_paths_root
+
+    def test_change_own_password_unknown_user_runs_dummy_bcrypt(self):
+        called_with: list[str] = []
+        original_verify = getattr(user_manager, '_verify_password')
+
+        def fake_verify(password: str, hashed: str) -> bool:
+            called_with.append(hashed)
+            return original_verify(password, hashed)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                setattr(user_manager, '_verify_password', fake_verify)
+                with self.assertRaises(ValueError):
+                    user_manager.change_own_password('ghost-user', 'whatever', 'secure-password-123')
+                self.assertIn(user_manager._DUMMY_PASSWORD_HASH, called_with)
+            finally:
+                setattr(user_manager, '_verify_password', original_verify)
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+
+    def test_auth_me_returns_role_for_admin_and_user(self):
+        # B3: /api/auth/me must signal which role is logged in so the frontend
+        # can branch the settings panel.
+        original_is_multi_user_enabled = server.is_multi_user_enabled
+        original_resolve = server.resolve_user_from_request
+        original_admin_has_password = server.admin_has_password
+        try:
+            server.is_multi_user_enabled = lambda: True
+            server.admin_has_password = lambda: True
+
+            server.resolve_user_from_request = lambda headers, **kwargs: paths.DEFAULT_USER_ID
+            handler = make_get_handler('/api/auth/me')
+            server.Handler.do_GET(handler)
+            sent = handler.sent
+            self.assertIsNotNone(sent)
+            assert sent is not None
+            self.assertEqual(sent[0], 200)
+            self.assertEqual(sent[1]['role'], 'admin')
+            self.assertEqual(sent[1]['user_id'], paths.DEFAULT_USER_ID)
+            self.assertTrue(sent[1]['multi_user_enabled'])
+            self.assertTrue(sent[1]['admin_has_password'])
+
+            server.resolve_user_from_request = lambda headers, **kwargs: 'user-a'
+            handler = make_get_handler('/api/auth/me')
+            server.Handler.do_GET(handler)
+            sent = handler.sent
+            assert sent is not None
+            self.assertEqual(sent[0], 200)
+            self.assertEqual(sent[1]['role'], 'user')
+        finally:
+            server.is_multi_user_enabled = original_is_multi_user_enabled
+            server.resolve_user_from_request = original_resolve
+            server.admin_has_password = original_admin_has_password
+
+    def test_provider_and_site_config_write_rejected_for_ordinary_user(self):
+        # B1/Q2: provider + site config follow the same admin-only contract.
+        with paths.active_user_context('user-a'):
+            with self.assertRaises(model_config.SiteConfigPermissionError):
+                model_config.upsert_provider_config({
+                    'baseUrl': 'https://example.com',
+                    'api': 'openai-completions',
+                    'replace_api_key': True,
+                    'apiKey': '',
+                })
+            with self.assertRaises(model_config.SiteConfigPermissionError):
+                model_config.discover_site_models()
 
     def test_character_card_quota_enforced_for_ordinary_multi_user_user(self):
         # M4: a non-default-user under multi-user mode cannot import beyond the

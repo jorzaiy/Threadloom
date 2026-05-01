@@ -10,9 +10,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 
 try:
+    from . import paths as _paths
     from .paths import APP_ROOT, DEFAULT_USER_ID, active_user_id, read_json_file, resolve_layered_source, user_config_root, user_presets_root
     from .user_manager import is_multi_user_enabled
 except ImportError:
+    import paths as _paths
     from paths import APP_ROOT, DEFAULT_USER_ID, active_user_id, read_json_file, resolve_layered_source, user_config_root, user_presets_root
     from user_manager import is_multi_user_enabled
 
@@ -96,16 +98,33 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
-def _user_site_config() -> Path:
-    return user_config_root() / 'site.json'
+def _global_site_config() -> Path:
+    """Site connection settings live on the admin (default-user) tree.
+
+    Per the multi-user UI contract: only default-user can edit site / provider
+    configuration; every other user reads the same admin-owned file. This
+    function is the single source of truth for that path.
+    """
+    return _paths.RUNTIME_DATA_ROOT / DEFAULT_USER_ID / 'config' / 'site.json'
 
 
 def _user_model_runtime_config() -> Path:
     return user_config_root() / 'model-runtime.json'
 
 
-def _legacy_user_providers_config() -> Path:
-    return user_config_root() / 'providers.json'
+def _global_legacy_providers_config() -> Path:
+    return _paths.RUNTIME_DATA_ROOT / DEFAULT_USER_ID / 'config' / 'providers.json'
+
+
+class SiteConfigPermissionError(PermissionError):
+    """Raised when a non-admin tries to mutate the global site or provider config."""
+
+
+def _require_admin(action: str) -> None:
+    if active_user_id() != DEFAULT_USER_ID:
+        raise SiteConfigPermissionError(
+            f'only the administrator (default-user) may {action}'
+        )
 
 
 def _resolve_api_key(value: str) -> str:
@@ -256,19 +275,23 @@ def _pick_legacy_site(store: dict) -> dict:
 
 def _load_site_store_raw() -> dict:
     existing: dict = {}
-    site_config = _user_site_config()
+    site_config = _global_site_config()
     if site_config.exists():
         data = read_json(site_config)
         existing = data if isinstance(data, dict) else {}
         if isinstance(data, dict) and isinstance(data.get('site'), dict):
             return data
-    legacy_providers = _legacy_user_providers_config()
+    legacy_providers = _global_legacy_providers_config()
     legacy_user = read_json(legacy_providers) if legacy_providers.exists() else {}
     legacy_global = _global_provider_store()
     from_global = not bool(legacy_user)
     seed_site = _sanitize_seed_site(_pick_legacy_site(legacy_user if legacy_user else legacy_global), from_global=from_global)
     seed = _site_store_with_site(existing, seed_site)
-    write_json(site_config, seed)
+    # Only the administrator may persist site config bootstrap. Ordinary users
+    # in multi-user mode get the seed in-memory so the UI can render, but the
+    # admin-owned file is left untouched.
+    if active_user_id() == DEFAULT_USER_ID:
+        write_json(site_config, seed)
     return seed
 
 
@@ -276,8 +299,8 @@ def load_site_store() -> dict:
     data = _load_site_store_raw()
     site = _pick_legacy_site(data)
     normalized = _site_store_with_site(data, site)
-    if data != normalized:
-        write_json(_user_site_config(), normalized)
+    if data != normalized and active_user_id() == DEFAULT_USER_ID:
+        write_json(_global_site_config(), normalized)
     return normalized
 
 
@@ -538,6 +561,7 @@ def get_site_config_snapshot() -> dict:
 
 
 def update_site_config(payload: dict) -> dict:
+    _require_admin('change site connection settings')
     if not isinstance(payload, dict):
         raise ValueError('site payload must be an object')
     store = load_site_store()
@@ -555,7 +579,7 @@ def update_site_config(payload: dict) -> dict:
     elif previous_base_url and next_base_url != previous_base_url:
         site['apiKey'] = ''
     site['models'] = _normalize_models(site.get('models', []), site['api'])
-    write_json(_user_site_config(), _site_store_with_site(store, site))
+    write_json(_global_site_config(), _site_store_with_site(store, site))
     return get_site_config_snapshot()
 
 
@@ -578,6 +602,7 @@ def _extract_discovered_models(data: dict, api_type: str) -> list[dict]:
 
 
 def discover_site_models() -> dict:
+    _require_admin('discover site models')
     store = load_site_store()
     site = store['site']
     base_url = _validate_remote_base_url(site.get('baseUrl', ''))
@@ -606,7 +631,7 @@ def discover_site_models() -> dict:
     except Exception as err:
         raise ValueError(f'provider model discovery failed: {err}') from err
     site['models'] = _extract_discovered_models(data if isinstance(data, dict) else {}, api_type)
-    write_json(_user_site_config(), _site_store_with_site(store, site))
+    write_json(_global_site_config(), _site_store_with_site(store, site))
     model_store = load_user_model_store()
     available = _available_site_models(site)
     changed = False

@@ -285,6 +285,52 @@ def set_admin_password(password: str) -> None:
         _save_sessions(sessions)
 
 
+def change_own_password(user_id: str, old_password: str, new_password: str, *, keep_token: str | None = None) -> None:
+    """Authenticated self-service password change.
+
+    The caller is the user changing *their own* password — verified via
+    ``old_password``. ``keep_token`` (if provided) keeps that single token
+    alive while every other session belonging to this user is revoked, so a
+    password change on one device kicks everyone else out.
+    """
+    uid = _validate_user_id(user_id)
+    pwd = _validate_password(new_password)
+    with _SYSTEM_FILE_LOCK:
+        users = _load_users()
+        user = users.get(uid)
+        if not isinstance(user, dict):
+            # Should not happen for an authenticated request, but stay
+            # constant-time anyway.
+            _verify_password(old_password, _DUMMY_PASSWORD_HASH)
+            raise ValueError('用户不存在或密码错误')
+        pw_hash = user.get('password_hash', '')
+        if not pw_hash:
+            # default-user without a password is only valid in single-user
+            # mode; the caller passes empty old_password.
+            if uid == DEFAULT_USER_ID and not old_password and not is_multi_user_enabled():
+                pass
+            else:
+                _verify_password(old_password, _DUMMY_PASSWORD_HASH)
+                raise ValueError('用户不存在或密码错误')
+        else:
+            if not _verify_password(old_password, pw_hash):
+                raise ValueError('用户不存在或密码错误')
+
+        user['password_hash'] = _hash_password(pwd)
+        user['failed_logins'] = 0
+        user['lockout_until'] = 0
+        users[uid] = user
+        _save_users(users)
+
+        sessions = _load_sessions()
+        keep_key = _hash_token(keep_token) if keep_token else None
+        sessions = {
+            k: v for k, v in sessions.items()
+            if v.get('user_id') != uid or k == keep_key
+        }
+        _save_sessions(sessions)
+
+
 # ── 认证 ──────────────────────────────────────────────────
 
 def login(user_id: str, password: str) -> str:

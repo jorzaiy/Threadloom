@@ -25,6 +25,7 @@ from model_config import (
     load_narrator_preset,
     list_provider_configs,
     save_narrator_preset,
+    SiteConfigPermissionError,
     update_model_config,
     update_site_config,
     upsert_provider_config,
@@ -35,7 +36,7 @@ from paths import DEFAULT_USER_ID, active_character_id, current_session_dir, fin
 from player_profile import delete_user_avatar, load_base_player_profile, load_character_player_profile_override, resolve_user_avatar_path, save_base_player_profile, save_character_player_profile_override, save_user_avatar
 from runtime_store import build_entity_map, build_state_snapshot, filter_committed_history_items, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 from user_manager import (
-    admin_has_password, create_user, delete_user, list_users, login, logout,
+    admin_has_password, change_own_password, create_user, delete_user, list_users, login, logout,
     is_multi_user_enabled, set_multi_user_enabled,
     reset_user_password, set_admin_password, resolve_user_from_request, ensure_admin_exists, validate_token,
 )
@@ -60,7 +61,7 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger('threadloom.server')
-MULTI_USER_PRODUCT_ENABLED = False
+MULTI_USER_PRODUCT_ENABLED = True
 
 PUBLIC_GET_PATHS = {
     '/',
@@ -469,7 +470,15 @@ class Handler(BaseHTTPRequestHandler):
                 uid = resolve_user_from_request(dict(self.headers))
                 if is_multi_user_enabled() and uid is None:
                     return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': 'login required'}})
-                return self._send(200, {'user_id': uid or '', 'multi_user_enabled': is_multi_user_enabled()})
+                role = 'admin' if uid == DEFAULT_USER_ID else 'user'
+                # admin_has_password lets the frontend know whether the
+                # "enable multi-user" wizard needs to set a password first.
+                return self._send(200, {
+                    'user_id': uid or '',
+                    'role': role,
+                    'multi_user_enabled': is_multi_user_enabled(),
+                    'admin_has_password': admin_has_password(),
+                })
 
             if parsed.path == '/api/history':
                 if not session_id:
@@ -815,6 +824,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/providers':
                 try:
                     result = upsert_provider_config(payload)
+                except SiteConfigPermissionError:
+                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可修改站点设置'}})
                 except ValueError as err:
                     return self._invalid_input(str(err))
                 result['supported_api_types'] = list_provider_configs()['supported_api_types']
@@ -823,6 +834,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/site-config':
                 try:
                     result = update_site_config(payload)
+                except SiteConfigPermissionError:
+                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可修改站点设置'}})
                 except ValueError as err:
                     return self._invalid_input(str(err))
                 result['supported_api_types'] = list_provider_configs()['supported_api_types']
@@ -850,6 +863,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/providers/discover':
                 try:
                     result = discover_provider_models(str(payload.get('name', '') or ''))
+                except SiteConfigPermissionError:
+                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可探测站点模型'}})
                 except ValueError as err:
                     return self._invalid_input(str(err))
                 result['supported_api_types'] = list_provider_configs()['supported_api_types']
@@ -858,6 +873,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/site-models/discover':
                 try:
                     result = discover_site_models()
+                except SiteConfigPermissionError:
+                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可探测站点模型'}})
                 except ValueError as err:
                     return self._invalid_input(str(err))
                 result['supported_api_types'] = list_provider_configs()['supported_api_types']
@@ -883,6 +900,30 @@ class Handler(BaseHTTPRequestHandler):
                 token = self._extract_token()
                 if token:
                     logout(token)
+                return self._send(200, {'ok': True})
+
+            if parsed.path == '/api/auth/change-password':
+                if not MULTI_USER_PRODUCT_ENABLED:
+                    return self._send(403, _experimental_disabled_payload('change-password'))
+                token = self._extract_token()
+                # POST already rejected Cookie auth, but require a valid Bearer
+                # token here so unauthenticated callers cannot probe other
+                # users' passwords.
+                acting_uid = validate_token(token) if token else None
+                if not acting_uid:
+                    return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': '请先登录'}})
+                old_pwd = payload.get('old_password')
+                if old_pwd is None:
+                    old_pwd = ''
+                if not isinstance(old_pwd, str):
+                    return self._invalid_input('old_password must be a string')
+                new_pwd = self._payload_string(payload, 'new_password')
+                if new_pwd is None:
+                    return
+                try:
+                    change_own_password(acting_uid, old_pwd, new_pwd, keep_token=token)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
                 return self._send(200, {'ok': True})
 
             if parsed.path == '/api/users':
