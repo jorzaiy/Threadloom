@@ -4,9 +4,7 @@ import ipaddress
 import json
 import os
 import re
-import urllib.request
 from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 
 try:
@@ -246,7 +244,7 @@ def _global_provider_store() -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _pick_legacy_site(store: dict) -> dict:
+def _pick_legacy_site(store: object) -> dict:
     if not isinstance(store, dict):
         return copy.deepcopy(DEFAULT_SITE)
     if isinstance(store.get('site'), dict):
@@ -311,7 +309,12 @@ def _site_store_with_site(existing: dict, site: dict) -> dict:
 
 
 def _available_site_models(site: dict) -> list[str]:
-    return [item.get('id') for item in _normalize_models(site.get('models', []), site.get('api', 'openai-completions')) if item.get('id')]
+    models = []
+    for item in _normalize_models(site.get('models', []), site.get('api', 'openai-completions')):
+        model_id = str(item.get('id', '') or '').strip()
+        if model_id:
+            models.append(model_id)
+    return models
 
 
 def _legacy_model_source() -> dict:
@@ -355,7 +358,7 @@ def _slim_runtime_from_legacy(source: dict, site: dict) -> dict:
             state_keeper.get('model'),
             narrator['model'],
         ], available)
-        payload: dict[str, object] = {
+        runtime_payload: dict[str, object] = {
             'version': 1,
             'narrator': narrator,
             'state_keeper': state_keeper,
@@ -363,8 +366,8 @@ def _slim_runtime_from_legacy(source: dict, site: dict) -> dict:
         if isinstance(source.get('advanced_models'), dict):
             advanced = _advanced_models_without_keeper_candidate(source['advanced_models'])
             if advanced:
-                payload['advanced_models'] = advanced
-        return payload
+                runtime_payload['advanced_models'] = advanced
+        return runtime_payload
 
     legacy_models = source.get('models', {}) if isinstance(source.get('models', {}), dict) else {}
     narrator_legacy = legacy_models.get('narrator', {}) if isinstance(legacy_models.get('narrator', {}), dict) else {}
@@ -480,7 +483,7 @@ def load_narrator_preset(preset_id: str) -> dict:
     }
 
 
-def save_narrator_preset(preset_id: str, content: dict) -> dict:
+def save_narrator_preset(preset_id: str, content: object) -> dict:
     if not isinstance(content, dict):
         raise ValueError('preset content must be an object')
     path = _preset_path(preset_id)
@@ -541,7 +544,7 @@ def get_site_config_snapshot() -> dict:
     status, status_label = _site_status(site)
     key_meta = api_key_meta(str(site.get('apiKey', '') or ''))
     models = _normalize_models(site.get('models', []), site.get('api', 'openai-completions'))
-    return {
+    snapshot = {
         'base_url': str(site.get('baseUrl', '') or '').strip(),
         'api': str(site.get('api', 'openai-completions') or 'openai-completions').strip() or 'openai-completions',
         'api_key_masked': key_meta['masked'],
@@ -558,9 +561,13 @@ def get_site_config_snapshot() -> dict:
             for item in models
         ],
     }
+    if active_user_id() != DEFAULT_USER_ID:
+        snapshot.pop('api_key_masked', None)
+        snapshot.pop('api_key_reference', None)
+    return snapshot
 
 
-def update_site_config(payload: dict) -> dict:
+def update_site_config(payload: object) -> dict:
     _require_admin('change site connection settings')
     if not isinstance(payload, dict):
         raise ValueError('site payload must be an object')
@@ -660,7 +667,7 @@ def get_model_config_snapshot() -> dict:
     }
 
 
-def update_model_config(payload: dict) -> dict:
+def update_model_config(payload: object) -> dict:
     if not isinstance(payload, dict):
         raise ValueError('model config payload must be an object')
     site = load_site_store()['site']
@@ -820,8 +827,8 @@ def list_provider_configs() -> dict:
                 'name': SITE_PROVIDER_NAME,
                 'base_url': snapshot['base_url'],
                 'api': snapshot['api'],
-                'api_key_masked': snapshot['api_key_masked'],
-                'api_key_reference': snapshot['api_key_reference'],
+                'api_key_masked': snapshot.get('api_key_masked', ''),
+                'api_key_reference': snapshot.get('api_key_reference'),
                 'api_key_configured': snapshot['api_key_configured'],
                 'status': snapshot['status'],
                 'status_label': snapshot['status_label'],
@@ -843,8 +850,12 @@ def upsert_provider_config(payload: dict) -> dict:
 
 
 def delete_provider_config(name: str) -> dict:
+    if name:
+        pass
     raise ValueError('site deletion is not supported')
 
 
 def discover_provider_models(name: str) -> dict:
+    if name:
+        pass
     return discover_site_models()

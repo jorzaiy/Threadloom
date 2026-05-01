@@ -11,7 +11,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from bootstrap_session import bootstrap_session
 from character_manager import delete_character_card, import_character_card_base64, list_character_cards, rebuild_character_lorebook, set_active_character
 from handler_message import handle_message
 from import_sillytavern_chat import import_sillytavern_from_content, preview_chat_import
@@ -32,13 +31,13 @@ from model_config import (
 )
 from regenerate_turn import regenerate_last_partial
 from session_lifecycle import delete_session, list_sessions, start_new_game
-from paths import DEFAULT_USER_ID, active_character_id, current_session_dir, find_character_session_dir, is_path_within_user_root, normalize_session_id, resolve_session_dir, reset_active_user_id, reset_multi_user_request_context, set_active_user_id, set_multi_user_request_context, slugify
+from paths import DEFAULT_USER_ID, active_character_id, active_user_id, current_session_dir, find_character_session_dir, is_path_within_user_root, normalize_session_id, resolve_session_dir, reset_active_user_id, reset_multi_user_request_context, set_active_user_id, set_multi_user_request_context, slugify
 from player_profile import delete_user_avatar, load_base_player_profile, load_character_player_profile_override, resolve_user_avatar_path, save_base_player_profile, save_character_player_profile_override, save_user_avatar
 from runtime_store import build_entity_map, build_state_snapshot, filter_committed_history_items, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 from user_manager import (
     admin_has_password, change_own_password, create_user, delete_user, list_users, login, logout,
     is_multi_user_enabled, set_multi_user_enabled,
-    reset_user_password, set_admin_password, resolve_user_from_request, ensure_admin_exists, validate_token,
+    reset_user_password, set_admin_password, resolve_user_from_request, validate_token,
 )
 
 
@@ -439,6 +438,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == '/api/site-config':
                 payload = get_site_config_snapshot()
+                if active_user_id() != DEFAULT_USER_ID:
+                    payload.pop('api_key_masked', None)
+                    payload.pop('api_key_reference', None)
                 payload['supported_api_types'] = list_provider_configs()['supported_api_types']
                 payload['web'] = web_runtime_settings()
                 return self._send(200, payload)
@@ -744,7 +746,7 @@ class Handler(BaseHTTPRequestHandler):
                 path = save_character_player_profile_override(override)
                 return self._send(200, {
                     'ok': True,
-                    'path': str(path),
+                    'path': path.name,
                     'character_card': load_character_card_meta(),
                     'web': web_runtime_settings(),
                 })
@@ -756,7 +758,7 @@ class Handler(BaseHTTPRequestHandler):
                 path = save_base_player_profile(profile)
                 return self._send(200, {
                     'ok': True,
-                    'path': str(path),
+                    'path': path.name,
                     'profile': load_base_player_profile(),
                     'avatar_url': '/user-avatar' if resolve_user_avatar_path() else None,
                     'web': web_runtime_settings(),
@@ -776,7 +778,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._invalid_input(f'invalid avatar payload: {err}')
                 return self._send(200, {
                     'ok': True,
-                    'path': str(path),
+                    'path': path.name,
                     'avatar_url': '/user-avatar',
                     'web': web_runtime_settings(),
                 })
@@ -855,7 +857,10 @@ class Handler(BaseHTTPRequestHandler):
                     if action == 'delete':
                         return self._send(200, delete_narrator_preset(preset_id))
                     if action == 'save':
-                        return self._send(200, save_narrator_preset(preset_id, payload.get('content')))
+                        content = payload.get('content')
+                        if not isinstance(content, dict):
+                            raise ValueError('preset content must be an object')
+                        return self._send(200, save_narrator_preset(preset_id, content))
                 except ValueError as err:
                     return self._invalid_input(str(err))
                 return self._invalid_input('unsupported narrator preset action')
@@ -988,6 +993,13 @@ class Handler(BaseHTTPRequestHandler):
                     enabled = payload_bool(payload, 'enabled')
                 except ValueError as err:
                     return self._invalid_input(str(err))
+                password = self._payload_string(payload, 'password')
+                if password is None:
+                    return
+                try:
+                    login(DEFAULT_USER_ID, password)
+                except ValueError:
+                    return self._send(401, {'error': {'code': 'AUTH_FAILED', 'message': '管理员密码错误'}})
                 try:
                     set_multi_user_enabled(enabled)
                 except ValueError as err:

@@ -52,6 +52,14 @@ def make_business_reject_handler(payload: dict[str, object]) -> BusinessRejectHa
     return handler
 
 
+def make_post_handler(path: str, payload: dict[str, object]) -> BusinessRejectHandler:
+    handler = make_business_reject_handler(payload)
+    handler.path = path
+    handler.headers = HTTPMessage()
+    handler.headers['Authorization'] = 'Bearer token'
+    return handler
+
+
 class CaptureGetHandler(server.Handler):
     sent: tuple[int, dict[str, object]] | None = None
 
@@ -213,6 +221,38 @@ class MultiUserFoundationTests(unittest.TestCase):
                 listed = [item for item in user_manager.list_users() if item['user_id'] == 'user-a'][0]
                 self.assertEqual(set(listed), {'user_id', 'role', 'created_at', 'has_password'})
                 self.assertTrue(listed['has_password'])
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_user_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+                paths.RUNTIME_DATA_ROOT = original_paths_root
+
+    def test_delete_user_archives_runtime_data_and_blocks_recreate_until_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_user_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_paths_root = paths.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                paths.RUNTIME_DATA_ROOT = temp_root
+
+                user_manager.create_user('user-a', 'secure-password-123')
+                private_file = temp_root / 'user-a' / 'profile' / 'secret.txt'
+                private_file.parent.mkdir(parents=True, exist_ok=True)
+                private_file.write_text('private', encoding='utf-8')
+
+                user_manager.delete_user('user-a')
+
+                self.assertFalse((temp_root / 'user-a').exists())
+                archived = list((temp_root / '_system' / 'deleted-users').glob('user-a-*'))
+                self.assertEqual(len(archived), 1)
+                self.assertTrue((archived[0] / 'profile' / 'secret.txt').exists())
+                user_manager.create_user('user-a', 'secure-password-456')
+                self.assertFalse((temp_root / 'user-a' / 'profile' / 'secret.txt').exists())
             finally:
                 user_manager.RUNTIME_DATA_ROOT = original_user_root
                 user_manager.USERS_FILE = original_users_file
@@ -1030,6 +1070,47 @@ class MultiUserFoundationTests(unittest.TestCase):
                 user_manager.RUNTIME_DATA_ROOT = original_root
                 user_manager.USERS_FILE = original_users_file
                 user_manager.SESSIONS_FILE = original_sessions_file
+
+    def test_multi_user_toggle_requires_admin_password_server_side(self):
+        original_is_multi_user_enabled = server.is_multi_user_enabled
+        original_admin_has_password = server.admin_has_password
+        original_validate_token = server.validate_token
+        original_login = server.login
+        original_set_multi_user_enabled = server.set_multi_user_enabled
+        try:
+            server.is_multi_user_enabled = lambda: True
+            server.admin_has_password = lambda: True
+            server.validate_token = lambda token: paths.DEFAULT_USER_ID
+            toggles: list[bool] = []
+
+            def fake_login(user_id: str, password: str) -> str:
+                if user_id == paths.DEFAULT_USER_ID and password == 'correct-password-123':
+                    return 'new-token'
+                raise ValueError('bad credentials')
+
+            server.login = fake_login
+            server.set_multi_user_enabled = lambda enabled: toggles.append(enabled)
+
+            missing = make_post_handler('/api/multi-user', {'enabled': False})
+            server.Handler.do_POST(missing)
+            self.assertEqual(missing.sent[0], 400)
+            self.assertEqual(toggles, [])
+
+            wrong = make_post_handler('/api/multi-user', {'enabled': False, 'password': 'wrong-password-123'})
+            server.Handler.do_POST(wrong)
+            self.assertEqual(wrong.sent[0], 401)
+            self.assertEqual(toggles, [])
+
+            ok = make_post_handler('/api/multi-user', {'enabled': False, 'password': 'correct-password-123'})
+            server.Handler.do_POST(ok)
+            self.assertEqual(ok.sent[0], 200)
+            self.assertEqual(toggles, [False])
+        finally:
+            server.is_multi_user_enabled = original_is_multi_user_enabled
+            server.admin_has_password = original_admin_has_password
+            server.validate_token = original_validate_token
+            server.login = original_login
+            server.set_multi_user_enabled = original_set_multi_user_enabled
 
     def test_post_request_rejects_cookie_session_token(self):
         # M1: cookie auth must not satisfy a POST/DELETE so a browser-issued

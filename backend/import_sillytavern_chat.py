@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from bootstrap_session import bootstrap_session, load_runtime_config, resolve_source, read_text, resolve_source_from_config
+from bootstrap_session import load_runtime_config, read_text, resolve_source_from_config
 from paths import current_session_owner_context, normalize_session_id, reset_active_character_override, resolve_session_dir, set_active_character_override
 from runtime_store import append_history, build_state_snapshot, save_canon, save_context, save_meta, save_state, save_summary, seed_default_state, session_paths
 from state_bridge import parse_root_state_markdown
@@ -259,6 +259,7 @@ def _bootstrap_import_session(session_id: str, *, source_path: Path, metadata: d
         'lorebook_path': sources.get('lorebook'),
         'active_preset': sources.get('active_preset'),
         'import_source': 'sillytavern-jsonl',
+        'import_metadata_present': bool(metadata),
         'imported_chat_path': str(source_path),
         'imported_character_name': character_name,
         'imported_user_name': user_name,
@@ -305,9 +306,9 @@ def import_sillytavern_jsonl(source_path: Path, *, target_session: str | None = 
 
         report = {
             'import_version': 1,
-            'source_path': str(source_path),
-            'source_copy_path': str(source_copy_path),
-            'metadata_sidecar_path': str(metadata_sidecar_path),
+            'source_path': source_path.name,
+            'source_copy_path': str(source_copy_path.relative_to(paths['session_dir'])),
+            'metadata_sidecar_path': str(metadata_sidecar_path.relative_to(paths['session_dir'])),
             'target_session': session_id,
             'character_id': character_id,
             'character_name': inferred_character_name,
@@ -390,6 +391,7 @@ def import_sillytavern_from_content(
 ) -> dict:
     """从文本内容导入 SillyTavern 聊天记录，可选验证角色名。"""
     import tempfile
+    source_name = str(filename or '').strip()
     items = _load_jsonl_from_text(content)
     metadata, chat_items = _split_metadata(items)
     inferred_character_name, _ = _infer_chat_names(metadata, chat_items)
@@ -411,6 +413,8 @@ def import_sillytavern_from_content(
         report = import_sillytavern_jsonl(tmp_path, target_session=target_session, character_id=character_id)
     finally:
         tmp_path.unlink(missing_ok=True)
+    if source_name:
+        report['source_filename'] = Path(source_name).name
     return report
 
 

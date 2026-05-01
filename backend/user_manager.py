@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import tempfile
 import threading
 import time
@@ -42,6 +43,10 @@ _SYSTEM_FILE_LOCK = threading.RLock()
 
 def _ensure_system_dir() -> None:
     (RUNTIME_DATA_ROOT / '_system').mkdir(parents=True, exist_ok=True)
+
+
+def _deleted_users_dir() -> Path:
+    return RUNTIME_DATA_ROOT / '_system' / 'deleted-users'
 
 
 def _atomic_write(path: Path, data: dict) -> None:
@@ -83,7 +88,7 @@ def _load_sessions() -> dict:
         return {}
 
 
-def _prune_expired_sessions(sessions: dict) -> dict:
+def _prune_expired_sessions(sessions: object) -> dict:
     """Drop entries whose absolute TTL has passed.
 
     Called inline before every persistent write so sessions.json does not
@@ -204,6 +209,8 @@ def create_user(user_id: str, password: str, role: str = 'user') -> dict:
         users = _load_users()
         if uid in users:
             raise ValueError(f'用户 "{uid}" 已存在')
+        if (RUNTIME_DATA_ROOT / uid).exists():
+            raise ValueError(f'用户 "{uid}" 的旧数据目录仍存在，请先清理或恢复该用户')
         users[uid] = {
             'role': role,
             'password_hash': _hash_password(pwd),
@@ -228,6 +235,16 @@ def delete_user(user_id: str) -> None:
         sessions = _load_sessions()
         sessions = {k: v for k, v in sessions.items() if v.get('user_id') != uid}
         _save_sessions(sessions)
+        user_dir = RUNTIME_DATA_ROOT / uid
+        if user_dir.exists():
+            deleted_users_dir = _deleted_users_dir()
+            deleted_users_dir.mkdir(parents=True, exist_ok=True)
+            target = deleted_users_dir / f'{uid}-{int(time.time())}'
+            counter = 1
+            while target.exists():
+                target = deleted_users_dir / f'{uid}-{int(time.time())}-{counter}'
+                counter += 1
+            shutil.move(str(user_dir), str(target))
 
 
 def list_users() -> list[dict]:
