@@ -22,15 +22,16 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 当前目标是先把“单用户、本地可用、角色卡可替换”的 RP runtime 做完整，而不是立刻做成多租户平台。
 
 当前边界：
-- 单用户当前可用
-- 角色卡当前可替换，但产品形态仍偏“当前激活卡”
-- 单站点是当前产品层简化：普通用户只维护一个站点，然后给 `Narrator / State Keeper` 选模型
-- 多用户相关底层代码当前保留，但产品面默认关闭，不作为当前正式能力暴露
+- 默认即单用户模式，与之前体验一致
+- 多用户模式可由管理员（`default-user`）从设置面板启用：启用前必须先设置管理员密码
+- 角色卡当前可替换，但产品形态仍偏"当前激活卡"
+- 站点连接（baseUrl / apiKey / 模型列表）始终全局：在多用户模式下由管理员维护，普通用户只读
+- 模型分配（Narrator / State Keeper）与 Preset 选择按用户存储，互不影响
 
 后续方向：
-- 多用户：补显式用户身份与用户切换
 - 多角色卡：继续打磨导入后的 runtime 清洗与管理体验
 - 多站点：若后续确实需要，再扩展为高级配置，而不是先把普通设置页做复杂
+- 忘记密码恢复 / 双因素认证 / SSO：本次 UI 不在范围，需要时再单独立项
 
 ## 当前能力
 
@@ -46,6 +47,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - API Key 支持环境变量引用（`$VAR` 或 `env:VAR`）
 - API 韧性：模型调用自动重试 429/503 错误（指数退避，最多 3 次，尊重 `Retry-After`）
 - 安全加固：后端默认仅监听 `127.0.0.1`，API 响应带基础安全头，请求体有大小上限，provider URL 会阻止常见 SSRF 目标
+- 多用户模式（可选启用）：管理员密码 + bcrypt 校验、登录失败计数与锁定（5 次失败锁 15 分钟）、Bearer token 认证（7 天 TTL，state-changing 拒绝 Cookie auth）、IP-pinned 出站连接防 DNS-rebinding、per-user session/character 配额、自助改密、用户管理与多用户开关向导
 - 原子文件写入：所有 state/archive 写入防崩溃/断电数据损坏
 - 结构化知情边界：`knowledge_scope` 独立追踪主角和各 NPC 已知信息，替代纯文本软约束
 - 线程生命周期管理：按类型分级保留、`cooling_down` 过渡态、`resolved_events` 归档
@@ -114,7 +116,53 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - history 缓存按实际 `history.jsonl` 路径隔离，不再只按 `session_id` 复用
 - persona seed 默认只读取当前角色卡 source 与 session-local 层，不再静默回退到共享 `runtime/persona-seeds`
 - 当前默认且唯一用户会显示为 `default_user`
-- 当前暂不提供用户切换或用户管理 UI
+- 启用多用户模式后，管理员可在设置面板创建普通用户、重置密码或删除账号
+
+## 多用户模式
+
+默认启动后是单用户模式，与之前的体验一致；不强制登录、不暴露认证 UI。需要让多个人同时使用时，管理员可以在设置面板里启用多用户模式。
+
+### 启用多用户的流程
+
+1. 管理员（`default-user`）打开 **设置 → 用户管理**
+2. 点击 "启用多用户模式 / 设置管理员密码"
+   - 若管理员尚未设置密码：弹窗输入并二次确认（至少 12 位）
+   - 若已有密码：弹窗确认密码即可
+3. 后端会清空所有 sessions（包括当前 admin 的 token），前端拿刚输入的密码立刻**静默重登**，无需手动跳登录页
+4. 重载完成后，顶栏会显示 "管理员 · default-user"，"用户管理" tab 可见
+
+关闭多用户：在同一位置点击 "关闭多用户模式"，输入密码确认。所有用户立即注销。
+
+### 用户角色与权限
+
+| 资源 | 管理员 (`default-user`) | 普通用户 |
+|------|-------------------------|----------|
+| 站点连接（baseUrl / apiKey / 模型列表 / provider） | ✅ 可读可写（全局唯一来源） | 🔒 只读，apiKey mask |
+| 模型分配（Narrator / State Keeper） | ✅ 自己一份 | ✅ 自己一份 |
+| Preset 选择 | ✅ 自己一份 | ✅ 自己一份 |
+| 角色卡导入 / 切换 | ✅ 不限 | ✅ 上限 10 张 |
+| Session 创建 | ✅ 不限 | ✅ 每角色卡上限 50 |
+| 自助改密 | ✅ | ✅ |
+| 用户管理（创建 / 重置密码 / 删除） | ✅ | ❌ |
+| 多用户模式 toggle | ✅ | ❌ |
+
+普通用户的 site 路径在后端真正全局：`runtime-data/default-user/config/site.json` 是唯一来源，普通用户调 `/api/site-config POST` 直接 403。
+
+### 认证与安全
+
+- Token 存储：`localStorage['tl_session_token']`，TTL 7 天，与服务端一致
+- 传输：`Authorization: Bearer <token>` 头，state-changing 请求（POST/DELETE/PUT）拒绝 Cookie auth 防 CSRF
+- 登录失败计数：连续 5 次错误密码自动锁 15 分钟，成功登录或 admin 重置密码立即清零
+- 用户枚举：登录路径在用户不存在时也跑一次 dummy bcrypt，使响应时间不可区分
+- 自助改密：保留当前 token，撤销该用户其他设备所有 token
+- 出站请求（site discovery / model 调用）走 `safe_http`：先解析 IP 再连接，每条记录都拒绝 loopback / 私网 / link-local，杜绝 DNS-rebinding
+
+### 忘记管理员密码
+
+UI 不提供找回入口。停服后修改 `runtime-data/_system/users.json`：
+- 删掉 `default-user` 的 `password_hash` 字段，重新启动后再次走"启用多用户"向导即可重置
+
+普通用户忘记密码：管理员在用户管理里点击 "重置密码"。
 
 ## 当前 keeper 结构
 
@@ -349,3 +397,5 @@ http://127.0.0.1:8765
 - **[doc/audit/SECURITY_AUDIT_2026-04-29.md](doc/audit/SECURITY_AUDIT_2026-04-29.md)** - 安全审计与修复记录
 - **[doc/audit/ISOLATION_AND_KEEPER_FIX_2026-04-30.md](doc/audit/ISOLATION_AND_KEEPER_FIX_2026-04-30.md)** - 信息隔离与 keeper 写入路径加固
 - **[doc/audit/MULTI_USER_HARDENING_2026-05-01.md](doc/audit/MULTI_USER_HARDENING_2026-05-01.md)** - 多用户后端安全加固（SSRF 防护、登录限速、Cookie/CSRF 边界、per-user 配额）
+- **[doc/MULTI_USER_UI_PLAN.md](doc/MULTI_USER_UI_PLAN.md)** - 多用户 UI 实施计划（七项决策、用户流程、后端/前端切片、手动验证清单）
+- **[doc/audit/MULTI_USER_UI_SHIPPED_2026-05-01.md](doc/audit/MULTI_USER_UI_SHIPPED_2026-05-01.md)** - 多用户 UI 上线记录（与 plan 的差异、commit 索引、未做项）
