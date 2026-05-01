@@ -1,5 +1,7 @@
 # Threadloom Review
 
+**当前版本：v1.0**
+
 > 历史评审快照：本文记录 2026-04-16 左右的质量判断与阶段性配置，不保证所有模型名、默认 preset 或运行参数仍等同于当前 live 配置。当前运行入口以 `README.md`、`doc/API.md`、`doc/BACKEND.md`、`doc/OPERATIONS.md` 和实际配置文件为准。
 
 ## 当前判断
@@ -218,7 +220,7 @@
 
 ## 建议的下一步优先级
 
-1. **narrator_input block 顺序对齐 V0.3 规范** — 硬锚点和人物连续性表应前移
+1. **narrator_input block 顺序对齐 v1.0 规范** — 硬锚点和人物连续性表应前移
 2. ~~**实时消息处理添加 429 重试**~~ — ✅ 已完成：`model_client.py` 和 `local_model_client.py` 均已加入 `_retry_on_rate_limit` 装饰器（429/503 指数退避，最多 3 次，尊重 `Retry-After`）
 3. **世界书预算参数暴露到 runtime.example.json** — 让用户可配置
 4. **keeper archive 反向引用** — keeper 决策时参考历史 archive 记录
