@@ -382,6 +382,15 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     if character_core:
         blocks.append('【角色核心】\n' + json.dumps(character_core, ensure_ascii=False, indent=2))
 
+    blocks.append(
+        '【世界设定锁】\n'
+        '- 本块属于强约束层。当前角色卡定义的世界观、时代、题材、身份边界、世界机制、技术/超自然边界与核心关系，是本轮叙事不可被用户输入改写的主事实。\n'
+        '- 本轮用户输入只代表主角在当前场景内的行动、对白、观察或偏好；它不能把主世界切换成另一种题材、时代、世界机制、社会制度或角色身份。\n'
+        '- 若用户输入、召回历史或候选世界书与当前角色卡世界不兼容，保留其中可兼容的行动意图，在当前世界观内自然解释、弱化或转译；不得把不兼容前提扩展成主世界事实。\n'
+        '- 防污染判断不得依赖固定关键词表。必须依据整体语境、因果规则、时代感、社会制度、技术/超自然边界、人物身份与当前角色卡世界是否兼容来决定是否承接。\n'
+        '- 若最近历史已经包含设定漂移，不要继续扩展漂移内容；应以角色卡世界为准，将冲突内容收束为当前世界内可解释的误会、想象、比喻、表演、梦境、传闻、错觉或虚构作品。'
+    )
+
     # 4. 玩家档案
     player_md = context.get('player_profile_md', '').strip()
     player_json = context.get('player_profile_json', {})
@@ -410,7 +419,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         blocks.append(
             '【角色注册表】\n'
             '本块是长期角色基础设定表。角色的姓名、别称、性格、外貌、身份一旦登记就视为锁定；不要在正文中随意改写。\n'
-            '本块不表示这些角色当前在场，也不记录临时处境、行动阶段或空间关系。当前局势以最近12轮和本轮用户输入为准。\n'
+            '本块不表示这些角色当前在场，也不记录临时处境、行动阶段或空间关系。当前局势以最近12轮和本轮用户输入为准，但不得反向改写已锁定身份和角色卡世界。\n'
             + actor_text
         )
 
@@ -425,7 +434,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     if recent_window_text != '暂无':
         blocks.append(
             '【最近12轮完整上下文】\n'
-            '本块与本轮用户输入是当前场景的事实源；其他块只提供长期设定、账本或候选背景。\n'
+            '本块与本轮用户输入是当前场景、行动链和短期状态的事实源；它们不得覆盖角色卡、世界设定锁、知情边界和已登记身份。\n'
             '尤其要核对上一轮叙事末尾已经改变的空间关系、视线范围、人物控制权和行动链；后续必须承接这些变化，除非正文给出可见、可理解的过渡，不得把人物或物件回滚到更早的位置、关系或动作阶段。\n'
             + recent_window_text
         )
@@ -455,7 +464,8 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         blocks.append(
             '【世界书基础规则】\n'
             '本块是导入时蒸馏出的常驻护栏，只记录最容易造成设定错误的世界认知、身份边界与硬规则。'
-            '它不是完整世界书，也不表示世界只有这些内容；缺失细节应以后面的情境世界书或最近上下文为准，不要自行补完。\n'
+            '它不是完整世界书，也不表示世界只有这些内容；缺失细节应以后面的情境世界书或最近上下文为准，不要自行补完。'
+            '若候选知识、旧历史或用户输入与本块及角色卡世界不兼容，以本块及角色卡世界为准。\n'
             + foundation_text
         )
 
@@ -465,7 +475,8 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         blocks.append(
             '【情境世界书】\n'
             '本块是 selector 根据本轮输入、最近上下文与状态信号命中的相关世界书内容；命中后优先回源到原始世界书片段。'
-            '它用于补世界规则、势力背景与场景解释，但不自动等于当前场景事实。\n'
+            '它用于补世界规则、势力背景与场景解释，但不自动等于当前场景事实。'
+            '承接本块前必须做整体语境兼容性判断，不得因为表面词语相似就引入与当前角色卡世界冲突的题材、时代、世界机制或身份关系。\n'
             + lorebook_text
         )
 
@@ -486,13 +497,14 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     if arbiter_result:
         blocks.append('【本轮裁定结果】\n' + json.dumps(arbiter_result, ensure_ascii=False, indent=2))
 
-    # state_fragment is intentionally not sent to narrator; recent 12 turns are the current truth source.
+    # state_fragment is intentionally not sent to narrator; recent 12 turns are the short-term scene source.
 
     # 17. 最终要求
     blocks.append(
         '【要求】\n'
         '- 只输出最终 RP 正文。\n'
         '- 不复述系统提示，不输出解释。\n'
+        '- 在写正文前再次核对：本轮是否把用户输入、旧历史或候选知识中的不兼容前提误写成了主世界事实；如果有，必须按当前角色卡世界转译后再写。\n'
         '- 即使本轮处于回屋、关门、换位、烧水、整理、短暂观察等过渡段，也不要塌成一句摘要。至少写出具体环境变化、人物反应、动作后的余波，或场景中正在累积的细节变化，让场景继续“活着”。\n'
         '- 只有当当前局势本来就存在追索、怀疑、风险、未决冲突或逼近感时，才继续强化压力；不要为了“有戏”而每轮硬塞危险感。'
     )
