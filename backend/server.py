@@ -2,7 +2,9 @@
 import errno
 import json
 import logging
+import os
 import threading
+import time
 import sys
 import weakref
 from base64 import b64decode
@@ -35,7 +37,8 @@ from paths import DEFAULT_USER_ID, active_character_id, active_user_id, current_
 from player_profile import delete_user_avatar, load_base_player_profile, load_character_player_profile_override, resolve_user_avatar_path, save_base_player_profile, save_character_player_profile_override, save_user_avatar
 from runtime_store import build_entity_map, build_state_snapshot, filter_committed_history_items, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 from user_manager import (
-    admin_has_password, change_own_password, create_user, delete_user, list_users, login, logout,
+    admin_has_password, change_own_password, create_user, delete_user, disable_user, enable_user,
+    list_user_storage_audit, list_users, login, logout,
     is_multi_user_enabled, set_multi_user_enabled,
     reset_user_password, set_admin_password, resolve_user_from_request, validate_token,
 )
@@ -52,6 +55,13 @@ MAX_CHAT_IMPORT_BYTES = 16 * 1024 * 1024
 # alive while the ``with`` block is active.
 SESSION_LOCKS: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
 SESSION_LOCKS_GUARD = threading.Lock()
+LOGIN_THROTTLE_LOCK = threading.Lock()
+LOGIN_ATTEMPTS_BY_IP: dict[str, list[float]] = {}
+LOGIN_ATTEMPTS_GLOBAL: list[float] = []
+LOGIN_IP_WINDOW_SECONDS = 60
+LOGIN_IP_LIMIT = 12
+LOGIN_GLOBAL_WINDOW_SECONDS = 60
+LOGIN_GLOBAL_LIMIT = 80
 
 
 logging.basicConfig(
@@ -153,6 +163,44 @@ def authenticated_admin_from_token(token: str) -> str | None:
         return None
     uid = validate_token(token)
     return uid if uid == DEFAULT_USER_ID else None
+
+
+def _prune_attempts(items: list[float], now: float, window: int) -> list[float]:
+    cutoff = now - window
+    return [item for item in items if item >= cutoff]
+
+
+def check_login_throttle(client_ip: str) -> bool:
+    now = time.time()
+    key = client_ip or 'unknown'
+    with LOGIN_THROTTLE_LOCK:
+        global LOGIN_ATTEMPTS_GLOBAL
+        LOGIN_ATTEMPTS_GLOBAL = _prune_attempts(LOGIN_ATTEMPTS_GLOBAL, now, LOGIN_GLOBAL_WINDOW_SECONDS)
+        ip_attempts = _prune_attempts(LOGIN_ATTEMPTS_BY_IP.get(key, []), now, LOGIN_IP_WINDOW_SECONDS)
+        if len(LOGIN_ATTEMPTS_GLOBAL) >= LOGIN_GLOBAL_LIMIT or len(ip_attempts) >= LOGIN_IP_LIMIT:
+            LOGIN_ATTEMPTS_BY_IP[key] = ip_attempts
+            return False
+        ip_attempts.append(now)
+        LOGIN_ATTEMPTS_BY_IP[key] = ip_attempts
+        LOGIN_ATTEMPTS_GLOBAL.append(now)
+        return True
+
+
+def startup_security_check() -> None:
+    from user_manager import SESSIONS_FILE, USERS_FILE, _save_sessions, _load_sessions
+    for path in (USERS_FILE, SESSIONS_FILE):
+        if path.exists():
+            mode = path.stat().st_mode & 0o777
+            if mode != 0o600:
+                try:
+                    os.chmod(path, 0o600)
+                    logger.warning('tightened permissions on %s from %o to 600', path, mode)
+                except OSError as err:
+                    logger.warning('could not tighten permissions on %s: %s', path, err)
+    if SESSIONS_FILE.exists():
+        _save_sessions(_load_sessions())
+    if is_multi_user_enabled() and HOST not in {'127.0.0.1', 'localhost', '::1'}:
+        logger.warning('multi-user mode is enabled while listening on non-loopback host %s; use TLS and a trusted reverse proxy', HOST)
 
 
 def is_admin_password_bootstrap_action(action: str) -> bool:
@@ -465,6 +513,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可查看用户列表'}})
                 return self._send(200, {
                     'users': list_users(),
+                    'storage': list_user_storage_audit(),
                     'multi_user_enabled': is_multi_user_enabled(),
                 })
 
@@ -893,6 +942,8 @@ class Handler(BaseHTTPRequestHandler):
                 pwd = self._payload_string(payload, 'password')
                 if uid is None or pwd is None:
                     return
+                if not check_login_throttle(self.client_address[0] if self.client_address else ''):
+                    return self._send(429, {'error': {'code': 'RATE_LIMITED', 'message': '登录请求过于频繁，请稍后再试'}})
                 try:
                     token = login(uid, pwd)
                 except ValueError as err:
@@ -961,6 +1012,24 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as err:
                         return self._invalid_input(str(err))
                     return self._send(200, {'ok': True})
+                elif action == 'disable':
+                    uid = self._payload_string(payload, 'user_id')
+                    if uid is None:
+                        return
+                    try:
+                        disable_user(uid, str(payload.get('reason', '') or ''))
+                    except ValueError as err:
+                        return self._invalid_input(str(err))
+                    return self._send(200, {'ok': True})
+                elif action == 'enable':
+                    uid = self._payload_string(payload, 'user_id')
+                    if uid is None:
+                        return
+                    try:
+                        enable_user(uid)
+                    except ValueError as err:
+                        return self._invalid_input(str(err))
+                    return self._send(200, {'ok': True})
                 elif action == 'set_admin_password':
                     pwd = self._payload_string(payload, 'password')
                     if pwd is None:
@@ -981,7 +1050,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self._invalid_input(str(err))
                     return self._send(200, {'ok': True})
                 else:
-                    return self._invalid_input('未知操作，支持: create, delete, reset_password, set_admin_password')
+                    return self._invalid_input('未知操作，支持: create, disable, enable, delete, reset_password, set_admin_password')
 
             if parsed.path == '/api/multi-user':
                 if not MULTI_USER_PRODUCT_ENABLED:
@@ -1055,6 +1124,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    startup_security_check()
     try:
         server = RuntimeHTTPServer((HOST, PORT), Handler)
     except OSError as err:
