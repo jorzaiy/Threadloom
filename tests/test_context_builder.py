@@ -7,7 +7,7 @@ sys.path.insert(0, str(ROOT / 'backend'))
 
 import json
 
-from context_builder import load_lorebook_source_hits, select_lorebook_text_for_turn, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
+from context_builder import _slim_character_core, load_lorebook_source_hits, select_lorebook_text_for_turn, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
 from narrator_input import _format_recent_window  # noqa: E402
 
 
@@ -87,3 +87,44 @@ def test_non_opening_lorebook_turn_prefers_source_hits_over_index(tmp_path):
     assert '学院为男校，不存在恋爱氛围' in text
     assert '蒸馏摘要' not in text
     assert source_hits['items'][0]['id'] == 'academy'
+
+
+def test_slim_character_core_preserves_world_constraint_fields():
+    data = {
+        'name': '维克托',
+        'description': '现代角色。',
+        'relationshipToUser': '同校学生',
+        'goals': ['保持身份迷雾'],
+        'mustRemember': ['主世界是现代校园。'],
+        'worldMechanics': {'identityFog': '身份不会自动公开'},
+        'system_summary': '现代架空校园。',
+        'coreDescription': {
+            'summary': '现代现实语境。',
+            'genre': '现代校园',
+            'era': '现代',
+            'unused': 'drop',
+        },
+        'hints': {
+            'runtimeRules': ['不要切换题材'],
+            'time_era_prefix': '现代公历',
+            'forbiddenContradictions': ['不引入异世界规则'],
+            'unused': 'drop',
+        },
+        'speakingStyle': {
+            'tone': '冷静',
+            'taboos': ['古风腔'],
+            'unused': 'drop',
+        },
+    }
+
+    slim = _slim_character_core(data)
+
+    assert slim['relationshipToUser'] == '同校学生'
+    assert slim['worldMechanics']['identityFog'] == '身份不会自动公开'
+    assert slim['mustRemember'] == ['主世界是现代校园。']
+    assert slim['coreDescription']['genre'] == '现代校园'
+    assert slim['hints']['time_era_prefix'] == '现代公历'
+    assert slim['speakingStyle']['taboos'] == ['古风腔']
+    assert 'unused' not in slim['coreDescription']
+    assert 'unused' not in slim['hints']
+    assert 'unused' not in slim['speakingStyle']

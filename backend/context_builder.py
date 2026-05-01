@@ -711,16 +711,68 @@ def _slim_character_core(data: dict) -> dict:
     if not isinstance(data, dict):
         return {}
     keep = {}
-    for key in ('name', 'role', 'description', 'personality', 'scenario', 'first_mes'):
+    top_level_keys = (
+        'name',
+        'role',
+        'description',
+        'personality',
+        'scenario',
+        'first_mes',
+        'relationshipToUser',
+        'goals',
+        'mustRemember',
+        'worldMechanics',
+        'system_summary',
+    )
+    for key in top_level_keys:
         value = data.get(key)
         if value:
             keep[key] = value
     core = data.get('coreDescription') if isinstance(data.get('coreDescription'), dict) else {}
     if core:
-        keep['coreDescription'] = {k: v for k, v in core.items() if k in {'title', 'tagline', 'summary', 'protagonist'} and v}
+        keep['coreDescription'] = {
+            k: v
+            for k, v in core.items()
+            if k in {
+                'title',
+                'tagline',
+                'summary',
+                'protagonist',
+                'setting',
+                'genre',
+                'era',
+                'worldview',
+                'worldRules',
+                'constraints',
+            }
+            and v
+        }
     hints = data.get('hints') if isinstance(data.get('hints'), dict) else {}
     if hints:
-        keep['hints'] = {k: v for k, v in hints.items() if k in {'runtimeRules', 'style', 'protagonist'} and v}
+        keep['hints'] = {
+            k: v
+            for k, v in hints.items()
+            if k in {
+                'runtimeRules',
+                'style',
+                'protagonist',
+                'setting',
+                'genre',
+                'era',
+                'time_era_prefix',
+                'worldRules',
+                'worldMechanics',
+                'forbiddenContradictions',
+            }
+            and v
+        }
+    speaking_style = data.get('speakingStyle') if isinstance(data.get('speakingStyle'), dict) else {}
+    if speaking_style:
+        keep['speakingStyle'] = {
+            k: v
+            for k, v in speaking_style.items()
+            if k in {'tone', 'style', 'taboos', 'do', 'dont', 'constraints'} and v
+        }
     return keep
 
 
