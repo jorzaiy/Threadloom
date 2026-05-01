@@ -339,9 +339,11 @@ def test_openings_alternate_greeting_split_safe_when_colon_in_body():
 
 # ---------- P1-5: _infer_faction --------------------------------------------
 
-def test_infer_faction_legacy_hint_still_works():
-    assert ci._infer_faction('太子心腹', '') == '东宫'
-    assert ci._infer_faction('', '镇北司军令') == '镇北司'
+def test_infer_faction_uses_only_structured_fields():
+    assert ci._infer_faction('太子心腹', '') == ''
+    assert ci._infer_faction('', '镇北司军令') == ''
+    assert ci._infer_faction('Captain Olen', 'Faction: Northwatch') == 'Northwatch'
+    assert ci._infer_faction('林越', '所属势力：青衣卫\n擅长追踪。') == '青衣卫'
 
 
 def test_infer_faction_returns_empty_for_generic_card():

@@ -126,54 +126,17 @@ def save_character_player_profile_override(payload: dict) -> Path:
 
 
 def build_player_profile_override_draft(character_core: dict, *, base_profile: dict | None = None) -> dict:
-    base = base_profile if isinstance(base_profile, dict) else load_base_player_profile()
     title = str((character_core.get('name') if isinstance(character_core, dict) else '') or '').strip()
-    summary = ''
-    if isinstance(character_core, dict):
-        core_desc = character_core.get('coreDescription', {}) if isinstance(character_core.get('coreDescription', {}), dict) else {}
-        summary = str(core_desc.get('summary', '') or character_core.get('system_summary', '') or '').strip()
-    text = f"{title}\n{summary}".lower()
     draft: dict = {}
 
-    if any(token in text for token in ('江湖', '武侠', '神都', '镇北司', '客栈', '大胤')):
-        draft.update({
-            'origin': str(base.get('origin', '') or '神都').strip() or '神都',
-            'status': '异人 / 玩家',
-            'style': {
-                'dailyWear': '平日偏爱素色、利落、方便行动的衣物，不喜过分花哨。',
-                'formalWear': '若需赴宴或入局，则会换上剪裁干净、颜色克制的衣裙，依旧以简洁为主。',
-            },
-            'worldAdaptation': {
-                'notes': [
-                    f'已改写为适合《{title or "当前角色卡"}》的武侠世界设定。',
-                    '为保证剧情运行安全与一致性，年龄调整为成年。',
-                    '现代语境已收束为更贴合当前江湖世界的出身、技能与行事方式。',
-                ]
-            },
-        })
-    elif any(token in text for token in ('修仙', '灵根', '宗门', '仙门', '秘境', '筑基', '金丹')):
-        draft.update({
-            'status': '异人 / 初入仙途者',
-            'style': {
-                'dailyWear': '偏好轻便、便于行动与修行的衣物，颜色素净，方便长途奔波与宗门内外活动。',
-                'formalWear': '正式场合会选择更贴合宗门礼制或修行者身份的衣装，但仍以简洁利落为主。',
-            },
-            'worldAdaptation': {
-                'notes': [
-                    f'已改写为适合《{title or "当前角色卡"}》的修行世界设定。',
-                    '现代语境已收束为更贴合宗门、秘境与修行体系的身份与能力表述。',
-                ]
-            },
-        })
-    else:
-        draft.update({
-            'worldAdaptation': {
-                'notes': [
-                    f'已为《{title or "当前角色卡"}》生成一份初始主角特化草稿。',
-                    '若当前题材与基础档案差异较大，建议手动补充身份、出身与世界适配说明。',
-                ]
-            }
-        })
+    draft.update({
+        'worldAdaptation': {
+            'notes': [
+                f'已为《{title or "当前角色卡"}》生成一份初始主角特化草稿。',
+                '若当前题材与基础档案差异较大，建议手动补充身份、出身与世界适配说明。',
+            ]
+        }
+    })
 
     return draft
 

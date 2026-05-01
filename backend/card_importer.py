@@ -790,30 +790,21 @@ def _looks_like_template_token(text: str) -> bool:
     return False
 
 
-_LEGACY_FACTION_HINTS: tuple[tuple[str, str, str], ...] = (
-    ('太子', '东宫', '东宫'),
-    ('', '东宫', '东宫'),
-    ('', '镇北司', '镇北司'),
-    ('', '黄泉引', '黄泉引'),
-    ('', '拜月教', '拜月教'),
-    ('', '七绝门', '七绝门'),
-)
-
-
 def _infer_faction(title: str, content: str) -> str:
-    """Best-effort faction inference from title/content.
+    """Infer faction only from explicit structured fields.
 
-    Looks up the title/content against legacy hints first (kept for backwards
-    compatibility with the original RP card the importer was built around), then
-    falls back to '' so generic cards do not get spurious factions assigned.
+    Card-specific faction names belong in imported card data or hints, not in
+    importer code. This keeps generic entries from receiving labels merely
+    because a legacy world term appears in prose.
     """
-    title_text = str(title or '')
-    content_text = str(content or '')
-    for in_title, in_content, label in _LEGACY_FACTION_HINTS:
-        if in_title and in_title in title_text:
-            return label
-        if in_content and in_content in content_text:
-            return label
+    text = f'{title}\n{content}'
+    for pattern in (
+        r'(?:所属(?:势力|阵营|组织|门派)?|势力|阵营|组织|门派|派系|faction|affiliation)\s*[：:]\s*([^\n\r，。；;,]{1,24})',
+        r'(?:belongs to|member of|affiliated with)\s+([^\n\r，。；;,]{1,24})',
+    ):
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return _clean_faction_label(match.group(1))
     return ''
 
 
