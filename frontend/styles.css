@@ -155,6 +155,11 @@ body {
   outline: none;
 }
 
+.topbar-session-menu {
+  position: relative;
+  min-width: 0;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -163,51 +168,6 @@ body {
 
 .bottom-controls {
   justify-content: flex-end;
-}
-
-.topbar-session-dock {
-  position: relative;
-}
-
-.session-pill {
-  border: 1px solid rgba(127, 109, 91, 0.18);
-  border-radius: 999px;
-  padding: 8px 14px;
-  background: rgba(255, 255, 255, 0.7);
-  font-family: 'Inter', sans-serif;
-  font-size: 11px;
-  color: var(--text-muted);
-  box-shadow: var(--shadow-soft);
-}
-
-.session-indicator-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  max-width: min(22rem, 44vw);
-}
-
-.session-indicator-trigger:hover {
-  background: rgba(255, 255, 255, 0.92);
-  color: var(--text);
-}
-
-.session-indicator-label {
-  display: inline-block;
-  max-width: min(18rem, 36vw);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-indicator-chevron {
-  font-size: 16px;
-  transition: transform 160ms ease;
-}
-
-.session-indicator-trigger[aria-expanded='true'] .session-indicator-chevron {
-  transform: rotate(180deg);
 }
 
 .icon-btn {
@@ -726,19 +686,32 @@ button:active {
 }
 
 .session-dock-panel {
-  position: fixed;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: min(34rem, calc(100vw - 32px));
-  max-height: min(74vh, 680px);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 10px);
+  transform: translateY(-4px);
+  width: min(24rem, calc(100vw - 36px));
+  max-height: min(62vh, 520px);
   overflow-y: auto;
   border: 1px solid rgba(195, 200, 193, 0.5);
-  border-radius: 22px;
+  border-radius: 18px;
   background: rgba(255, 253, 248, 0.97);
   box-shadow: var(--shadow);
-  padding: 16px;
-  z-index: 82;
+  padding: 12px;
+  z-index: 90;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
+}
+
+.topbar-session-menu:hover .session-dock-panel,
+.topbar-session-menu:focus-within .session-dock-panel,
+.session-dock-panel[aria-hidden='false'] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .session-dock-heading {
@@ -746,8 +719,8 @@ button:active {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
-  padding-bottom: 12px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
   border-bottom: 1px solid rgba(127, 109, 91, 0.12);
 }
 
@@ -764,7 +737,7 @@ button:active {
 }
 
 .session-dock-heading span {
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -777,7 +750,7 @@ button:active {
 .session-dock-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .settings-session-list {
@@ -812,8 +785,8 @@ button:active {
   background: rgba(255, 255, 255, 0.86);
   color: var(--text);
   border: 1px solid rgba(195, 200, 193, 0.45);
-  padding: 10px 12px;
-  font-size: 12px;
+  padding: 8px 10px;
+  font-size: 11px;
 }
 
 .session-dock-open:hover {
@@ -1632,7 +1605,8 @@ button:active {
   }
 
   .topbar {
-    display: none;
+    max-width: calc(100vw - 24px);
+    left: 12px;
   }
 
   .messages {
@@ -1647,7 +1621,27 @@ button:active {
   }
 
   .topbar {
-    display: none;
+    left: 8px;
+    top: 8px;
+    max-width: calc(100vw - 16px);
+    padding: 6px 8px;
+    gap: 6px;
+  }
+
+  .topbar h1 {
+    font-size: 13px;
+  }
+
+  .brand-logo {
+    width: 20px;
+    height: 20px;
+  }
+
+  .topbar-context {
+    max-width: 42vw;
+    font-size: 10px;
+    padding-left: 7px;
+    padding-right: 5px;
   }
 
   .messages {
@@ -1714,35 +1708,11 @@ button:active {
     font-size: 17px;
   }
 
-  .session-pill {
-    width: 32px;
-    height: 32px;
-    min-width: 32px;
-    padding: 0;
-    justify-content: center;
-    border-radius: 50%;
-  }
-
-  .session-indicator-label {
-    display: none;
-  }
-
-  .session-indicator-chevron {
-    font-size: 18px;
-  }
-
-  .session-indicator-trigger {
-    max-width: 32px;
-  }
-
   .session-dock-panel {
-    left: 50%;
-    top: 50%;
-    right: auto;
-    bottom: auto;
-    transform: translate(-50%, -50%);
-    width: calc(100vw - 24px);
-    max-height: 78vh;
+    left: auto;
+    right: 0;
+    width: min(22rem, calc(100vw - 16px));
+    max-height: 64vh;
   }
 
   .msg {

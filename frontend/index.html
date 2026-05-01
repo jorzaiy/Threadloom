@@ -36,7 +36,18 @@
           <div class="brand-block">
             <h1 id="brandSettingsTrigger" role="button" tabindex="0" title="打开模型连接"><img src="/favicon.svg" alt="Threadloom logo" class="brand-logo" />Threadloom</h1>
           </div>
-          <div id="topbarContext" class="topbar-context" role="button" tabindex="0" title="打开当前世界">user · world</div>
+          <div id="topbarSessionMenu" class="topbar-session-menu">
+            <div id="topbarContext" class="topbar-context" role="button" tabindex="0" aria-haspopup="true" aria-controls="sessionDockPanel" title="切换会话">user · world</div>
+            <div id="sessionDockPanel" class="session-dock-panel" role="menu" aria-labelledby="topbarContext" aria-hidden="true">
+              <div class="session-dock-heading">
+                <div>
+                  <span id="sessionDockTitle">Session</span>
+                  <small>切换、删除或开始新游戏</small>
+                </div>
+              </div>
+              <div id="sessionDockList" class="session-dock-list"></div>
+            </div>
+          </div>
           <div id="authIndicator" class="auth-indicator" hidden>
             <span id="authIndicatorLabel" class="auth-indicator-label"></span>
             <button id="logoutBtn" type="button" class="auth-logout-btn" hidden>登出</button>
@@ -53,17 +64,8 @@
               <div class="composer-status-row">
                 <div id="statusBar" class="status-bar">就绪</div>
                 <div class="topbar-actions bottom-controls">
-                  <div class="session-dock-wrap topbar-session-dock">
-                    <button id="sessionIndicator" class="session-pill session-indicator-trigger" type="button" aria-expanded="false" aria-controls="sessionDockPanel">
-                      <span id="sessionIndicatorLabel" class="session-indicator-label">story-live</span>
-                      <span class="material-symbols-outlined session-indicator-chevron" aria-hidden="true">expand_more</span>
-                    </button>
-                  </div>
                   <button id="debugToggleBtn" class="icon-btn settings-icon-btn" type="button" aria-label="状态面板">
                     <span class="material-symbols-outlined">explore</span>
-                  </button>
-                  <button id="settingsBtn" class="icon-btn settings-icon-btn" type="button" aria-haspopup="dialog" aria-controls="settingsPanel" aria-expanded="false" aria-label="打开设置">
-                    <span class="material-symbols-outlined">settings</span>
                   </button>
                 </div>
               </div>
@@ -77,19 +79,6 @@
       </main>
     </div>
 
-    <div id="sessionBackdrop" class="settings-backdrop" hidden></div>
-    <div id="sessionDockPanel" class="session-dock-panel" role="dialog" aria-modal="true" aria-labelledby="sessionDockTitle" hidden>
-      <div class="session-dock-heading">
-        <div>
-          <span id="sessionDockTitle">Session 管理</span>
-          <small>切换、删除或新建当前角色卡会话</small>
-        </div>
-        <button id="sessionDockCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭 Session 管理">
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>
-      <div id="sessionDockList" class="session-dock-list"></div>
-    </div>
     <div id="debugBackdrop" class="debug-backdrop" hidden></div>
     <aside id="debugFloatPanel" class="debug-float-panel" aria-hidden="true">
       <div class="debug-float-header">
