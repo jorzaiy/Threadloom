@@ -1,0 +1,21 @@
+{
+  "include": ["backend", "tests"],
+  "exclude": [
+    "**/__pycache__",
+    ".venv*",
+    "runtime-data",
+    "tmp"
+  ],
+  "extraPaths": ["backend"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportImplicitRelativeImport": "none",
+  "reportMissingTypeArgument": "none",
+  "reportUnreachable": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnusedImport": "none",
+  "reportUnusedParameter": "none"
+}
