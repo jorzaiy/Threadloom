@@ -375,6 +375,18 @@ http://127.0.0.1:8765
 
 历史迁移 / 实验脚本已清理；当前只保留仍用于调试的 `backend/tools/` 工具。
 
+## 开发与 LSP
+
+当前后端仍按脚本方式运行：开发时从 `backend/` 目录执行 `python3 server.py`，测试时用 `PYTHONPATH=backend` 暴露同级模块。因此 `backend/*.py` 里的 `import user_manager` / `import model_config` 这类导入是运行时契约，不是应立即批量改成包内相对导入的错误。
+
+仓库根目录的 `pyrightconfig.json` 与 `basedpyrightconfig.json` 用于让 Pyright / Basedpyright LSP 匹配这个现实：
+
+- `extraPaths: ["backend"]` 让同级后端模块按脚本入口可解析。
+- `reportImplicitRelativeImport` 关闭，避免把当前脚本式导入误报成项目级错误。
+- 类型检查保持 `basic`，并暂时关闭 unknown / missing type argument 系列噪音；逐步类型化应按模块单独推进，不和运行方式修复混在一起。
+
+长期如果要把后端改成真正 package 运行（例如 `python3 -m backend.server`），应单独迁移启动脚本、测试入口和所有导入，再收紧这些 LSP 规则。
+
 配置模板：
 
 - `config/runtime.example.json`
