@@ -65,7 +65,7 @@
 - 显示当前状态面板
 - 可选显示调试面板
 - 桌面端把状态/调试面板作为右侧抽屉呈现，保持主阅读区纵向空间
-- 移动端隐藏顶部 header，将 session、状态面板、设置入口收进输入区控制行，并把状态面板作为底部弹层
+- 移动端保留输入区状态栏旁的 session 向上箭头入口，上拉显示最近会话菜单；状态面板仍作为底部弹层
 - 状态面板当前跟踪 `main_event / immediate_goal / carryover_signals / scene_entities / tracked_objects / possession_state / object_visibility`，不再把 `active_threads` 作为默认用户可见主面板项目
 
 不负责：

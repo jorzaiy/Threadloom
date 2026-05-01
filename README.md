@@ -261,9 +261,10 @@ config/runtime.json
    - `config/runtime.json -> model_defaults`
  - 高级角色（如 `turn_analyzer / arbiter`）当前不在普通设置页里改，但可以通过 `runtime-data/<user>/config/model-runtime.json -> advanced_models` 手动覆盖；`state_keeper_candidate` 不再单独维护模型，固定继承 State Keeper 模型选择
   - 当前前端会话管理入口：
-    - 点击底部当前会话名，弹出最近会话下拉管理
-    - 显示当前角色卡下最近更新的最多 5 个会话
-    - 下拉中可直接切换、删除、开始新游戏
+    - 桌面端：hover 左上角 `用户 · 当前角色卡` 胶囊菜单，弹出最近会话下拉；点击胶囊仍打开“当前世界”设置
+    - 移动端：点击输入区状态栏旁的向上箭头，从底部上拉最近会话菜单
+    - 两个入口都显示当前角色卡下最近更新的最多 5 个会话
+    - 下拉/上拉菜单中可直接切换、删除、开始新游戏
 
 3. 准备你自己的内容层：
 
