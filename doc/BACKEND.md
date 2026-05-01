@@ -1,5 +1,7 @@
 # Threadloom Backend
 
+**当前版本：v1.0**
+
 第一版后端仍采用 Python 标准库实现，目标是先跑通最小链路，不先引入额外框架依赖。
 
 ## 当前文件
@@ -33,7 +35,7 @@
 - `session_lifecycle.py`：new game / delete / session list
 - `regenerate_turn.py`：partial 回复回滚与重试
 - `tools/replay_turn_trace.py` / `tools/rebuild_session_from_history.py`：当前调试工具，用于单回合精确回放与从历史重建副本 session
-- `user_manager.py`：多用户管理底层保留模块（bcrypt 密码认证、session token 管理），当前产品面默认关闭
+- `user_manager.py`：多用户管理模块（bcrypt 密码认证、session token 管理、登录失败锁定、用户禁用/启用/归档删除、孤儿目录审计、用户生命周期）
 - `object_bootstrap_agent.py`：物品抽取 bootstrap（四策略启发式→LLM判定→merge）
 - `clue_bootstrap_agent.py`：情报抽取 bootstrap（模式匹配→LLM分类→merge）
 - `npc_bootstrap_agent.py`：NPC抽取 bootstrap（对话启发式→LLM分类→merge）
@@ -143,8 +145,8 @@
   - 可切换当前活跃角色卡
   - 可在设置面板内导入新的角色卡
   - 当前默认用户标签固定显示为 `default_user`
-  - 当前阶段不做用户管理，产品面默认仍为单用户 `default-user`
-  - 多用户相关底层代码已保留在 `user_manager.py`，但 `/api/users`、`/api/multi-user`、`/api/auth/login`、`/api/auth/logout` 当前统一视为实验态关闭
+  - 默认仍可作为单用户 `default-user` 使用；启用多用户后，管理员可创建用户、重置密码、禁用/启用用户、归档删除用户并切换多用户模式
+  - `/api/auth/*`、`/api/users`、`/api/multi-user` 是 v1.0 多用户产品面的一部分；state-changing 请求要求 Bearer token，拒绝 Cookie auth
   - `state_keeper_candidate` 当前继承 State Keeper 模型，不再使用 hidden 单独模型配置
   - 三条 bootstrap（NPC/物品/情报）均已通过 LLM 回合测试
 
@@ -160,6 +162,20 @@
 - NPC 与物件绑定当前由 `possession_state` 驱动：标准化层会把 holder 对齐到稳定 NPC 主名，并自动写回 `tracked_objects[].owner / bound_entity_id` 与 `scene_entities[].owned_objects`；新 holder 必须来自当前人物、scene entity、actor registry 或 protagonist aliases，非法 holder 不覆盖旧合法归属
 - object 层支持 `lifecycle_status: active | consumed | destroyed | lost | archived`；非 active 物件会从 active `tracked_objects / possession_state / object_visibility` 退出，并写入 `graveyard_objects` 防止后续幻觉复活
 - turn_analyzer 可在 narrator 不变前提下评估是否跟着切本地
+
+## 多用户后端安全边界
+
+当前多用户仍是本地优先产品面，不按 SaaS 平台设计，但后端已做以下边界：
+
+- 账号注册表是 `runtime-data/_system/users.json`；登录与用户列表以该文件为准，单纯存在 `runtime-data/<name>/` 目录不代表可登录账号。
+- Session token 存在 `runtime-data/_system/sessions.json`，仅保存 token hash；token TTL 为 7 天。
+- `validate_token()` 会确认 token 指向的用户仍在账号注册表中且未被禁用；已删除或已禁用用户的残留 token 会被拒绝并从 sessions 中移除。
+- 每个用户最多保留 10 个活跃 token；新登录超过上限时按 `last_seen_at / created_at` 淘汰最旧 token，异常时间戳按最旧处理，避免坏 session 元数据阻断登录。
+- `disable_user()` 只标记普通用户 `disabled_at` 并撤销其全部 token，不移动数据目录；`enable_user()` 清除禁用标记。
+- `delete_user()` 是归档删除：先把 `runtime-data/<user>/` 移动到 `runtime-data/_system/deleted-users/<user>-<timestamp>`，成功后才删除账号记录和 sessions；如果移动失败，账号和 token 保持不变，方便重试或人工处理。
+- `list_user_storage_audit()` 会返回 `orphan_dirs / missing_dirs / deleted_archives` 给管理员，用于发现未注册但仍存在的数据目录；后端不会自动删除或自动恢复这些目录。
+- `server.py` 对 `/api/auth/login` 做进程内 per-IP 与全局窗口限速；这只降低本地服务的暴力尝试成本，公网/反代部署仍应在代理层限流。
+- `startup_security_check()` 在后端启动时收紧 `_system/users.json` 与 `_system/sessions.json` 权限到 `0600`、清理过期 session，并在多用户模式监听非 loopback 地址时记录告警。
 
 当前 keeper 调教样本分工：
 
@@ -184,13 +200,13 @@
     - 事件标签
     - 假人物过滤
 
-## 角色卡导入 v0.3
+## 角色卡导入 v1.0
 
 当前推荐的角色卡导入产物已经改成分层结构，而不是把 Tavern 原字段直接散落到运行时文件：
 
 - `character-data.json`
   - 角色核心、简介、来源信息、精简系统摘要
-  - 从 v0.4.2 起完整保留以下 v2/v3 字段：`nickname`、`mes_example`、
+  - v1.0 完整保留以下 SillyTavern v2/v3 字段：`nickname`、`mes_example`、
     `post_history_instructions`、`tags`、`character_version`、
     `talkativeness`、`creator_notes_multilingual`、`extensions`
   - `source` 子字段记录 `creator`、`creation_date`、`modification_date`
@@ -200,7 +216,7 @@
   - 规范化世界书条目，导入器为每条补 `entryType / runtimeScope / featured`
   - 区分：foundation（底板规则/世界观）、situational（场景相关）、
     NPC / cast / faction 可调入层
-  - 从 v0.4.2 起完整保留 SillyTavern 字段：`selective`、`selectiveLogic`、
+  - v1.0 完整保留 SillyTavern 字段：`selective`、`selectiveLogic`、
     `position`、`depth`、`probability`、`useProbability`、
     `caseSensitive`、`matchWholeWords`、`group`、`groupOverride`、
     `groupWeight`、`vectorized`、`disable`、`extensions`、`secondary_keywords`
@@ -221,7 +237,7 @@
     - `core`：最明确、最值得直接进入运行时的人物
     - `faction_named`：势力条目中的命名人物
     - `roster`：更边缘的命名人物
-    - `items`：上述三个桶的合并（**包含 roster**，从 v0.4.2 起修复，
+    - `items`：上述三个桶的合并（**包含 roster**，v1.0 保证，
       之前 roster 被静默丢弃）
   - 英文/拉丁文角色卡的内嵌 NPC 由 `_extract_embedded_npcs_latin` 兜底识别
 - `import-manifest.json`
@@ -331,9 +347,9 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 
 另在 `card_importer.py` 中新增 `_truncate()` 辅助函数，当字段被截断时自动输出 WARNING 日志，便于排查导入精度问题。
 
-### 角色卡导入审查与修复（v0.4.2）
+### 角色卡导入审查与修复（v1.0 前历史记录）
 
-详见 `doc/audit/CARD-IMPORT-AUDIT.md`。本次修复主要解决三类问题：
+详见 `doc/archive/history/CARD-IMPORT-AUDIT.md`。本次修复主要解决三类问题：
 
 1. **数据丢失**：`system_npcs.items` 漏放 `roster`、SillyTavern v2/v3 大量字段未读、
    `personality` 截到 240 字符。
@@ -353,7 +369,7 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - **角色卡缩略图缓存**：移除了 `?t=${Date.now()}` cache-buster，启用浏览器缓存和 `loading="lazy"`
 - **角色卡切换**：添加了 error handling 和自动关闭设置面板
 
-### 角色卡导入修复（v0.4.3）
+### 角色卡导入修复（v1.0 前历史记录）
 
 - **嵌套 JSON 世界书展开**：部分 Tavern 卡会把真正的世界书写在外层条目的
   `content` JSON-like blob 的 `entries[]` 里，且字符串内含未转义换行。导入器现在会宽松解析这类结构，展开为正常 `lorebook.json` 条目，并标注 `source_kind: embedded_lorebook_json`。
@@ -363,14 +379,14 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - **管理卡片短简介**：导入器会生成 `displaySummary`，角色卡管理优先展示这份清洗后的短简介，避免把作者指令、人际模板、状态栏、YAML 人物细节直接显示在卡片下方。
 - **测试覆盖**：`tests/test_card_importer.py` 已补充嵌套世界书、disabled 条目过滤、显式 NPC 模板占位符、管理卡片短简介等回归测试；当前导入器相关测试为 `36 passed`。
 
-### 前端交互修复（v0.4.3）
+### 前端交互修复（v1.0 前历史记录）
 
 - 顶部 header 改为左上角浮动胶囊，只保留 logo / `Threadloom` / 当前用户与角色卡，窄屏与移动端隐藏，减少对正文区域的占用。
 - 设置面板重组为 `当前世界 / 导入资产 / 玩家设定 / 模型连接`：当前世界内直接列出角色卡管理、Session 管理和聊天记录导入；导入资产只处理角色卡导入。
 - 胶囊内 `Threadloom` 打开模型连接；当前用户/世界区域打开当前世界页签。窄屏与移动端隐藏胶囊。
 - Session 管理弹层已移出 composer 表单，新增关闭按钮，并修复点击快捷入口后被全局点击监听立刻关闭的问题；当前世界页签也内嵌会话列表，可直接切换、删除或新建会话。
 
-### 世界书蒸馏回归（v0.4.4）
+### 世界书蒸馏回归（v1.0 前历史记录）
 
 - `state_keeper_candidate` 已收敛为继承 State Keeper 模型，不再使用 hidden advanced 模型覆盖。
 - 四张当前角色卡均已重建 `lorebook-foundation.json` / `lorebook-index.json`，产物 `provider: llm`。

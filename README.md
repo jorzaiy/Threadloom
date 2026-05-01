@@ -1,5 +1,7 @@
 # Threadloom
 
+**当前版本：v1.0**
+
 Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web 应用。
 
 它的核心思路不是把聊天记录当成唯一真相源，而是把这些层作为主事实面：
@@ -19,7 +21,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 
 ## 当前定位
 
-当前目标是先把“单用户、本地可用、角色卡可替换”的 RP runtime 做完整，而不是立刻做成多租户平台。
+当前 v1.0 目标是把“本地可用、角色卡可替换、可选多用户”的 RP runtime 做成稳定主线，而不是把它扩展成通用 SaaS 平台。
 
 当前边界：
 - 默认即单用户模式，与之前体验一致
@@ -47,12 +49,12 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - API Key 支持环境变量引用（`$VAR` 或 `env:VAR`）
 - API 韧性：模型调用自动重试 429/503 错误（指数退避，最多 3 次，尊重 `Retry-After`）
 - 安全加固：后端默认仅监听 `127.0.0.1`，API 响应带基础安全头，请求体有大小上限，provider URL 会阻止常见 SSRF 目标
-- 多用户模式（可选启用）：管理员密码 + bcrypt 校验、登录失败计数与锁定（5 次失败锁 15 分钟）、Bearer token 认证（7 天 TTL，state-changing 拒绝 Cookie auth）、IP-pinned 出站连接防 DNS-rebinding、per-user session/character 配额、自助改密、用户管理与多用户开关向导
+- 多用户模式（可选启用）：管理员密码 + bcrypt 校验、登录失败计数与锁定（5 次失败锁 15 分钟）、进程内登录限速、Bearer token 认证（7 天 TTL，按用户限制活跃 token 数，state-changing 拒绝 Cookie auth）、IP-pinned 出站连接防 DNS-rebinding、per-user session/character 配额、自助改密、用户禁用/启用/归档删除、孤儿数据目录提示、用户管理与多用户开关向导
 - 原子文件写入：所有 state/archive 写入防崩溃/断电数据损坏
 - 结构化知情边界：`knowledge_scope` 独立追踪主角和各 NPC 已知信息，替代纯文本软约束
 - 线程生命周期管理：按类型分级保留、`cooling_down` 过渡态、`resolved_events` 归档
 - turn trace 支持通过 `trace.enabled` 和 `trace.keep_last_turns` 控制是否落盘及保留数量
-- 角色卡导入已开始切到 `v0.3` 产物结构：
+- 角色卡导入采用 v1.0 分层产物结构：
   - `character-data.json`
   - `lorebook.json`
   - `openings.json`
@@ -116,7 +118,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - history 缓存按实际 `history.jsonl` 路径隔离，不再只按 `session_id` 复用
 - persona seed 默认只读取当前角色卡 source 与 session-local 层，不再静默回退到共享 `runtime/persona-seeds`
 - 当前默认且唯一用户会显示为 `default_user`
-- 启用多用户模式后，管理员可在设置面板创建普通用户、重置密码或删除账号
+- 启用多用户模式后，管理员可在设置面板创建普通用户、重置密码、禁用/启用账号或归档删除账号
 
 ## 多用户模式
 
@@ -143,7 +145,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 | 角色卡导入 / 切换 | ✅ 不限 | ✅ 上限 10 张 |
 | Session 创建 | ✅ 不限 | ✅ 每角色卡上限 50 |
 | 自助改密 | ✅ | ✅ |
-| 用户管理（创建 / 重置密码 / 删除） | ✅ | ❌ |
+| 用户管理（创建 / 重置密码 / 禁用 / 启用 / 归档删除） | ✅ | ❌ |
 | 多用户模式 toggle | ✅ | ❌ |
 
 普通用户的 site 路径在后端真正全局：`runtime-data/default-user/config/site.json` 是唯一来源，普通用户调 `/api/site-config POST` 直接 403。
@@ -152,9 +154,15 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 
 - Token 存储：`localStorage['tl_session_token']`，TTL 7 天，与服务端一致
 - 传输：`Authorization: Bearer <token>` 头，state-changing 请求（POST/DELETE/PUT）拒绝 Cookie auth 防 CSRF
+- Session 校验：服务端只接受仍存在且未禁用用户的 token；每个用户最多保留 10 个活跃 token，超过后淘汰最旧 token
 - 登录失败计数：连续 5 次错误密码自动锁 15 分钟，成功登录或 admin 重置密码立即清零
+- 登录限速：后端对登录请求做进程内 per-IP 与全局窗口限速，降低暴力尝试成本；该限速不替代反向代理或公网部署时的外部限流
 - 用户枚举：登录路径在用户不存在时也跑一次 dummy bcrypt，使响应时间不可区分
 - 自助改密：保留当前 token，撤销该用户其他设备所有 token
+- 用户禁用：管理员禁用普通用户时立即撤销该用户全部 token，但保留其 `runtime-data/<user>/` 数据目录；重新启用后可继续使用原数据
+- 归档删除：管理员归档删除普通用户时，后端会先把用户目录移动到 `runtime-data/_system/deleted-users/`，成功后才删除账号记录和 sessions；若归档移动失败，账号与 token 保持原状，避免半删除状态
+- 孤儿目录提示：用户管理接口会对比 `runtime-data/*` 与 `_system/users.json`，向管理员提示未注册的用户形态目录；不会自动删除或自动收养这些目录
+- 启动检查：后端启动时会收紧 `_system/users.json` / `_system/sessions.json` 权限到 `0600`、清理过期 session，并在多用户模式绑定非 loopback 地址时记录告警
 - 出站请求（site discovery / model 调用）走 `safe_http`：先解析 IP 再连接，每条记录都拒绝 loopback / 私网 / link-local，杜绝 DNS-rebinding
 
 ### 忘记管理员密码
@@ -352,7 +360,7 @@ http://127.0.0.1:8765
 
 ## 文档
 
-建设和设计文档已经移到 `doc/`：
+建设和设计文档保留在 `doc/` 根目录；已完成计划、旧版本说明和过时审计集中归档到 `doc/archive/`：
 
 - `doc/API.md`
 - `doc/ARCHITECTURE.md`
@@ -361,6 +369,7 @@ http://127.0.0.1:8765
 - `doc/OPERATIONS.md`
 - `doc/REVIEW.md`
 - `doc/RUNTIME.md`
+- `doc/archive/README.md`
 
 ## 常用脚本
 
@@ -403,12 +412,9 @@ http://127.0.0.1:8765
 ## 📚 相关文档
 
 ### 核心文档
-- **[doc/audit/KEEPER_SUMMARY_FIX.md](doc/audit/KEEPER_SUMMARY_FIX.md)** - Keeper Summary 修复详情
-- **[doc/audit/PERFORMANCE_OPTIMIZATION.md](doc/audit/PERFORMANCE_OPTIMIZATION.md)** - 性能优化总结
-- **[doc/audit/DOC_AUDIT_REPORT.md](doc/audit/DOC_AUDIT_REPORT.md)** - 文档一致性审查报告
 - **[doc/audit/SECURITY_AUDIT_2026-04-29.md](doc/audit/SECURITY_AUDIT_2026-04-29.md)** - 安全审计与修复记录
 - **[doc/audit/ISOLATION_AND_KEEPER_FIX_2026-04-30.md](doc/audit/ISOLATION_AND_KEEPER_FIX_2026-04-30.md)** - 信息隔离与 keeper 写入路径加固
 - **[doc/audit/MULTI_USER_HARDENING_2026-05-01.md](doc/audit/MULTI_USER_HARDENING_2026-05-01.md)** - 多用户后端安全加固（SSRF 防护、登录限速、Cookie/CSRF 边界、per-user 配额）
 - **[doc/audit/RUNTIME_GENERICITY_AND_TRACE_2026-05-01.md](doc/audit/RUNTIME_GENERICITY_AND_TRACE_2026-05-01.md)** - runtime 泛化、对象流转与 turn audit 可观察性整理
-- **[doc/MULTI_USER_UI_PLAN.md](doc/MULTI_USER_UI_PLAN.md)** - 多用户 UI 实施计划（七项决策、用户流程、后端/前端切片、手动验证清单）
 - **[doc/audit/MULTI_USER_UI_SHIPPED_2026-05-01.md](doc/audit/MULTI_USER_UI_SHIPPED_2026-05-01.md)** - 多用户 UI 上线记录（与 plan 的差异、commit 索引、未做项）
+- **[doc/archive/README.md](doc/archive/README.md)** - 已完成计划、旧版本说明、过时/重复审计和历史测试报告的归档索引

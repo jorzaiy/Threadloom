@@ -1,5 +1,7 @@
 # Threadloom API
 
+**当前版本：v1.0**
+
 ## 概览
 
 当前已实现的接口：
@@ -42,12 +44,72 @@
 当前未实现但文档中偶尔会提到的接口：
 - `POST /api/admin/adjust`
 
-当前存在但默认视为实验态关闭的接口：
+当前多用户接口：默认单用户模式下不强制登录；管理员启用多用户后进入正式认证/用户管理流程。
 - `GET /api/auth/me`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
 - `GET/POST /api/users`
 - `POST /api/multi-user`
+
+## Multi-user API notes
+
+- 多用户关闭时，业务接口默认解析为 `default-user`，不强制登录。
+- 多用户开启后，除公开路径外都需要有效 token；POST/DELETE/PUT 等 state-changing 请求只接受 `Authorization: Bearer <token>`，不接受 Cookie token。
+- `POST /api/auth/login` 受后端进程内 per-IP 与全局窗口限速；超过窗口返回 `429 RATE_LIMITED`。
+- token 只对仍存在且未禁用的账号有效；管理员禁用或删除账号后，残留 token 会被拒绝。
+
+### GET /api/users
+
+管理员专用。返回当前账号列表、多用户开关状态，以及用户数据目录审计信息。
+
+```json
+{
+  "users": [
+    {
+      "user_id": "default-user",
+      "role": "admin",
+      "created_at": 1710000000,
+      "has_password": true,
+      "disabled": false,
+      "disabled_at": 0
+    }
+  ],
+  "storage": {
+    "orphan_dirs": [],
+    "missing_dirs": [],
+    "deleted_archives": []
+  },
+  "multi_user_enabled": true
+}
+```
+
+`storage.orphan_dirs` 表示存在于 `runtime-data/`、但不在 `_system/users.json` 中注册的用户形态目录；接口只报告，不自动删除或恢复。
+
+### POST /api/users
+
+管理员专用；首次单用户 bootstrap 设置管理员密码仍走既有例外路径。
+
+支持的 `action`：
+
+- `create`：创建普通用户，字段：`user_id`、`password`
+- `reset_password`：重置普通用户密码，字段：`user_id`、`password`
+- `set_admin_password`：设置或更新 `default-user` 管理员密码，字段：`password`
+- `disable`：禁用普通用户并撤销其全部 token，字段：`user_id`，可选 `reason`
+- `enable`：重新启用普通用户，字段：`user_id`
+- `delete`：归档删除普通用户，字段：`user_id`
+
+`delete` 会先把 `runtime-data/<user>/` 移动到 `runtime-data/_system/deleted-users/<user>-<timestamp>`，成功后才删除账号记录和 sessions；如果移动失败，账号和 token 保持原状。
+
+### POST /api/multi-user
+
+管理员专用。启用或关闭多用户模式，并清空所有 sessions。请求必须包含管理员密码，后端会在切换前重新验证。
+
+```json
+{
+  "enabled": true,
+  "password": "admin-password"
+}
+```
 
 ## GET /api/site-config
 

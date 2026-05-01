@@ -1,5 +1,7 @@
 # Operations
 
+**当前版本：v1.0**
+
 ## 定位
 
 这个文件记录 `Threadloom` 当前原型的实际使用方式、调试习惯和边界，不是系统主配置。
@@ -156,8 +158,12 @@ cd /root/Threadloom/backend
 - 当前用户模型/站点文件：
   - `runtime-data/default-user/config/site.json`
   - `runtime-data/default-user/config/model-runtime.json`
-- 当前产品面仍以单用户 `default-user` 为正式入口；多用户底层代码保留，但默认不在前端和 API 产品面暴露
-- `/api/auth/login`、`/api/auth/logout`、`/api/users`、`/api/multi-user` 当前在产品面统一返回实验态关闭
+- 默认产品面仍可按单用户 `default-user` 使用；启用多用户后，前端和 API 会进入正式认证/用户管理流程
+- `/api/auth/login`、`/api/auth/logout`、`/api/users`、`/api/multi-user` 是 v1.0 多用户流程的一部分；state-changing 请求使用 Bearer token
+- 多用户运维以 `runtime-data/_system/users.json` 为账号真相源；`runtime-data/<user>/` 目录只表示数据存在，不等于可登录账号
+- 管理员禁用普通用户会保留 `runtime-data/<user>/`，但立即撤销该用户所有 token；归档删除会把目录移动到 `runtime-data/_system/deleted-users/` 后再删除账号记录
+- 用户管理页会提示 orphan user dirs 与 deleted archives；这些提示用于人工判断历史/测试残留，不会自动清理
+- 启动时后端会把 `_system/users.json` 与 `_system/sessions.json` 权限收紧到 `0600` 并 prune 过期 sessions
 - 当前设置页已简化为单站点模式：
   - 用户只维护一个站点 URL / API Key / API 类型
   - 先点“获取模型”
@@ -286,7 +292,7 @@ http://127.0.0.1:8765
 - state snapshot 现在直接给前端 `onstage_entities / relevant_entities`
 - `default_debug / show_debug_panel / history_page_size` 已从配置贯通到 API 和前端
 - 前端消息区支持通过“加载更早记录”按钮向上分页，不再只看最后一页
-- 当前浮动状态面板更适合作为 `v0.3` 结构状态视图：
+- 当前浮动状态面板是 v1.0 结构状态视图：
   - 时间 / 地点硬锚点
   - 主要事件
   - 在场 / 相关 / 重要 NPC
