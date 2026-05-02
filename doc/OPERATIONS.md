@@ -148,7 +148,7 @@ cd /root/Threadloom/backend
 
 说明：
 - `backend/start.sh` 会自动加载 `/root/Threadloom/.env.local`
-- 后端默认只监听 `127.0.0.1:8765`。如需远程访问，应通过可信反向代理暴露，不建议直接改成公网监听。
+- 后端默认只监听 `127.0.0.1:8765`，可用 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖；如需远程访问，应通过可信反向代理暴露，不建议直接改成公网监听。
 - 推荐把真实密钥只放在 `.env.local`，`config/*.json` 中使用 `env:VAR` 引用
 - 修改站点 URL 时若没有重新输入 API Key，运行时会清空旧密钥，避免旧 key 被转发到新 endpoint。
 - 远程 provider URL 必须使用 HTTPS；本机模型服务可继续使用 `localhost` / `127.0.0.1`。
@@ -200,6 +200,12 @@ curl http://127.0.0.1:8765/api/health
 
 ```text
 http://127.0.0.1:8765
+```
+
+自定义监听地址示例：
+
+```bash
+THREADLOOM_HOST=127.0.0.1 THREADLOOM_PORT=9001 ./start.sh
 ```
 
 ## 当前可用能力
