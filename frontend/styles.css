@@ -361,11 +361,11 @@ button:active {
   display: flex;
   flex-direction: column;
   gap: 28px;
-  padding: 48px 28px 24px;
+  padding: 60px 28px 24px;
   min-height: 0;
   scroll-padding-bottom: 140px;
-  mask-image: linear-gradient(to bottom, transparent 0%, black 24px, black calc(100% - 24px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 24px, black calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, transparent 32px, black 52px, black calc(100% - 24px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 32px, black 52px, black calc(100% - 24px), transparent 100%);
 }
 
 .history-toolbar {
@@ -1685,11 +1685,6 @@ button:active {
     max-width: calc(100vw - 24px);
     left: 12px;
   }
-
-  .messages {
-    padding-top: 10px;
-  }
-
 }
 
 @media (max-width: 720px) {
@@ -1722,10 +1717,10 @@ button:active {
   }
 
   .messages {
-    padding: 10px 0 16px;
+    padding: 48px 0 16px;
     gap: 18px;
-    mask-image: linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, transparent 28px, black 44px, black calc(100% - 16px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 28px, black 44px, black calc(100% - 16px), transparent 100%);
   }
 
   .composer {
@@ -2389,5 +2384,18 @@ button:active {
 
   .character-manage-card {
     flex: 0 0 85%; /* on mobile show 1 card + peeking */
+  }
+
+  .settings-body {
+    padding: 16px 16px 24px;
+  }
+
+  .settings-main {
+    position: static;
+  }
+
+  .settings-main-header {
+    top: 16px;
+    right: 16px;
   }
 }
