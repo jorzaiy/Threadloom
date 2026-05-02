@@ -61,7 +61,7 @@ body {
   border-right: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 0px;
   height: 100vh;
   min-height: 0;
   background:
@@ -361,9 +361,11 @@ button:active {
   display: flex;
   flex-direction: column;
   gap: 28px;
-  padding: 48px 28px 0;
+  padding: 48px 28px 24px;
   min-height: 0;
   scroll-padding-bottom: 140px;
+  mask-image: linear-gradient(to bottom, transparent 0%, black 24px, black calc(100% - 24px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 24px, black calc(100% - 24px), transparent 100%);
 }
 
 .history-toolbar {
@@ -632,7 +634,7 @@ button:active {
   background: rgba(255, 253, 248, 0.74);
   padding: 22px 24px;
   border-left: 2px solid rgba(64, 82, 69, 0.16);
-  border-radius: 0 18px 18px 0;
+  border-radius: 18px;
   box-shadow: var(--shadow-soft);
 }
 
@@ -727,19 +729,20 @@ button:active {
 
 .composer {
   display: block;
-  padding: 10px 28px 0;
-  position: sticky;
-  bottom: 0;
-  background: linear-gradient(180deg, rgba(244, 241, 234, 0) 0%, rgba(244, 241, 234, 0.96) 22%, rgba(244, 241, 234, 1) 100%);
+  padding: 0 28px 12px;
+  position: relative;
   z-index: 18;
+  pointer-events: none;
 }
 
 .composer-shell {
+  pointer-events: auto;
   width: min(100%, var(--reading-width));
   margin: 0 auto;
   border: 1px solid rgba(127, 109, 91, 0.16);
   border-radius: 22px;
-  background: rgba(255, 251, 245, 0.84);
+  background: rgba(255, 251, 245, 0.75);
+  backdrop-filter: blur(14px);
   box-shadow: var(--shadow);
   padding: 14px 16px 12px;
 }
@@ -914,7 +917,7 @@ button:active {
   padding: 10px 16px;
   background: rgba(255, 253, 248, 0.74);
   border-left: 1px solid rgba(69, 88, 73, 0.18);
-  border-radius: 0 4px 4px 0;
+  border-radius: 12px;
 }
 
 .typing-indicator-label {
@@ -1719,18 +1722,22 @@ button:active {
   }
 
   .messages {
-    padding: 10px 0 0;
+    padding: 10px 0 16px;
     gap: 18px;
+    mask-image: linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%);
   }
 
   .composer {
-    padding: 4px 0 6px;
-    background: linear-gradient(180deg, rgba(244, 241, 234, 0) 0%, rgba(244, 241, 234, 0.98) 26%, rgba(244, 241, 234, 1) 100%);
+    padding: 0 0 8px;
+    background: transparent;
   }
 
   .composer-shell {
     border-radius: 16px;
     padding: 8px 10px 8px;
+    background: rgba(255, 251, 245, 0.85);
+    backdrop-filter: blur(14px);
   }
 
   .composer textarea {
@@ -2229,74 +2236,158 @@ button:active {
 .settings-panel {
   display: flex;
   flex-direction: row;
+  overflow: hidden;
 }
+
 .settings-sidebar {
-  width: 250px;
-  border-right: 1px solid var(--border);
+  width: 240px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  padding: var(--spacing-xl);
+  background: rgba(240, 235, 225, 0.4);
+  border-right: 1px solid var(--border);
 }
+
 .settings-main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-}
-.settings-main-header {
-  display: flex;
-  justify-content: flex-end;
-  padding: var(--spacing-lg) var(--spacing-xl) 0;
-}
-.settings-tabs {
-  flex-direction: column;
-  border-bottom: none;
-  gap: var(--spacing-xs);
-  margin-top: var(--spacing-xl);
-}
-.settings-tab-btn {
-  justify-content: flex-start;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border-bottom: none;
-  border-left: 2px solid transparent;
-}
-.settings-tab-btn[aria-selected="true"] {
-  border-bottom: none;
-  border-left: 2px solid var(--primary);
-  background: var(--surface-2);
+  position: relative;
+  min-width: 0;
 }
 
+.settings-main-header {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 16px 24px;
+  border-bottom: 0;
+}
+
+.settings-tab-btn {
+  position: relative;
+  padding: 12px 16px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--primary);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 160ms ease;
+  text-align: left;
+}
+
+.settings-tab-btn:hover {
+  background: rgba(127, 109, 91, 0.08);
+  color: var(--text);
+}
+
+.settings-tab-btn[aria-selected='true'] {
+  background: rgba(127, 109, 91, 0.12);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.settings-tab-btn[aria-selected='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  background: var(--primary);
+  border-radius: 0 4px 4px 0;
+}
+
+/* Character Carousel styling */
 .character-carousel-wrap {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: 12px;
   position: relative;
 }
+
 .character-manage-grid {
   display: flex;
   overflow-x: auto;
   scroll-behavior: smooth;
   flex-wrap: nowrap;
   flex: 1;
-  gap: var(--spacing-md);
+  gap: 14px;
   scrollbar-width: none; /* firefox */
 }
+
 .character-manage-grid::-webkit-scrollbar {
   display: none; /* webkit */
 }
+
+.character-manage-card {
+  flex: 0 0 calc(50% - 7px); /* show exactly 2 items if gap is 14px */
+  min-width: 200px;
+}
+
 .carousel-btn {
-  background: var(--surface-2);
+  background: var(--surface-high);
   border: 1px solid var(--border);
   border-radius: 50%;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: var(--text-2);
+  color: var(--text-soft);
+  flex-shrink: 0;
+  transition: background 150ms ease, color 150ms ease;
 }
+
 .carousel-btn:hover {
-  background: var(--surface-3);
-  color: var(--text-1);
+  background: var(--surface-variant);
+  color: var(--text);
+}
+
+@media (max-width: 600px) {
+  .settings-panel {
+    flex-direction: column;
+  }
+  
+  .settings-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  
+  .settings-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 0 16px 12px;
+  }
+  
+  .settings-tab-btn {
+    white-space: nowrap;
+  }
+  
+  .settings-tab-btn[aria-selected='true']::before {
+    left: 8px;
+    right: 8px;
+    bottom: 0;
+    top: auto;
+    height: 3px;
+    width: auto;
+    border-radius: 4px 4px 0 0;
+  }
+
+  .character-manage-card {
+    flex: 0 0 85%; /* on mobile show 1 card + peeking */
+  }
 }

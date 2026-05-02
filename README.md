@@ -37,7 +37,9 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 
 ## 当前能力
 
-- Web UI 聊天与侧栏状态展示
+- 经过全面翻新优化的 Web UI：
+  - 左侧边栏式高级设置面板，集成角色卡切换（水平轮播卡片）
+  - 聊天气泡及输入框采用毛玻璃（blur）质感悬浮设计，列表边缘支持优雅渐变淡出
 - 多 session 切换、新游戏、删除会话、partial regenerate
 - narrator / analyzer / keeper 分模
 - session-local `state / summary / persona / threads / important_npcs`

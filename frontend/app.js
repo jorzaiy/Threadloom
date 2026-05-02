@@ -868,8 +868,28 @@ function closeProfileEditor() {
 
 function renderCharacterManageGrid() {
   if (!characterManageGrid) return;
+  
+  const prevBtn = document.getElementById('charCarouselPrev');
+  const nextBtn = document.getElementById('charCarouselNext');
+  if (prevBtn && nextBtn) {
+    if (characterItems.length <= 2) {
+      prevBtn.style.display = 'none';
+      nextBtn.style.display = 'none';
+    } else {
+      prevBtn.style.display = 'flex';
+      nextBtn.style.display = 'flex';
+    }
+  }
+
   characterManageGrid.innerHTML = '';
-  for (const item of characterItems) {
+  
+  const sortedItems = [...characterItems].sort((a, b) => {
+    if (a.active && !b.active) return -1;
+    if (!a.active && b.active) return 1;
+    return 0;
+  });
+
+  for (const item of sortedItems) {
     const card = document.createElement('section');
     card.className = 'character-manage-card';
     if (item.active) card.dataset.active = 'true';
