@@ -44,8 +44,11 @@ from user_manager import (
 )
 
 
-HOST = '127.0.0.1'
-PORT = 8765
+HOST = os.environ.get('THREADLOOM_HOST', '127.0.0.1') or '127.0.0.1'
+try:
+    PORT = int(os.environ.get('THREADLOOM_PORT', '8765') or 8765)
+except ValueError:
+    PORT = 8765
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 MAX_CHAT_IMPORT_BYTES = 16 * 1024 * 1024

@@ -15,7 +15,10 @@ fi
 
 PID_FILE="$DIR/threadloom.pid"
 LOG_FILE="$DIR/threadloom.log"
-HEALTH_URL="http://127.0.0.1:8765/api/health"
+THREADLOOM_HOST="${THREADLOOM_HOST:-127.0.0.1}"
+THREADLOOM_PORT="${THREADLOOM_PORT:-8765}"
+export THREADLOOM_HOST THREADLOOM_PORT
+HEALTH_URL="http://${THREADLOOM_HOST}:${THREADLOOM_PORT}/api/health"
 
 MODE="foreground"
 if [[ "${1:-}" == "--daemon" ]]; then
@@ -50,5 +53,5 @@ if [[ "$MODE" == "daemon" ]]; then
   exit 0
 fi
 
-echo "threadloom backend starting in foreground on http://127.0.0.1:8765"
+echo "threadloom backend starting in foreground on http://${THREADLOOM_HOST}:${THREADLOOM_PORT}"
 exec python3 server.py
