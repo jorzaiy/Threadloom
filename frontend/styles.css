@@ -1339,6 +1339,7 @@ button:active {
 }
 
 .settings-panel {
+  display: flex;
   position: fixed;
   top: 50%;
   left: 50%;
@@ -1350,7 +1351,7 @@ button:active {
   box-shadow: 0 24px 70px rgba(33, 29, 25, 0.18);
   z-index: 80;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   transform: translate(-50%, -46%) scale(0.98);
   opacity: 0;
   pointer-events: none;
@@ -1829,6 +1830,7 @@ button:active {
   }
 
   .settings-panel {
+  display: flex;
     width: calc(100vw - 24px);
     max-width: calc(100vw - 24px);
     height: 82vh;
@@ -2222,4 +2224,79 @@ button:active {
   margin: 0;
   color: var(--text-muted);
   font-size: 0.9rem;
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: row;
+}
+.settings-sidebar {
+  width: 250px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-xl);
+}
+.settings-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.settings-main-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--spacing-lg) var(--spacing-xl) 0;
+}
+.settings-tabs {
+  flex-direction: column;
+  border-bottom: none;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-xl);
+}
+.settings-tab-btn {
+  justify-content: flex-start;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: none;
+  border-left: 2px solid transparent;
+}
+.settings-tab-btn[aria-selected="true"] {
+  border-bottom: none;
+  border-left: 2px solid var(--primary);
+  background: var(--surface-2);
+}
+
+.character-carousel-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  position: relative;
+}
+.character-manage-grid {
+  display: flex;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  flex-wrap: nowrap;
+  flex: 1;
+  gap: var(--spacing-md);
+  scrollbar-width: none; /* firefox */
+}
+.character-manage-grid::-webkit-scrollbar {
+  display: none; /* webkit */
+}
+.carousel-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-2);
+}
+.carousel-btn:hover {
+  background: var(--surface-3);
+  color: var(--text-1);
 }

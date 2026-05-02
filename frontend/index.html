@@ -135,28 +135,35 @@
           </details>
         </section>
       </div>
+        </div>
     </aside>
 
     <div id="settingsBackdrop" class="settings-backdrop" hidden></div>
     <aside id="settingsPanel" class="settings-panel" aria-hidden="true">
+    <div class="settings-sidebar">
       <div class="settings-header">
         <div>
           <p class="settings-kicker">Settings</p>
           <h2>运行设置</h2>
         </div>
-        <button id="settingsCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭设置">
-          <span class="material-symbols-outlined">close</span>
-        </button>
+        
       </div>
 
       <!-- Settings Tab Bar -->
       <nav class="settings-tabs" role="tablist">
         <button class="settings-tab-btn" type="button" role="tab" aria-selected="true" data-tab="world">当前世界</button>
-        <button class="settings-tab-btn" type="button" role="tab" aria-selected="false" data-tab="import">导入资产</button>
+        
         <button class="settings-tab-btn" type="button" role="tab" aria-selected="false" data-tab="user">玩家设定</button>
         <button class="settings-tab-btn" type="button" role="tab" aria-selected="false" data-tab="connection">模型连接</button>
         <button class="settings-tab-btn" type="button" role="tab" aria-selected="false" data-tab="account">账号</button>
       </nav>
+    </div>
+    <div class="settings-main">
+      <div class="settings-main-header">
+        <button id="settingsCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭设置">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
 
       <div class="settings-body">
           <!-- Tab: 当前世界 -->
@@ -166,7 +173,13 @@
                 <h3>当前世界</h3>
                 <p>切换当前角色卡，查看导入后的角色资产。</p>
               </div>
-              <div id="characterManageGrid" class="character-manage-grid"></div>
+              
+              <div class="character-carousel-wrap">
+                <button id="charCarouselPrev" class="carousel-btn prev-btn" type="button"><span class="material-symbols-outlined">chevron_left</span></button>
+                <div id="characterManageGrid" class="character-manage-grid"></div>
+                <button id="charCarouselNext" class="carousel-btn next-btn" type="button"><span class="material-symbols-outlined">chevron_right</span></button>
+              </div>
+
               <div id="characterManageNote" class="inline-feedback"></div>
             </section>
 
@@ -388,6 +401,7 @@
           </div>
 
       </div>
+        </div>
     </aside>
 
     <div id="profileEditorBackdrop" class="settings-backdrop" hidden></div>
@@ -412,6 +426,7 @@
         </div>
         <div id="profileEditorNote" class="inline-feedback"></div>
       </div>
+        </div>
     </aside>
 
     <div id="passwordPromptBackdrop" class="settings-backdrop" hidden></div>

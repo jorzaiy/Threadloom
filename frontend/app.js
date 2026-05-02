@@ -3001,3 +3001,18 @@ document.addEventListener('click', (event) => {
     }
   }
 });
+
+// Character Carousel Controls
+const charCarouselPrev = document.getElementById('charCarouselPrev');
+const charCarouselNext = document.getElementById('charCarouselNext');
+
+if (charCarouselPrev && characterManageGrid) {
+  charCarouselPrev.addEventListener('click', () => {
+    characterManageGrid.scrollBy({ left: -300, behavior: 'smooth' });
+  });
+}
+if (charCarouselNext && characterManageGrid) {
+  charCarouselNext.addEventListener('click', () => {
+    characterManageGrid.scrollBy({ left: 300, behavior: 'smooth' });
+  });
+}
