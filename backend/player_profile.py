@@ -11,6 +11,93 @@ except ImportError:
     from paths import character_source_root, is_character_override_active, is_multi_user_request_context, shared_path, user_profile_root
 
 
+PROFILE_FIELD_ALIASES = {
+    'name': (
+        'name',
+        'character.name',
+        'basic.name',
+        'profile.name',
+        'player.name',
+        '名字',
+        '姓名',
+        '角色.name',
+        '角色.名字',
+    ),
+    'courtesyName': (
+        'courtesyName',
+        'courtesy_name',
+        'nickname',
+        'nickName',
+        'alias',
+        'character.courtesyName',
+        'character.courtesy_name',
+        'character.nickname',
+        'basic.courtesyName',
+        'basic.nickname',
+        'profile.courtesyName',
+        'profile.nickname',
+        '常用称呼',
+        '称呼',
+        '昵称',
+        '角色.courtesyName',
+        '角色.常用称呼',
+        '角色.昵称',
+    ),
+    'gender': ('gender', 'character.gender', 'basic.gender', 'profile.gender', '性别', '角色.gender', '角色.性别'),
+    'age': ('age', 'character.age', 'basic.age', 'profile.age', '年龄', '角色.age', '角色.年龄'),
+    'birthday': (
+        'birthday',
+        'birthDay',
+        'birth_date',
+        'birthDate',
+        'character.birthday',
+        'character.birthDay',
+        'basic.birthday',
+        'profile.birthday',
+        '生辰',
+        '生日',
+        '角色.birthday',
+        '角色.生辰',
+        '角色.生日',
+    ),
+    'height': ('height', 'character.height', 'basic.height', 'profile.height', '身高', '身量', '角色.height', '角色.身高', '角色.身量'),
+    'origin': ('origin', 'hometown', 'birthplace', 'character.origin', 'basic.origin', 'profile.origin', '出身', '籍贯', '来历', '角色.origin', '角色.出身'),
+    'status': ('status', 'identity', 'role', 'character.status', 'basic.status', 'profile.status', '身份', '定位', '角色.status', '角色.身份'),
+}
+
+
+def _value_at_path(data: dict, dotted_path: str):
+    current = data
+    for part in dotted_path.split('.'):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _is_profile_scalar(value) -> bool:
+    return isinstance(value, str | int | float) and not isinstance(value, bool)
+
+
+def normalize_player_profile(profile: dict) -> dict:
+    if not isinstance(profile, dict) or not profile:
+        return {}
+
+    normalized = copy.deepcopy(profile)
+    for canonical_key, aliases in PROFILE_FIELD_ALIASES.items():
+        if _is_profile_scalar(normalized.get(canonical_key)) and str(normalized.get(canonical_key)).strip():
+            continue
+        for alias in aliases:
+            value = _value_at_path(profile, alias)
+            if _is_profile_scalar(value) and str(value).strip():
+                normalized[canonical_key] = value
+                break
+
+    if not str(normalized.get('courtesyName', '') or '').strip() and str(normalized.get('name', '') or '').strip():
+        normalized['courtesyName'] = normalized['name']
+    return normalized
+
+
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -52,7 +139,7 @@ def character_player_profile_override_path() -> Path:
 
 
 def load_base_player_profile() -> dict:
-    return _read_json(base_player_profile_path())
+    return normalize_player_profile(_read_json(base_player_profile_path()))
 
 
 def save_base_player_profile(payload: dict) -> Path:
@@ -105,7 +192,7 @@ def delete_user_avatar() -> bool:
 
 
 def load_character_player_profile_override() -> dict:
-    return _read_json(character_player_profile_override_path())
+    return normalize_player_profile(_read_json(character_player_profile_override_path()))
 
 
 def load_effective_player_profile() -> dict:
@@ -115,7 +202,8 @@ def load_effective_player_profile() -> dict:
         return base
     if not base:
         return override
-    return _merge_value(base, override)
+    merged = _merge_value(base, override)
+    return normalize_player_profile(merged if isinstance(merged, dict) else {})
 
 
 def save_character_player_profile_override(payload: dict) -> Path:
