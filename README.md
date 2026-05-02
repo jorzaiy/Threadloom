@@ -299,6 +299,7 @@ config/runtime.json
 - 用户级基础档案：`runtime-data/<user>/profile/player-profile.base.json`
 - 角色卡特化覆盖：`runtime-data/<user>/characters/<character_id>/source/player-profile.override.json`
 - 运行时会先加载基础档案，再叠加当前角色卡覆盖
+- 玩家档案 JSON 会在后端做宽松归一化：推荐把 `name` / `courtesyName` 放在顶层，但也兼容 `character.name`、`basic.name`、`profile.name`、中文 `名字` / `常用称呼` / `昵称` 等常见写法；归一化只补齐顶层标准字段，不会删除原始嵌套内容
 - `USER.md` 现在不再参与 RP narrator 主链，只保留给通用协作备注
 - narrator 运行时只消费一份收短后的玩家档案摘要，完整档案仍保留在 JSON 真相源中
 - `player-profile.json` / `player-profile.md` 目前保留为兼容副本与可读导出
