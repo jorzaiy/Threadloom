@@ -309,7 +309,7 @@ THREADLOOM_HOST=127.0.0.1 THREADLOOM_PORT=9001 ./start.sh
 - 角色卡管理已改到设置面板中，支持读取角色卡元数据和缩略封面图
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间自动共享私下信息
 - 所有文件写入（`runtime_store.py`、`keeper_archive.py`）已改为原子写入：先写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
-- 模型调用层（`model_client.py`、`local_model_client.py`）已加入 `_retry_on_rate_limit` 装饰器：429/503 错误自动指数退避重试（最多 3 次），尊重 `Retry-After` 头
+- 模型调用层（`model_client.py`、`local_model_client.py`）已加入 429/503 指数退避重试（最多 3 次）；远程模型尊重 `Retry-After` 头。本地模型 helper 不再内置默认 endpoint 或默认模型名，调用方必须显式传入 `base_url` 与 `model`。
 - state 中的 `knowledge_scope` 字段只保留本轮新增知情 delta：包含 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，由 keeper 按回合提取增量，`state_bridge.py` 清洗但不长期合并；长期知识由 `actor_registry.py` 派生到 actor-id 版 `knowledge_records`，并做轻量相似去重，`narrator_input.py` 渲染为结构化知情边界
 - state 中新增 `resolved_events[]` 字段：线程经 `active → watch → cooling_down → resolved` 状态机过渡后归档（最多 20 条）
 - thread tracker 已改用按类型分级的保留策略 `THREAD_RETENTION_CONFIG`（main:4, risk:3, clue:2, arbiter:1），替代旧的统一 `THREAD_RETENTION_TURNS`

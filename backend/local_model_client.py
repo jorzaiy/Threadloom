@@ -2,7 +2,6 @@
 """本地模型调用封装（llama.cpp server / OpenAI 兼容接口）
 
 支持通过 llama.cpp server 暴露的 OpenAI 兼容 API 调用本地模型。
-默认地址 http://localhost:8080/v1/chat/completions。
 """
 
 import json
@@ -29,8 +28,12 @@ def call_local_model(config: dict, system_prompt: str, user_prompt: str) -> tupl
     Returns:
         (reply_text, usage_dict)
     """
-    base_url = config.get('base_url', 'http://localhost:8080/v1').rstrip('/')
-    model = config.get('model', 'gemma')
+    base_url = str(config.get('base_url') or '').rstrip('/')
+    model = str(config.get('model') or '').strip()
+    if not base_url:
+        raise ValueError('local model base_url is required')
+    if not model:
+        raise ValueError('local model model is required')
     temperature = config.get('temperature', 0.3)
     max_tokens = config.get('max_output_tokens', 800)
 
@@ -57,7 +60,6 @@ def call_local_model(config: dict, system_prompt: str, user_prompt: str) -> tupl
     )
 
     try:
-        last_err = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 with urllib.request.urlopen(req, timeout=180) as resp:
@@ -69,7 +71,6 @@ def call_local_model(config: dict, system_prompt: str, user_prompt: str) -> tupl
                     raise RuntimeError(f'Local model error {err.code}: {body}') from err
                 wait = _BACKOFF_BASE ** attempt
                 log.warning('本地模型 HTTP %d，第 %d 次重试，等待 %.1fs', err.code, attempt + 1, wait)
-                last_err = err
                 time.sleep(wait)
     except URLError as err:
         raise RuntimeError(f'Local model unreachable at {url}: {err}') from err
