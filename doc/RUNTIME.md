@@ -286,6 +286,14 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
 - 世界书人物默认优先进入因果链，而不是突兀肉身进场
 - `chat history` 只是辅助，不应成为唯一真相源
 
+## 2026-05-03 运行行为更新
+
+- keeper/event：event summary 由事件账本基于最近 1~3 对 turn 生成，保留阶段经过、风险/线索和 `scene_shift`；不再把 keeper `main_event` 当作唯一 summary 来源。
+- keeper/state：`carryover_signals / immediate_risks / carryover_clues` 会过滤过短、过长或明显残缺的碎片，避免脏 clue 继续污染 thread / selector。
+- thread：main 线程继承必须有 goal / label / signature 连续性；仅地点相同不会继承旧 `stability_turns`。
+- selector：summary chunk 的 `keywords` 应优先保存稳定检索键：人物名、地点名、关键物件、事件短语、关系线。turn audit 会记录 `npc_profile_load`，包括目标、实际加载、缺失项与 profile 目录，用来诊断 profile target 和 narrator 注入之间的断链。
+- narrator：若最近几轮已经反复停在观察、判断、沉默、不点破、目光变化或心理揣测，本轮必须推进一个客观可感知的新变化；用户输入只做轻承接，正文主体应写用户动作之后世界如何回应。
+
 ## 当前 persona 门槛
 
 - 默认连续 5 轮稳定出现，才自动进入 `scene persona`

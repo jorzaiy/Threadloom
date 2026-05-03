@@ -77,6 +77,18 @@ web input
 
 这组修复的目标不是扩大 narrator 输入，而是保证 recall 层只带入可用、完整、与当前 query 相关的历史材料。
 
+## 2026-05-03 Narrator / Keeper / Selector 运行修复
+
+针对 `维克托奥古斯特-20260502-ce22a3` 的检查结果，runtime 收紧以下行为：
+
+- event summary 不再只用 state keeper 的 `main_event` 直接写入；完整 turn 提交后会用事件账本读取最近 1~3 对 turn，生成更像阶段经过的 `summary_text`，并把 `scene_shift` 写入 event summary。
+- `scene_shift` 对明确地点变化更敏感：只要上一地点与当前地点都稳定且发生变化，即使 NPC 列表没有大换血，也会标记场景切段。
+- carryover signals / risks / clues 增加短碎片过滤，避免“惹了涂”这类残词进入 clue 层并污染 selector。
+- active thread 的 main 线程匹配更保守；地点相同不再足以继承旧线程，必须有 goal / label / signature 的实际连续性，避免新事件继承旧 `stability_turns`。
+- summary chunk keywords 改为结构化检索键，优先人物、地点、物件、事件短语和关系线，而不是随机中文碎片。
+- selector audit 现在记录 `npc_profile_load`，包括请求的 profile targets、实际加载项、缺失项、profile 目录和失败原因，便于定位“selector 有 target 但 narrator 无 profile”的断链。
+- narrator prompt 增加重复观察抑制：若最近几轮已反复出现“观察—判断—不点破/沉默”等镜头，本轮必须推进可感知的外部变化，而不是扩写用户输入或换词重复心理观察。
+
 ## 当前 Threadloom 的建议优先级
 
 1. 先稳 `state`。
