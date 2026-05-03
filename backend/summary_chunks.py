@@ -31,7 +31,7 @@ SUMMARY_CHUNK_SYSTEM = """你是 RP 历史分段整理器。
   "locations": ["出现过的地点"],
   "actors_mentioned": ["出现过的人物称呼"],
   "objects_mentioned": ["出现过的物品"],
-  "keywords": ["用于后续检索的短关键词"]
+  "keywords": ["用于后续检索的结构化短关键词，优先人物/地点/事件线/关系线/物件"]
 }
 
 规则：
@@ -42,7 +42,14 @@ SUMMARY_CHUNK_SYSTEM = """你是 RP 历史分段整理器。
 5. 不维护 NPC 性格设定；人物设定由 actor registry 管。
 6. 不维护物品主账本或谁知道什么；这些由 keeper 管。
 7. 保留台词里的关键信息，但不要整段抄 prose。
+8. keywords 不要输出随机中文碎片或泛词；优先输出 2-12 字的稳定检索键，如人物名、地点名、关键物件、事件短语、关系线（例：陆小环训练、涂山教官、操场考核、回答提问、手环异常）。
 """
+
+
+GENERIC_KEYWORD_TOKENS = {
+    '当前', '自己', '一个', '一些', '没有', '已经', '开始', '继续', '只是', '不是', '可能', '觉得',
+    '时候', '地方', '位置', '周围', '对方', '什么', '起来', '下来', '过去', '出来', '进去',
+}
 
 
 def _turn_pairs(history: list[dict]) -> list[tuple[str, str]]:
@@ -64,15 +71,52 @@ def _compact(value: str, limit: int = 260) -> str:
     return text[:limit]
 
 
-def _dedupe_limited(values: list[str], limit: int) -> list[str]:
+def _keyword_quality(value: str) -> bool:
+    text = _compact(value, 24).strip('，。！？：；、“”‘’[]【】()（） ')
+    if not text or text in GENERIC_KEYWORD_TOKENS:
+        return False
+    if len(text) < 2 or len(text) > 12:
+        return False
+    if any(mark in text for mark in ('，', '。', '！', '？', '：', '；', '“', '”', '…')):
+        return False
+    return True
+
+
+def _extract_keyword_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    for token in re.findall(r'[\u4e00-\u9fff]{2,6}', text):
+        if any(marker in token for marker in ('训练', '考核', '提问', '回答', '追问', '搜查', '线索', '风险', '异常', '转场', '冲突', '观察')):
+            candidates.append(token)
+    for match in re.findall(r'[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?', text):
+        candidates.append(match)
+    return candidates
+
+
+def _dedupe_keywords(candidates: list[str], limit: int = 30) -> list[str]:
     out: list[str] = []
-    for value in values:
-        text = _compact(value, 40)
-        if text and text not in out:
-            out.append(text)
+    for raw in candidates:
+        text = _compact(raw, 24).strip('，。！？：；、“”‘’[]【】()（） ')
+        if not _keyword_quality(text) or text in out:
+            continue
+        out.append(text)
         if len(out) >= limit:
             break
     return out
+
+
+def _structured_keywords(payload: dict, fallback: dict, pairs: list[tuple[str, str]], limit: int = 30) -> list[str]:
+    candidates: list[str] = []
+    for field in ('actors_mentioned', 'locations', 'objects_mentioned'):
+        for source in (payload, fallback):
+            values = source.get(field, []) if isinstance(source.get(field, []), list) else []
+            candidates.extend(str(item or '') for item in values)
+    for field in ('key_events', 'unresolved', 'dense_summary'):
+        values = payload.get(field, []) if isinstance(payload.get(field, []), list) else []
+        for item in values[:8]:
+            candidates.extend(_extract_keyword_candidates(str(item or '')))
+    joined = '\n'.join(' '.join(pair) for pair in pairs)
+    candidates.extend(_extract_keyword_candidates(joined))
+    return _dedupe_keywords(candidates, limit=limit)
 
 
 def _extract_chunk_metadata(text: str) -> dict[str, list[str]]:
@@ -94,12 +138,6 @@ def _fallback_chunk(*, chunk_id: str, turn_start: int, turn_end: int, pairs: lis
     for idx, (user_text, assistant_text) in enumerate(pairs, start=turn_start):
         dense.append(f'第{idx}轮：用户动作：{_compact(user_text, 90)}；世界反馈：{_compact(assistant_text, 180)}')
     text = '\n'.join(' '.join(pair) for pair in pairs)
-    keywords = []
-    for token in re.findall(r'[\u4e00-\u9fff]{2,8}', text):
-        if token not in keywords:
-            keywords.append(token)
-        if len(keywords) >= 36:
-            break
     extracted = _extract_chunk_metadata(text)
     return {
         'chunk_id': chunk_id,
@@ -111,7 +149,7 @@ def _fallback_chunk(*, chunk_id: str, turn_start: int, turn_end: int, pairs: lis
         'locations': extracted['locations'],
         'actors_mentioned': extracted['actors_mentioned'],
         'objects_mentioned': extracted['objects_mentioned'],
-        'keywords': keywords,
+        'keywords': _structured_keywords({}, extracted, pairs, limit=30),
         'provider': provider,
     }
 
@@ -149,6 +187,7 @@ def _normalize_chunk(payload: dict, *, chunk_id: str, turn_start: int, turn_end:
         if not out.get(field):
             out[field] = extracted[field]
     out['provider'] = provider
+    out['keywords'] = _structured_keywords(payload, out, pairs, limit=30) or out.get('keywords', [])
     return out
 
 

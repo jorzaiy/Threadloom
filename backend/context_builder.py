@@ -668,6 +668,24 @@ def load_npc_profiles(npc_dir: Path, names: list[str], limit: int = 4) -> list[d
     return out[:limit]
 
 
+def npc_profile_load_audit(npc_dir: Path, requested: list[str], loaded: list[dict]) -> dict:
+    requested_names = [str(name or '').strip() for name in (requested or []) if str(name or '').strip()]
+    loaded_names = [str(item.get('name', '') or '').strip() for item in (loaded or []) if isinstance(item, dict) and str(item.get('name', '') or '').strip()]
+    available = []
+    if npc_dir.exists():
+        available = [path.stem for path in sorted(npc_dir.glob('*.md'))[:20]]
+    missing = [name for name in requested_names if name not in loaded_names]
+    return {
+        'requested': requested_names,
+        'loaded': loaded_names,
+        'missing': missing,
+        'profile_dir_exists': npc_dir.exists(),
+        'profile_dir': str(npc_dir),
+        'available_profile_names': available,
+        'reason': 'loaded' if loaded_names else ('no_targets' if not requested_names else ('profile_dir_missing' if not npc_dir.exists() else 'target_profile_missing')),
+    }
+
+
 def select_recent_history_window(items: list[dict], limit_pairs: int) -> list[dict]:
     if limit_pairs <= 0:
         return []
@@ -965,7 +983,9 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         selector_decision['inject_lorebook_text'] = True
     inject_npc_candidates = bool(selector_decision.get('inject_npc_candidates'))
     npc_profile_targets = selector_decision.get('npc_profile_targets', []) or []
-    npc_profiles = load_npc_profiles(resolve_source(sources['npc_profiles_dir']), npc_profile_targets) if npc_profile_targets else []
+    npc_profile_dir = resolve_source(sources['npc_profiles_dir'])
+    npc_profiles = load_npc_profiles(npc_profile_dir, npc_profile_targets) if npc_profile_targets else []
+    selector_decision['npc_profile_load'] = npc_profile_load_audit(npc_profile_dir, npc_profile_targets, npc_profiles)
     if not inject_npc_candidates:
         system_npc_candidates = []
         merged_lorebook_candidates = []
