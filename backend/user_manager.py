@@ -8,6 +8,7 @@ import logging
 import os
 import secrets
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -15,6 +16,7 @@ from pathlib import Path
 
 import bcrypt
 
+import paths as _paths
 from paths import (
     RUNTIME_DATA_ROOT,
     DEFAULT_USER_ID,
@@ -38,16 +40,46 @@ _DUMMY_PASSWORD_HASH = (
     '$2b$12$0gOqcL9nz3HQfq3r81T2lePot0ufLfYOkH9N6ip5TwjFxXMP5Z5UC'
 )
 _SYSTEM_FILE_LOCK = threading.RLock()
+_INITIAL_RUNTIME_DATA_ROOT = RUNTIME_DATA_ROOT
+_INITIAL_USERS_FILE = USERS_FILE
+_INITIAL_SESSIONS_FILE = SESSIONS_FILE
+
+
+def _runtime_data_root() -> Path:
+    if RUNTIME_DATA_ROOT != _INITIAL_RUNTIME_DATA_ROOT:
+        return RUNTIME_DATA_ROOT
+    for module_name in ('backend.paths', 'paths'):
+        module = sys.modules.get(module_name)
+        root = getattr(module, 'RUNTIME_DATA_ROOT', None)
+        if isinstance(root, Path) and root != _INITIAL_RUNTIME_DATA_ROOT:
+            return root
+    return _paths.RUNTIME_DATA_ROOT
+
+
+def _site_config_file() -> Path:
+    return _runtime_data_root() / DEFAULT_USER_ID / 'config' / 'site.json'
+
+
+def _users_file() -> Path:
+    if USERS_FILE != _INITIAL_USERS_FILE:
+        return USERS_FILE
+    return _runtime_data_root() / '_system' / 'users.json'
+
+
+def _sessions_file() -> Path:
+    if SESSIONS_FILE != _INITIAL_SESSIONS_FILE:
+        return SESSIONS_FILE
+    return _runtime_data_root() / '_system' / 'sessions.json'
 
 
 # ── 内部辅助 ──────────────────────────────────────────────
 
 def _ensure_system_dir() -> None:
-    (RUNTIME_DATA_ROOT / '_system').mkdir(parents=True, exist_ok=True)
+    (_runtime_data_root() / '_system').mkdir(parents=True, exist_ok=True)
 
 
 def _deleted_users_dir() -> Path:
-    return RUNTIME_DATA_ROOT / '_system' / 'deleted-users'
+    return _runtime_data_root() / '_system' / 'deleted-users'
 
 
 def _atomic_write(path: Path, data: dict) -> None:
@@ -73,19 +105,21 @@ def _atomic_write(path: Path, data: dict) -> None:
 
 def _load_users() -> dict:
     with _SYSTEM_FILE_LOCK:
-        if USERS_FILE.exists():
-            return json.loads(USERS_FILE.read_text('utf-8'))
+        users_file = _users_file()
+        if users_file.exists():
+            return json.loads(users_file.read_text('utf-8'))
         return {}
 
 
 def _save_users(data: dict) -> None:
-    _atomic_write(USERS_FILE, data)
+    _atomic_write(_users_file(), data)
 
 
 def _load_sessions() -> dict:
     with _SYSTEM_FILE_LOCK:
-        if SESSIONS_FILE.exists():
-            return json.loads(SESSIONS_FILE.read_text('utf-8'))
+        sessions_file = _sessions_file()
+        if sessions_file.exists():
+            return json.loads(sessions_file.read_text('utf-8'))
         return {}
 
 
@@ -114,7 +148,7 @@ def _prune_expired_sessions(sessions: object) -> dict:
 
 
 def _save_sessions(data: dict) -> None:
-    _atomic_write(SESSIONS_FILE, _prune_expired_sessions(data))
+    _atomic_write(_sessions_file(), _prune_expired_sessions(data))
 
 
 def _user_can_authenticate(users: dict, uid: str) -> bool:
@@ -185,7 +219,7 @@ def _hash_token(token: str) -> str:
 
 def is_multi_user_enabled() -> bool:
     """检查是否启用了多用户模式（读 default-user 的 site.json）。"""
-    site_json = RUNTIME_DATA_ROOT / DEFAULT_USER_ID / 'config' / 'site.json'
+    site_json = _site_config_file()
     if site_json.exists():
         try:
             cfg = json.loads(site_json.read_text('utf-8'))
@@ -201,7 +235,7 @@ def set_multi_user_enabled(enabled: bool) -> None:
         users = _load_users()
         if enabled and not users.get(DEFAULT_USER_ID, {}).get('password_hash'):
             raise ValueError('启用多用户前必须先设置管理员密码')
-        site_json = RUNTIME_DATA_ROOT / DEFAULT_USER_ID / 'config' / 'site.json'
+        site_json = _site_config_file()
         cfg = {}
         if site_json.exists():
             try:
@@ -242,7 +276,7 @@ def create_user(user_id: str, password: str, role: str = 'user') -> dict:
         users = _load_users()
         if uid in users:
             raise ValueError(f'用户 "{uid}" 已存在')
-        if (RUNTIME_DATA_ROOT / uid).exists():
+        if (_runtime_data_root() / uid).exists():
             raise ValueError(f'用户 "{uid}" 的旧数据目录仍存在，请先清理或恢复该用户')
         users[uid] = {
             'role': role,
@@ -262,7 +296,7 @@ def delete_user(user_id: str) -> None:
         users = _load_users()
         if uid not in users:
             raise ValueError(f'用户 "{uid}" 不存在')
-        user_dir = RUNTIME_DATA_ROOT / uid
+        user_dir = _runtime_data_root() / uid
         if user_dir.exists():
             deleted_users_dir = _deleted_users_dir()
             deleted_users_dir.mkdir(parents=True, exist_ok=True)
@@ -319,12 +353,13 @@ def list_user_storage_audit() -> dict:
         users = _load_users()
         registered = set(users)
     runtime_dirs = []
-    for item in sorted(RUNTIME_DATA_ROOT.iterdir(), key=lambda path: path.name) if RUNTIME_DATA_ROOT.exists() else []:
+    runtime_root = _runtime_data_root()
+    for item in sorted(runtime_root.iterdir(), key=lambda path: path.name) if runtime_root.exists() else []:
         if not item.is_dir() or item.name in {'_system', '_template'}:
             continue
         runtime_dirs.append(item.name)
     orphan_dirs = [name for name in runtime_dirs if name not in registered]
-    missing_dirs = [uid for uid in sorted(registered) if not (RUNTIME_DATA_ROOT / uid).exists()]
+    missing_dirs = [uid for uid in sorted(registered) if not (runtime_root / uid).exists()]
     deleted_root = _deleted_users_dir()
     deleted_archives = [item.name for item in sorted(deleted_root.iterdir(), key=lambda path: path.name)] if deleted_root.exists() else []
     return {
