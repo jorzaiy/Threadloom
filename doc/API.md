@@ -56,7 +56,7 @@
 - 多用户关闭时，业务接口默认解析为 `default-user`，不强制登录。
 - 多用户开启后，除公开路径外都需要有效 token；POST/DELETE/PUT 等 state-changing 请求只接受 `Authorization: Bearer <token>`，不接受 Cookie token。
 - `POST /api/auth/login` 受后端进程内 per-IP 与全局窗口限速；超过窗口返回 `429 RATE_LIMITED`。
-- token 只对仍存在且未禁用的账号有效；管理员禁用或删除账号后，残留 token 会被拒绝。
+- token TTL 为 30 天，只对仍存在且未禁用的账号有效；主动登出、管理员禁用或归档删除账号后，残留 token 会被拒绝。
 
 ### GET /api/users
 
@@ -83,7 +83,7 @@
 }
 ```
 
-`storage.orphan_dirs` 表示存在于 `runtime-data/`、但不在 `_system/users.json` 中注册的用户形态目录；接口只报告，不自动删除或恢复。
+`storage.orphan_dirs` 表示存在于 `runtime-data/`、但不在 `_system/users.json` 中注册的用户形态目录；接口不会自动删除或恢复，管理员可用 `archive_orphan_dir` 手动归档。
 
 ### POST /api/users
 
@@ -97,8 +97,11 @@
 - `disable`：禁用普通用户并撤销其全部 token，字段：`user_id`，可选 `reason`
 - `enable`：重新启用普通用户，字段：`user_id`
 - `delete`：归档删除普通用户，字段：`user_id`
+- `archive_orphan_dir`：归档删除未注册的孤儿用户目录，字段：`user_id`
 
 `delete` 会先把 `runtime-data/<user>/` 移动到 `runtime-data/_system/deleted-users/<user>-<timestamp>`，成功后才删除账号记录和 sessions；如果移动失败，账号和 token 保持原状。
+
+`archive_orphan_dir` 只接受不在账号注册表中的孤儿目录，会移动到 `runtime-data/_system/deleted-users/<user>-orphan-<timestamp>`；已注册用户和 `default-user` 会被拒绝。
 
 ### POST /api/multi-user
 
