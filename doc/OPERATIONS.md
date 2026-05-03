@@ -162,10 +162,11 @@ cd /root/Threadloom/backend
 - 默认产品面仍可按单用户 `default-user` 使用；启用多用户后，前端和 API 会进入正式认证/用户管理流程
 - `/api/auth/login`、`/api/auth/logout`、`/api/users`、`/api/multi-user` 是 v1.0 多用户流程的一部分；state-changing 请求使用 Bearer token
 - 多用户运维以 `runtime-data/_system/users.json` 为账号真相源；`runtime-data/<user>/` 目录只表示数据存在，不等于可登录账号
+- 登录 token 默认保持 30 天；刷新页面不会要求重新登录，主动登出、禁用用户、归档删除用户或切换多用户模式会立即撤销对应 token
 - 管理员禁用普通用户会保留 `runtime-data/<user>/`，但立即撤销该用户所有 token；归档删除会把目录移动到 `runtime-data/_system/deleted-users/` 后再删除账号记录
-- 用户管理页会提示 orphan user dirs 与 deleted archives；这些提示用于人工判断历史/测试残留，不会自动清理
+- 用户管理页会提示 orphan user dirs 与 deleted archives；确认无用的孤儿目录可在设置页手动归档到 `runtime-data/_system/deleted-users/`
 - 启动时后端会把 `_system/users.json` 与 `_system/sessions.json` 权限收紧到 `0600` 并 prune 过期 sessions
-- 当前设置页已简化为单站点模式：
+- 当前设置页已简化为单站点模式，说明文案只保留必要状态；详细权限、会话失效和数据目录规则以 README 与本文档为准：
   - 用户只维护一个站点 URL / API Key / API 类型
   - 先点“获取模型”
   - 再给 Narrator / State Keeper 选模型

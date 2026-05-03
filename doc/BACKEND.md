@@ -168,12 +168,13 @@
 当前多用户仍是本地优先产品面，不按 SaaS 平台设计，但后端已做以下边界：
 
 - 账号注册表是 `runtime-data/_system/users.json`；登录与用户列表以该文件为准，单纯存在 `runtime-data/<name>/` 目录不代表可登录账号。
-- Session token 存在 `runtime-data/_system/sessions.json`，仅保存 token hash；token TTL 为 7 天。
+- Session token 存在 `runtime-data/_system/sessions.json`，仅保存 token hash；token TTL 为 30 天，用户主动登出或管理员禁用/删除用户会立即撤销相关 token。
 - `validate_token()` 会确认 token 指向的用户仍在账号注册表中且未被禁用；已删除或已禁用用户的残留 token 会被拒绝并从 sessions 中移除。
 - 每个用户最多保留 10 个活跃 token；新登录超过上限时按 `last_seen_at / created_at` 淘汰最旧 token，异常时间戳按最旧处理，避免坏 session 元数据阻断登录。
 - `disable_user()` 只标记普通用户 `disabled_at` 并撤销其全部 token，不移动数据目录；`enable_user()` 清除禁用标记。
 - `delete_user()` 是归档删除：先把 `runtime-data/<user>/` 移动到 `runtime-data/_system/deleted-users/<user>-<timestamp>`，成功后才删除账号记录和 sessions；如果移动失败，账号和 token 保持不变，方便重试或人工处理。
-- `list_user_storage_audit()` 会返回 `orphan_dirs / missing_dirs / deleted_archives` 给管理员，用于发现未注册但仍存在的数据目录；后端不会自动删除或自动恢复这些目录。
+- `archive_orphan_user_dir()` 只处理不在账号注册表中的孤儿用户目录，把它们移动到 `runtime-data/_system/deleted-users/<user>-orphan-<timestamp>`；已注册用户和 `default-user` 不允许走孤儿目录归档。
+- `list_user_storage_audit()` 会返回 `orphan_dirs / missing_dirs / deleted_archives` 给管理员，用于发现未注册但仍存在的数据目录；后端不会自动删除或自动恢复这些目录，管理员可在设置页手动归档确认无用的 orphan 目录。
 - `server.py` 对 `/api/auth/login` 做进程内 per-IP 与全局窗口限速；这只降低本地服务的暴力尝试成本，公网/反代部署仍应在代理层限流。
 - `startup_security_check()` 在后端启动时收紧 `_system/users.json` 与 `_system/sessions.json` 权限到 `0600`、清理过期 session；当监听非 loopback 地址但多用户未启用或管理员密码未设置时默认拒绝启动。
 - 管理员密码首次设置的无 token bootstrap 只允许本机地址访问；公网部署应先在本机完成管理员密码和多用户启用，再交给反向代理暴露。
