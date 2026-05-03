@@ -94,6 +94,14 @@ PUBLIC_POST_PATHS = {
 USER_ASSET_CACHE_HEADERS = {'Cache-Control': 'no-store'}
 
 
+def auth_cookie_header(token: str) -> str:
+    return f'session_token={token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax'
+
+
+def clear_auth_cookie_header() -> str:
+    return 'session_token=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax'
+
+
 def is_valid_character_id_param(character_id: str) -> bool:
     value = str(character_id or '').strip()
     return bool(value) and slugify(value, 'character') == value
@@ -357,12 +365,13 @@ class Handler(BaseHTTPRequestHandler):
             self._invalid_input(str(err))
             return None
 
-    def _send(self, status: int, payload: dict):
+    def _send(self, status: int, payload: dict, *, extra_headers: dict[str, str] | None = None):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         return self._send_raw(
             status,
             body,
             content_type='application/json; charset=utf-8',
+            extra_headers=extra_headers,
         )
 
     def log_message(self, format: str, *args):
@@ -552,6 +561,8 @@ class Handler(BaseHTTPRequestHandler):
                 if is_multi_user_enabled() and uid is None:
                     return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': 'login required'}})
                 role = 'admin' if uid == DEFAULT_USER_ID else 'user'
+                token = self._extract_token()
+                headers = {'Set-Cookie': auth_cookie_header(token)} if uid and token else None
                 # admin_has_password lets the frontend know whether the
                 # "enable multi-user" wizard needs to set a password first.
                 return self._send(200, {
@@ -559,7 +570,7 @@ class Handler(BaseHTTPRequestHandler):
                     'role': role,
                     'multi_user_enabled': is_multi_user_enabled(),
                     'admin_has_password': admin_has_password(),
-                })
+                }, extra_headers=headers)
 
             if parsed.path == '/api/history':
                 if not session_id:
@@ -983,7 +994,7 @@ class Handler(BaseHTTPRequestHandler):
                     token = login(uid, pwd)
                 except ValueError as err:
                     return self._send(401, {'error': {'code': 'AUTH_FAILED', 'message': str(err)}})
-                return self._send(200, {'token': token, 'user_id': uid})
+                return self._send(200, {'token': token, 'user_id': uid}, extra_headers={'Set-Cookie': auth_cookie_header(token)})
 
             if parsed.path == '/api/auth/logout':
                 if not MULTI_USER_PRODUCT_ENABLED:
@@ -991,7 +1002,7 @@ class Handler(BaseHTTPRequestHandler):
                 token = self._extract_token()
                 if token:
                     logout(token)
-                return self._send(200, {'ok': True})
+                return self._send(200, {'ok': True}, extra_headers={'Set-Cookie': clear_auth_cookie_header()})
 
             if parsed.path == '/api/auth/change-password':
                 if not MULTI_USER_PRODUCT_ENABLED:
