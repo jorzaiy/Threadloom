@@ -38,7 +38,7 @@ from paths import DEFAULT_USER_ID, active_character_id, active_user_id, current_
 from player_profile import delete_user_avatar, load_base_player_profile, load_character_player_profile_override, resolve_user_avatar_path, save_base_player_profile, save_character_player_profile_override, save_user_avatar
 from runtime_store import build_entity_map, build_state_snapshot, filter_committed_history_items, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 from user_manager import (
-    admin_has_password, change_own_password, create_user, delete_user, disable_user, enable_user,
+    admin_has_password, archive_orphan_user_dir, change_own_password, create_user, delete_user, disable_user, enable_user,
     list_user_storage_audit, list_users, login, logout,
     is_multi_user_enabled, set_multi_user_enabled,
     reset_user_password, set_admin_password, resolve_user_from_request, validate_token,
@@ -1051,6 +1051,15 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as err:
                         return self._invalid_input(str(err))
                     return self._send(200, {'ok': True})
+                elif action == 'archive_orphan_dir':
+                    uid = self._payload_string(payload, 'user_id')
+                    if uid is None:
+                        return
+                    try:
+                        result = archive_orphan_user_dir(uid)
+                    except ValueError as err:
+                        return self._invalid_input(str(err))
+                    return self._send(200, result)
                 elif action == 'disable':
                     uid = self._payload_string(payload, 'user_id')
                     if uid is None:
@@ -1089,7 +1098,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self._invalid_input(str(err))
                     return self._send(200, {'ok': True})
                 else:
-                    return self._invalid_input('未知操作，支持: create, disable, enable, delete, reset_password, set_admin_password')
+                    return self._invalid_input('未知操作，支持: create, disable, enable, delete, archive_orphan_dir, reset_password, set_admin_password')
 
             if parsed.path == '/api/multi-user':
                 if not MULTI_USER_PRODUCT_ENABLED:

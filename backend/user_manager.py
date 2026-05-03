@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 USERS_FILE = RUNTIME_DATA_ROOT / '_system' / 'users.json'
 SESSIONS_FILE = RUNTIME_DATA_ROOT / '_system' / 'sessions.json'
-TOKEN_TTL = 7 * 24 * 3600  # 7 天
+TOKEN_TTL = 30 * 24 * 3600  # 30 天，或用户主动登出
 MIN_PASSWORD_LENGTH = 12
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_LOCKOUT_SECONDS = 15 * 60
@@ -137,12 +137,14 @@ def _prune_expired_sessions(sessions: object) -> dict:
         if not isinstance(entry, dict):
             continue
         try:
-            expires_at = float(entry.get('expires_at') or 0)
             created_at = float(entry.get('created_at') or 0)
         except (TypeError, ValueError):
             continue
-        if expires_at <= now or now - created_at > TOKEN_TTL:
+        expires_at = created_at + TOKEN_TTL
+        if expires_at <= now:
             continue
+        if float(entry.get('expires_at') or 0) < expires_at:
+            entry['expires_at'] = expires_at
         cleaned[key] = entry
     return cleaned
 
@@ -312,6 +314,31 @@ def delete_user(user_id: str) -> None:
         sessions = _load_sessions()
         sessions = {k: v for k, v in sessions.items() if v.get('user_id') != uid}
         _save_sessions(sessions)
+
+
+def archive_orphan_user_dir(user_id: str) -> dict:
+    uid = _validate_user_id(user_id)
+    if uid == DEFAULT_USER_ID:
+        raise ValueError('不能归档管理员目录')
+    with _SYSTEM_FILE_LOCK:
+        users = _load_users()
+        if uid in users:
+            raise ValueError(f'用户 "{uid}" 仍在账号列表中')
+        audit = list_user_storage_audit()
+        if uid not in set(audit.get('orphan_dirs') or []):
+            raise ValueError(f'目录 "{uid}" 不是孤儿目录')
+        user_dir = _runtime_data_root() / uid
+        if not user_dir.is_dir():
+            raise ValueError(f'目录 "{uid}" 不存在')
+        deleted_users_dir = _deleted_users_dir()
+        deleted_users_dir.mkdir(parents=True, exist_ok=True)
+        target = deleted_users_dir / f'{uid}-orphan-{int(time.time())}'
+        counter = 1
+        while target.exists():
+            target = deleted_users_dir / f'{uid}-orphan-{int(time.time())}-{counter}'
+            counter += 1
+        shutil.move(str(user_dir), str(target))
+        return {'ok': True, 'archived_as': target.name}
 
 
 def disable_user(user_id: str, reason: str = '') -> None:
@@ -561,9 +588,9 @@ def validate_token(token: str) -> str | None:
         if not entry:
             return None
         now = time.time()
-        expires_at = float(entry.get('expires_at') or 0)
         created_at = float(entry.get('created_at') or 0)
-        if expires_at <= now or now - created_at > TOKEN_TTL:
+        expires_at = created_at + TOKEN_TTL
+        if expires_at <= now:
             del sessions[token_key]
             _save_sessions(sessions)
             return None
@@ -575,6 +602,8 @@ def validate_token(token: str) -> str | None:
             _save_sessions(sessions)
             return None
         entry['last_seen_at'] = now
+        if float(entry.get('expires_at') or 0) < expires_at:
+            entry['expires_at'] = expires_at
         sessions[token_key] = entry
         _save_sessions(sessions)
         return uid

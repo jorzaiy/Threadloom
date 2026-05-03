@@ -292,6 +292,78 @@ class MultiUserFoundationTests(unittest.TestCase):
                 user_manager.SESSIONS_FILE = original_sessions_file
                 paths.RUNTIME_DATA_ROOT = original_paths_root
 
+    def test_archive_orphan_user_dir_moves_only_unregistered_dirs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_user_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_paths_root = paths.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                paths.RUNTIME_DATA_ROOT = temp_root
+
+                user_manager.create_user('user-a', 'secure-password-123')
+                orphan_file = temp_root / 'old-user' / 'profile' / 'secret.txt'
+                orphan_file.parent.mkdir(parents=True, exist_ok=True)
+                orphan_file.write_text('private', encoding='utf-8')
+
+                result = user_manager.archive_orphan_user_dir('old-user')
+
+                self.assertTrue(result['ok'])
+                self.assertFalse((temp_root / 'old-user').exists())
+                archive_name = result['archived_as']
+                self.assertIsInstance(archive_name, str)
+                self.assertTrue((temp_root / '_system' / 'deleted-users' / archive_name / 'profile' / 'secret.txt').exists())
+                with self.assertRaises(ValueError):
+                    user_manager.archive_orphan_user_dir('user-a')
+                with self.assertRaises(ValueError):
+                    user_manager.archive_orphan_user_dir(paths.DEFAULT_USER_ID)
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_user_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+                paths.RUNTIME_DATA_ROOT = original_paths_root
+
+    def test_archive_orphan_user_dir_api_requires_admin_and_calls_helper(self):
+        original_is_multi_user_enabled = server.is_multi_user_enabled
+        original_admin_has_password = server.admin_has_password
+        original_resolve_user_from_request = server.resolve_user_from_request
+        original_validate_token = server.validate_token
+        original_archive_orphan_user_dir = server.archive_orphan_user_dir
+        try:
+            server.is_multi_user_enabled = lambda: True
+            server.admin_has_password = lambda: True
+            server.resolve_user_from_request = lambda headers, **kwargs: 'user-a'
+            calls: list[str] = []
+            server.archive_orphan_user_dir = lambda user_id: calls.append(user_id) or {'ok': True, 'archived_as': f'{user_id}-orphan-1'}
+
+            server.validate_token = lambda token: 'user-a'
+            forbidden = make_post_handler('/api/users', {'action': 'archive_orphan_dir', 'user_id': 'old-user'})
+            server.Handler.do_POST(forbidden)
+            self.assertIsNotNone(forbidden.sent)
+            assert forbidden.sent is not None
+            self.assertEqual(forbidden.sent[0], 403)
+            self.assertEqual(calls, [])
+
+            server.validate_token = lambda token: paths.DEFAULT_USER_ID
+            server.resolve_user_from_request = lambda headers, **kwargs: paths.DEFAULT_USER_ID
+            ok = make_post_handler('/api/users', {'action': 'archive_orphan_dir', 'user_id': 'old-user'})
+            server.Handler.do_POST(ok)
+            self.assertIsNotNone(ok.sent)
+            assert ok.sent is not None
+            self.assertEqual(ok.sent[0], 200)
+            self.assertEqual(calls, ['old-user'])
+            self.assertEqual(ok.sent[1]['archived_as'], 'old-user-orphan-1')
+        finally:
+            server.is_multi_user_enabled = original_is_multi_user_enabled
+            server.admin_has_password = original_admin_has_password
+            server.resolve_user_from_request = original_resolve_user_from_request
+            server.validate_token = original_validate_token
+            server.archive_orphan_user_dir = original_archive_orphan_user_dir
+
     def test_concurrent_logins_preserve_all_sessions(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             original_root = user_manager.RUNTIME_DATA_ROOT
@@ -1124,14 +1196,45 @@ class MultiUserFoundationTests(unittest.TestCase):
                 stale_key = 'stale-token-hash'
                 payload = {
                     fresh_key: {'user_id': 'user-a', 'created_at': now, 'last_seen_at': now, 'expires_at': now + 3600},
-                    stale_key: {'user_id': 'user-b', 'created_at': now - 99999, 'last_seen_at': now - 99999, 'expires_at': now - 1},
+                    stale_key: {'user_id': 'user-b', 'created_at': now - user_manager.TOKEN_TTL - 1, 'last_seen_at': now - user_manager.TOKEN_TTL - 1, 'expires_at': now - 1},
                 }
                 user_manager._save_sessions(payload)
                 saved = json.loads(user_manager.SESSIONS_FILE.read_text(encoding='utf-8'))
                 self.assertIn(fresh_key, saved)
+                self.assertGreaterEqual(saved[fresh_key]['expires_at'], now + user_manager.TOKEN_TTL)
                 self.assertNotIn(stale_key, saved)
             finally:
                 user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.SESSIONS_FILE = original_sessions_file
+
+    def test_login_token_ttl_is_thirty_days(self):
+        self.assertEqual(user_manager.TOKEN_TTL, 30 * 24 * 3600)
+
+    def test_validate_token_extends_legacy_seven_day_expiry_to_current_ttl(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_sessions_file = user_manager.SESSIONS_FILE
+            original_users_file = user_manager.USERS_FILE
+            original_root = user_manager.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                user_manager.set_admin_password('secure-password-123')
+                token = user_manager.login(paths.DEFAULT_USER_ID, 'secure-password-123')
+                token_key = user_manager._hash_token(token)
+                sessions = json.loads(user_manager.SESSIONS_FILE.read_text(encoding='utf-8'))
+                created_at = sessions[token_key]['created_at']
+                sessions[token_key]['expires_at'] = created_at + 7 * 24 * 3600
+                user_manager.SESSIONS_FILE.write_text(json.dumps(sessions), encoding='utf-8')
+
+                self.assertEqual(user_manager.validate_token(token), paths.DEFAULT_USER_ID)
+
+                saved = json.loads(user_manager.SESSIONS_FILE.read_text(encoding='utf-8'))
+                self.assertEqual(saved[token_key]['expires_at'], created_at + user_manager.TOKEN_TTL)
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_root
+                user_manager.USERS_FILE = original_users_file
                 user_manager.SESSIONS_FILE = original_sessions_file
 
     def test_enabling_multi_user_wipes_existing_sessions(self):
