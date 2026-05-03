@@ -8,6 +8,8 @@
 - `history/`：旧版本说明、过时审计、被当前核心文档覆盖的状态快照。
 - `test-reports/`：一次性测试报告与历史验证记录。
 
+历史 UI 原型模板（如 `stitch*.html`）也归档在 `history/`；当前产品入口是 `frontend/index.html`，这些模板不再参与运行。
+
 当前活跃文档只保留在 `doc/` 根目录与 `doc/audit/` 中：
 
 - `doc/API.md`
