@@ -170,7 +170,7 @@ async function saveCharacterProfileDraft() {
   let override;
   try {
     override = JSON.parse(sourceInput.value || '{}');
-  } catch {
+  } catch (err) {
     const targetNote = profileEditorMode === 'override' ? profileEditorNote : characterProfileDraftNote;
     const message = `JSON 解析失败：${err.message}`;
     if (targetNote) {
@@ -2372,23 +2372,6 @@ async function checkAuth() {
   }
 }
 
-(async function init() {
-  setStatus('初始化中...', 'working');
-  try {
-    await checkAuth();
-    // multi-user enabled but unauthenticated → defer the rest of the boot to
-    // the login flow; runMainBoot() picks up after a successful login.
-    if (authState.multiUserEnabled && !authState.userId) {
-      showLoginScreen();
-      return;
-    }
-    await runMainBoot();
-  } catch (err) {
-    console.error('init failed', err);
-    setStatus('初始化失败', 'error');
-  }
-})();
-
 async function runMainBoot() {
   // Self-heal: if the user is in single-user mode, clear any stale token
   // left over from an earlier multi-user session and make sure we are not
@@ -2463,13 +2446,11 @@ function clearClientUserState() {
   lastHistoryItems = [];
   historyHasMore = false;
   historyNextBefore = null;
-  historyTotalCount = 0;
   isLoadingEarlierHistory = false;
   historyRevealAllowed = false;
   inlineHistoryVisible = false;
   currentSessionId = '';
   sessionItems = [];
-  isWaitingForResponse = false;
   coverLoadToken += 1;
   lastCharacterCard = null;
   lastCharacterCoverUrl = null;
@@ -2526,7 +2507,9 @@ function applyRoleBasedUI() {
   // In single-user mode the admin (default-user) is always implicit, so no
   // login indicator and no role-based gating is necessary.
   if (!authState.multiUserEnabled) {
-    if (authIndicatorEl) authIndicatorEl.hidden = true;
+    if (authIndicatorEl) authIndicatorEl.hidden = false;
+    if (authIndicatorLabelEl) authIndicatorLabelEl.textContent = '单用户模式 · default-user';
+    if (logoutBtnEl) logoutBtnEl.hidden = true;
     document.querySelectorAll('.admin-only').forEach(el => { el.hidden = false; });
     document.querySelectorAll('[data-admin-disable]').forEach(el => { el.disabled = false; });
     return;
@@ -2892,11 +2875,12 @@ async function loadUsersList() {
     const data = await apiJson('/api/users');
       const users = Array.isArray(data.users) ? data.users : [];
       const storage = data.storage || {};
+      const orphanDirs = Array.isArray(storage.orphan_dirs) ? storage.orphan_dirs : [];
       const storageNote = [
-        ...(Array.isArray(storage.orphan_dirs) && storage.orphan_dirs.length ? [`孤儿目录：${storage.orphan_dirs.map(escapeHtml).join(', ')}`] : []),
+        ...(orphanDirs.length ? [`孤儿目录：${orphanDirs.length}`] : []),
         ...(Array.isArray(storage.deleted_archives) && storage.deleted_archives.length ? [`已归档删除用户：${storage.deleted_archives.length}`] : []),
       ].join('；');
-      userListContainerEl.innerHTML = users.map(user => {
+      const userRows = users.map(user => {
         const roleTag = user.role === 'admin' ? '<span class="user-role-tag admin">管理员</span>' : '<span class="user-role-tag">普通用户</span>';
         const statusTag = user.disabled ? '<span class="user-role-tag">已禁用</span>' : '';
         const created = user.created_at ? new Date(user.created_at * 1000).toLocaleString('zh-CN') : '';
@@ -2919,7 +2903,20 @@ async function loadUsersList() {
           <div class="user-actions">${actions}</div>
         </div>
       `;
-      }).join('') + (storageNote ? `<p class="muted small">${storageNote}</p>` : '');
+      }).join('');
+      const orphanRows = orphanDirs.map(dir => {
+        const dirId = escapeHtml(dir);
+        return `
+        <div class="user-list-row orphan-dir-row">
+          <div class="user-meta">
+            <span class="user-id">${dirId}</span>
+            <span class="user-role-tag">孤儿目录</span>
+          </div>
+          <div class="user-actions"><button type="button" class="subtle-danger" data-user-action="archive-orphan" data-user-id="${dirId}">归档删除</button></div>
+        </div>
+      `;
+      }).join('');
+      userListContainerEl.innerHTML = userRows + orphanRows + (storageNote ? `<p class="muted small">${storageNote}</p>` : '');
       if (userManagementNoteEl) userManagementNoteEl.textContent = storageNote || '';
   } catch (err) {
     if (userManagementNoteEl) userManagementNoteEl.textContent = `加载失败：${err.message}`;
@@ -2940,6 +2937,12 @@ if (userListContainerEl) {
         await apiJson('/api/users', {
           method: 'POST',
           body: JSON.stringify({ action: 'delete', user_id: userId }),
+        });
+      } else if (action === 'archive-orphan') {
+        if (!window.confirm(`确认归档删除孤儿目录 "${userId}"？该目录会移动到 _system/deleted-users。`)) return;
+        await apiJson('/api/users', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'archive_orphan_dir', user_id: userId }),
         });
       } else if (action === 'disable') {
         if (!window.confirm(`确认禁用用户 "${userId}"？该用户将立即注销，但数据目录会保留。`)) return;
@@ -3050,3 +3053,20 @@ if (charCarouselNext && characterManageGrid) {
     characterManageGrid.scrollBy({ left: 300, behavior: 'smooth' });
   });
 }
+
+(async function init() {
+  setStatus('初始化中...', 'working');
+  try {
+    await checkAuth();
+    // multi-user enabled but unauthenticated → defer the rest of the boot to
+    // the login flow; runMainBoot() picks up after a successful login.
+    if (authState.multiUserEnabled && !authState.userId) {
+      showLoginScreen();
+      return;
+    }
+    await runMainBoot();
+  } catch (err) {
+    console.error('init failed', err);
+    setStatus('初始化失败', 'error');
+  }
+})();

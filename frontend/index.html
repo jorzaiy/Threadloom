@@ -48,10 +48,6 @@
               <div id="sessionDockList" class="session-dock-list"></div>
             </div>
           </div>
-          <div id="authIndicator" class="auth-indicator" hidden>
-            <span id="authIndicatorLabel" class="auth-indicator-label"></span>
-            <button id="logoutBtn" type="button" class="auth-logout-btn" hidden>登出</button>
-          </div>
         </header>
         <div id="historyToolbar" class="history-toolbar" hidden>
           <button id="loadEarlierBtn" class="subtle-btn history-load-btn" type="button">加载更早记录</button>
@@ -170,7 +166,7 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>当前世界</h3>
-                <p>切换当前角色卡，查看导入后的角色资产。</p>
+                <p>角色卡与资产。</p>
               </div>
               
               <div class="character-carousel-wrap">
@@ -185,7 +181,7 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>Session 管理</h3>
-                <p>切换、删除或新建当前角色卡下的会话。</p>
+                <p>会话切换与维护。</p>
               </div>
               <div id="settingsSessionList" class="session-dock-list settings-session-list"></div>
               <div id="settingsSessionNote" class="inline-feedback"></div>
@@ -194,7 +190,7 @@
             <section class="settings-subsection wizard-section">
               <div class="settings-section-head">
                 <h3>聊天记录导入</h3>
-                <p>导入当前角色卡的 SillyTavern JSONL 历史，用于迁移旧会话。</p>
+                <p>导入 JSONL 历史。</p>
               </div>
               <div id="chatWizardStep1" class="wizard-step">
                 <button id="chatWizardStartBtn" type="button" class="subtle-btn wizard-trigger">选择聊天记录导入</button>
@@ -234,7 +230,7 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>站点连接</h3>
-                <p>配置当前用户使用的 LLM API 入口。密钥留空时会保留已有配置。</p>
+                <p>LLM API 入口。</p>
               </div>
               <div class="config-grid">
                 <label class="field field-wide">
@@ -260,7 +256,7 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>模型分配</h3>
-                <p>为叙事和 keeper 选择模型。温度、输出长度等高级参数由运行时配置管理。</p>
+                <p>模型与叙事预设。</p>
               </div>
               <div class="config-grid">
                 <label class="field">
@@ -290,7 +286,7 @@
             <section class="settings-subsection wizard-section">
               <div class="settings-section-head">
                 <h3>角色卡导入</h3>
-                <p>导入新的角色卡，并生成结构化运行时资产。</p>
+                <p>导入角色卡。</p>
               </div>
               <div id="charWizardStep1" class="wizard-step">
                 <button id="charWizardStartBtn" type="button" class="subtle-btn wizard-trigger">选择角色卡文件导入</button>
@@ -335,7 +331,7 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>玩家设定</h3>
-                <p>维护用户基础档案、当前角色卡覆盖设定和头像。</p>
+                <p>档案、覆盖设定与头像。</p>
               </div>
               <div class="settings-actions">
                 <button id="editBaseUserProfileBtn" type="button">维护基础设定</button>
@@ -353,7 +349,11 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>我的账号</h3>
-                <p>修改当前账号的密码。提交后其他设备的会话立即失效，本设备保持登录。单用户模式且尚未设置密码时，"当前密码"留空。</p>
+                <p>账号状态与密码。</p>
+              </div>
+              <div id="authIndicator" class="auth-indicator" hidden>
+                <span id="authIndicatorLabel" class="auth-indicator-label"></span>
+                <button id="logoutBtn" type="button" class="auth-logout-btn" hidden>登出</button>
               </div>
               <form id="changePasswordForm" class="account-form" autocomplete="off">
                 <label class="login-field">
@@ -377,7 +377,7 @@
             <section class="settings-subsection admin-only" hidden>
               <div class="settings-section-head">
                 <h3>多用户模式</h3>
-                <p>启用后所有用户必须登录；普通用户只能选择模型与 preset，站点设置由你统一维护。启用 / 关闭都会强制全员重新登录。</p>
+                <p>登录与权限模式。</p>
               </div>
               <div class="settings-row">
                 <div id="multiUserStatus" class="multi-user-status"></div>
@@ -388,7 +388,7 @@
             <section class="settings-subsection admin-only" hidden>
               <div class="settings-section-head">
                 <h3>用户管理</h3>
-                <p>管理员可以创建普通用户、重置密码或删除账号。default-user 是管理员，不可删除。</p>
+                <p>用户与数据目录。</p>
               </div>
               <div id="userListContainer" class="user-list"></div>
               <div class="settings-actions">
