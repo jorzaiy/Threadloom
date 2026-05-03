@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import errno
+import ipaddress
 import json
 import logging
 import os
@@ -79,6 +80,7 @@ PUBLIC_GET_PATHS = {
     '/',
     '/index.html',
     '/app.js',
+    '/marked.min.js',
     '/styles.css',
     '/favicon.svg',
     '/api/health',
@@ -189,6 +191,20 @@ def check_login_throttle(client_ip: str) -> bool:
         return True
 
 
+def is_loopback_host(host: str) -> bool:
+    text = str(host or '').strip().lower()
+    if text == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(text).is_loopback
+    except ValueError:
+        return False
+
+
+def is_loopback_client(client_ip: str) -> bool:
+    return is_loopback_host(client_ip)
+
+
 def startup_security_check() -> None:
     from user_manager import SESSIONS_FILE, USERS_FILE, _save_sessions, _load_sessions
     for path in (USERS_FILE, SESSIONS_FILE):
@@ -202,7 +218,18 @@ def startup_security_check() -> None:
                     logger.warning('could not tighten permissions on %s: %s', path, err)
     if SESSIONS_FILE.exists():
         _save_sessions(_load_sessions())
-    if is_multi_user_enabled() and HOST not in {'127.0.0.1', 'localhost', '::1'}:
+    multi_user_enabled = is_multi_user_enabled()
+    has_admin_password = admin_has_password()
+    if multi_user_enabled and not has_admin_password:
+        logger.error('multi-user mode is enabled but default-user has no admin password; reset users.json or set an admin password before starting')
+        raise SystemExit(1)
+    if not is_loopback_host(HOST) and (not multi_user_enabled or not has_admin_password):
+        if os.environ.get('THREADLOOM_ALLOW_PUBLIC_SINGLE_USER') == '1':
+            logger.warning('UNSAFE OVERRIDE: starting on non-loopback host %s without multi-user auth fully enabled', HOST)
+        else:
+            logger.error('refusing to bind %s without multi-user enabled and an admin password; set both locally first or use THREADLOOM_ALLOW_PUBLIC_SINGLE_USER=1 only behind external access control', HOST)
+            raise SystemExit(1)
+    if multi_user_enabled and not is_loopback_host(HOST):
         logger.warning('multi-user mode is enabled while listening on non-loopback host %s; use TLS and a trusted reverse proxy', HOST)
 
 
@@ -298,7 +325,7 @@ class Handler(BaseHTTPRequestHandler):
             'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
         }
         if content_type.startswith('text/html'):
-            headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; script-src 'self' https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+            headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
         if content_type.startswith('application/json'):
             headers['Cache-Control'] = 'no-store'
         return headers
@@ -604,6 +631,11 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/app.js':
                 app_path = Path(__file__).resolve().parents[1] / 'frontend' / 'app.js'
                 body = app_path.read_bytes()
+                return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
+
+            if parsed.path == '/marked.min.js':
+                marked_path = Path(__file__).resolve().parents[1] / 'frontend' / 'marked.min.js'
+                body = marked_path.read_bytes()
                 return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
 
             if parsed.path == '/styles.css':
@@ -969,6 +1001,8 @@ class Handler(BaseHTTPRequestHandler):
                 # token here so unauthenticated callers cannot probe other
                 # users' passwords.
                 acting_uid = validate_token(token) if token else None
+                if not acting_uid and not is_multi_user_enabled():
+                    acting_uid = DEFAULT_USER_ID
                 if not acting_uid:
                     return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': '请先登录'}})
                 old_pwd = payload.get('old_password')
@@ -994,6 +1028,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._invalid_input(str(err))
                 caller = self._authenticated_admin_user()
                 bootstrap_admin_password = is_admin_password_bootstrap_action(action)
+                if bootstrap_admin_password and not is_loopback_client(self.client_address[0]):
+                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '管理员密码首次设置只允许从本机访问'}})
                 if caller != DEFAULT_USER_ID and not bootstrap_admin_password:
                     return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可管理用户'}})
                 if action == 'create':
@@ -1112,6 +1148,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/api/providers':
                 try:
                     result = delete_provider_config(str(payload.get('name', '') or ''))
+                except SiteConfigPermissionError as err:
+                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': str(err)}})
                 except ValueError as err:
                     return self._invalid_input(str(err))
                 result['supported_api_types'] = list_provider_configs()['supported_api_types']

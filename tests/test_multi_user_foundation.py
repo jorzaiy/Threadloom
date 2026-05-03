@@ -58,6 +58,7 @@ def make_post_handler(path: str, payload: dict[str, object]) -> BusinessRejectHa
     handler.path = path
     handler.headers = HTTPMessage()
     handler.headers['Authorization'] = 'Bearer token'
+    handler.client_address = ('127.0.0.1', 12345)
     return handler
 
 
@@ -453,6 +454,38 @@ class MultiUserFoundationTests(unittest.TestCase):
             setattr(server, 'admin_has_password', original_admin_has_password)
             setattr(server, 'validate_token', original_validate_token)
 
+    def test_single_user_admin_can_change_password_without_session_token(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_runtime_root = user_manager.RUNTIME_DATA_ROOT
+            original_users_file = user_manager.USERS_FILE
+            original_sessions_file = user_manager.SESSIONS_FILE
+            temp_root = Path(temp_dir)
+            try:
+                user_manager.RUNTIME_DATA_ROOT = temp_root
+                user_manager.USERS_FILE = temp_root / '_system' / 'users.json'
+                user_manager.SESSIONS_FILE = temp_root / '_system' / 'sessions.json'
+                user_manager.set_admin_password('secure-password-123')
+
+                handler = make_post_handler('/api/auth/change-password', {
+                    'old_password': 'secure-password-123',
+                    'new_password': 'secure-password-456',
+                })
+                del handler.headers['Authorization']
+                server.Handler.do_POST(handler)
+
+                sent = handler.sent
+                self.assertIsNotNone(sent)
+                if sent is None:
+                    self.fail('handler did not send a response')
+                self.assertEqual(sent[0], 200)
+                self.assertIsNotNone(user_manager.login(paths.DEFAULT_USER_ID, 'secure-password-456'))
+                with self.assertRaises(ValueError):
+                    user_manager.login(paths.DEFAULT_USER_ID, 'secure-password-123')
+            finally:
+                user_manager.RUNTIME_DATA_ROOT = original_runtime_root
+                user_manager.USERS_FILE = original_users_file
+                user_manager.SESSIONS_FILE = original_sessions_file
+
     def test_only_initial_set_admin_password_is_bootstrap_admin_action(self):
         original_admin_has_password = getattr(server, 'admin_has_password')
         original_is_multi_user_enabled = getattr(server, 'is_multi_user_enabled')
@@ -607,6 +640,25 @@ class MultiUserFoundationTests(unittest.TestCase):
             finally:
                 paths.RUNTIME_DATA_ROOT = original_runtime_root
                 user_manager.RUNTIME_DATA_ROOT = original_user_manager_root
+
+    def test_multi_user_toggle_uses_runtime_root_shared_with_site_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_runtime_root = paths.RUNTIME_DATA_ROOT
+            temp_root = Path(temp_dir) / 'runtime-data'
+            try:
+                paths.RUNTIME_DATA_ROOT = temp_root
+
+                user_manager.set_admin_password('secure-password-123')
+                token = user_manager.login(paths.DEFAULT_USER_ID, 'secure-password-123')
+                user_manager.set_multi_user_enabled(True)
+
+                site_path = temp_root / paths.DEFAULT_USER_ID / 'config' / 'site.json'
+                self.assertEqual(model_config._global_site_config(), site_path)
+                self.assertTrue(user_manager.is_multi_user_enabled())
+                self.assertTrue(json.loads(site_path.read_text(encoding='utf-8'))['multi_user_enabled'])
+                self.assertIsNone(user_manager.validate_token(token))
+            finally:
+                paths.RUNTIME_DATA_ROOT = original_runtime_root
 
     def test_ordinary_user_seed_from_global_provider_does_not_copy_api_key_reference(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1505,6 +1557,73 @@ class MultiUserFoundationTests(unittest.TestCase):
                 })
             with self.assertRaises(model_config.SiteConfigPermissionError):
                 model_config.discover_site_models()
+            with self.assertRaises(model_config.SiteConfigPermissionError):
+                model_config.delete_provider_config('site')
+
+    def test_remote_admin_password_bootstrap_rejected(self):
+        original_is_multi_user_enabled = server.is_multi_user_enabled
+        original_admin_has_password = server.admin_has_password
+        original_set_admin_password = server.set_admin_password
+        try:
+            server.is_multi_user_enabled = lambda: False
+            server.admin_has_password = lambda: False
+            called: list[str] = []
+            server.set_admin_password = lambda password: called.append(password)
+
+            remote = make_post_handler('/api/users', {'action': 'set_admin_password', 'password': 'secure-password-123'})
+            remote.headers = HTTPMessage()
+            remote.client_address = ('203.0.113.10', 12345)
+            server.Handler.do_POST(remote)
+            self.assertIsNotNone(remote.sent)
+            assert remote.sent is not None
+            self.assertEqual(remote.sent[0], 403)
+            self.assertEqual(called, [])
+
+            local = make_post_handler('/api/users', {'action': 'set_admin_password', 'password': 'secure-password-123'})
+            local.headers = HTTPMessage()
+            local.client_address = ('127.0.0.1', 12345)
+            server.Handler.do_POST(local)
+            self.assertIsNotNone(local.sent)
+            assert local.sent is not None
+            self.assertEqual(local.sent[0], 200)
+            self.assertEqual(called, ['secure-password-123'])
+        finally:
+            server.is_multi_user_enabled = original_is_multi_user_enabled
+            server.admin_has_password = original_admin_has_password
+            server.set_admin_password = original_set_admin_password
+
+    def test_startup_refuses_public_single_user_without_override(self):
+        original_host = server.HOST
+        original_is_multi_user_enabled = server.is_multi_user_enabled
+        original_admin_has_password = server.admin_has_password
+        try:
+            server.HOST = '0.0.0.0'
+            server.is_multi_user_enabled = lambda: False
+            server.admin_has_password = lambda: True
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(SystemExit):
+                    server.startup_security_check()
+            with mock.patch.dict(os.environ, {'THREADLOOM_ALLOW_PUBLIC_SINGLE_USER': '1'}, clear=True):
+                server.startup_security_check()
+        finally:
+            server.HOST = original_host
+            server.is_multi_user_enabled = original_is_multi_user_enabled
+            server.admin_has_password = original_admin_has_password
+
+    def test_startup_refuses_multi_user_without_admin_password(self):
+        original_host = server.HOST
+        original_is_multi_user_enabled = server.is_multi_user_enabled
+        original_admin_has_password = server.admin_has_password
+        try:
+            server.HOST = '127.0.0.1'
+            server.is_multi_user_enabled = lambda: True
+            server.admin_has_password = lambda: False
+            with self.assertRaises(SystemExit):
+                server.startup_security_check()
+        finally:
+            server.HOST = original_host
+            server.is_multi_user_enabled = original_is_multi_user_enabled
+            server.admin_has_password = original_admin_has_password
 
     def test_character_card_quota_enforced_for_ordinary_multi_user_user(self):
         # M4: a non-default-user under multi-user mode cannot import beyond the

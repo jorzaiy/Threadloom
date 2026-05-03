@@ -850,6 +850,7 @@ def upsert_provider_config(payload: dict) -> dict:
 
 
 def delete_provider_config(name: str) -> dict:
+    _require_admin('delete site provider')
     if name:
         pass
     raise ValueError('site deletion is not supported')
