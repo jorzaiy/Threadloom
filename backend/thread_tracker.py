@@ -234,15 +234,21 @@ def _find_main_thread_match(candidate: dict, prev_threads: list[dict], state: di
         score = 0.0
         prev_goal = str(item.get('goal', '') or '').strip()
         prev_label = str(item.get('label', '') or '').strip()
-        if current_goal and prev_goal and _similarity(current_goal, prev_goal) >= 0.4:
+        goal_score = _similarity(current_goal, prev_goal) if current_goal and prev_goal else 0.0
+        label_score = _similarity(str(candidate.get('label', '')), prev_label)
+        sig_score = _similarity(_thread_signature(candidate), _thread_signature(item))
+        continuity_score = max(goal_score, label_score, sig_score)
+        if continuity_score < 0.35:
+            continue
+        if goal_score >= 0.4:
             score += 0.5
         if current_location and contains_same_location_hint(current_location, prev_label + ' ' + prev_goal):
-            score += 0.4
-        score += _similarity(_thread_signature(candidate), _thread_signature(item))
+            score += 0.2
+        score += sig_score + label_score
         if score > best_score:
             best = item
             best_score = score
-    return best if best_score >= 0.6 else None
+    return best if best_score >= 0.75 else None
 
 
 def contains_same_location_hint(current_location: str, previous_text: str) -> bool:

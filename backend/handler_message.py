@@ -26,7 +26,7 @@ try:
     from .state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from .persona_updater import update_persona
     from .state_fragment import merge_state_skeleton
-    from .event_ledger import build_event_summary_item
+    from .event_ledger import build_event_ledger_with_llm, build_event_summary_item
 except ImportError:
     from arbiter_runtime import run_arbiter
     from arbiter_state import merge_arbiter_state
@@ -50,7 +50,7 @@ except ImportError:
     from state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from persona_updater import update_persona
     from state_fragment import merge_state_skeleton
-    from event_ledger import build_event_summary_item
+    from event_ledger import build_event_ledger_with_llm, build_event_summary_item
 
 
 TRACE_PROMPT_LIMIT = 4000
@@ -504,12 +504,15 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         skeleton_keeper_trace = None
         skeleton_keeper_diagnostics = None
         try:
-            skeleton_fragment, skeleton_usage, skeleton_keeper_trace = call_skeleton_keeper(
+            skeleton_result = call_skeleton_keeper(
                 state,
                 state_fragment,
                 reply,
                 return_trace=True,
             )
+            skeleton_fragment = skeleton_result[0]
+            skeleton_usage = skeleton_result[1]
+            skeleton_keeper_trace = skeleton_result[2] if len(skeleton_result) > 2 else None
         except Exception as err:
             skeleton_keeper_diagnostics = {
                 'provider_requested': 'llm',
@@ -817,7 +820,10 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and (not is_first_turn) and (not needs_keeper_bootstrap)
     if should_run_skeleton:
         try:
-            skeleton_fragment, skeleton_usage, skeleton_keeper_trace = call_skeleton_keeper(state, state_fragment, reply, return_trace=True)
+            skeleton_result = call_skeleton_keeper(state, state_fragment, reply, return_trace=True)
+            skeleton_fragment = skeleton_result[0]
+            skeleton_usage = skeleton_result[1]
+            skeleton_keeper_trace = skeleton_result[2] if len(skeleton_result) > 2 else None
         except Exception as err:
             skeleton_keeper_diagnostics = {
                 'provider_requested': 'llm',
@@ -981,9 +987,18 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     # us collapse the prior intermediate save into this final write.
     save_state(session_id, state)
     summary_chunk_result = update_summary_chunks(session_id)
+    event_ledger = build_event_ledger_with_llm(
+        user_text=text,
+        narrator_reply=reply,
+        prev_state=prev_state if isinstance(prev_state, dict) else {},
+        onstage_names=state.get('onstage_npcs', []),
+        location=str(state.get('location', '') or ''),
+        recent_pairs=recent_pairs,
+        current_state=state,
+    )
     event_summary_item = build_event_summary_item(
         turn_id=turn_id,
-        ledger={'summary_text': state.get('main_event', ''), 'provider': 'state_keeper'},
+        ledger=event_ledger,
         onstage_names=state.get('onstage_npcs', []),
         tracked_objects=state.get('tracked_objects', []),
         carryover_clues=state.get('carryover_clues', []),
@@ -1067,6 +1082,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'summary_updated': True,
         'summary_text': summary_text,
         'summary_chunks': copy.deepcopy(summary_chunk_result),
+        'event_ledger': copy.deepcopy(event_ledger),
         'persona_counts': copy.deepcopy(persona_counts),
         'event_summary_item': copy.deepcopy(event_summary_item),
     }

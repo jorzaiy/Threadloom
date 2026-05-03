@@ -171,6 +171,8 @@ def _looks_like_scene_shift(prev_state: dict, location: str, onstage_names: list
     changed = False
     if location_changed and onstage_rebuilt:
         changed = True
+    elif location_changed and prev_location not in {'', '待确认'}:
+        changed = True
     elif location_changed and not prev_onstage and len(onstage_names) >= 2:
         changed = True
     return changed, score

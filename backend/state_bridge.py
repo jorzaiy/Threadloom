@@ -25,6 +25,9 @@ NON_PERSON_TOKENS = {
     '轻功', '自保', '一声', '规则', '结论', '现象', '世界', '逻辑', '认知', '交互', '概念', '目标', '问题', '决定',
     '对话', '关系', '后续', '物理', '错误', '能力', '剧情', '局势', '线索', '风险', '客厅',
 }
+LOW_QUALITY_SIGNAL_FRAGMENTS = (
+    '惹了涂',
+)
 ABSTRACT_CONTINUITY_TOKENS = {
     '物理接触', '肢体接触', '身体接触', '接触', '互动', '机制', '系统', '面板', '提示', '规则', '判定', '反馈',
     '设定', '限制', '条件', '代价', '状态', '异常', '效果', '能力', '技能', '天赋', '特性', '权限', '接口',
@@ -215,11 +218,32 @@ def dedupe_names(items: Iterable[str], limit: int | None = None) -> list[str]:
     return out
 
 
+def _clean_signal_text(value: str) -> str:
+    text = ' '.join(str(value or '').split()).strip()
+    text = text.strip('，、；;：:。.!！?？ ')
+    return text
+
+
+def _looks_like_bad_signal_text(value: str) -> bool:
+    text = _clean_signal_text(value)
+    if not text or text == '待确认':
+        return True
+    if any(fragment in text for fragment in LOW_QUALITY_SIGNAL_FRAGMENTS):
+        return True
+    if len(text) < 4:
+        return True
+    if len(text) > 48:
+        return True
+    if text.endswith(('了', '着', '呢', '吧', '吗')) and len(text) <= 8:
+        return True
+    return False
+
+
 def normalize_text_list(items: Iterable[str], limit: int | None = None) -> list[str]:
     out: list[str] = []
     for item in items:
-        value = (item or '').strip()
-        if not value or value == '待确认' or value in out:
+        value = _clean_signal_text(str(item or ''))
+        if _looks_like_bad_signal_text(value) or value in out:
             continue
         if not value.endswith('。') and not value.endswith('！') and not value.endswith('？'):
             value = value + '。'
@@ -439,7 +463,8 @@ def normalize_carryover_signals(items) -> list[dict]:
             text = str(item.get('text', '') or '').strip()
         else:
             continue
-        if not text:
+        text = _clean_signal_text(text)
+        if _looks_like_bad_signal_text(text):
             continue
         key = (signal_type, text)
         if key in seen:
@@ -1043,7 +1068,7 @@ def _prefer_stable_object_label(candidate: str, previous: str) -> str:
     return current or prev_label
 
 
-def _prefer_stable_object_kind(candidate: str, previous: str) -> str:
+def _prefer_stable_object_kind(candidate: Any, previous: Any) -> str:
     current = _meaningful_text(candidate) or 'item'
     prev_kind = _meaningful_text(previous)
     if prev_kind and prev_kind != 'item' and current == 'item':
