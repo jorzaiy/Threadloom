@@ -51,7 +51,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - API Key 支持环境变量引用（`$VAR` 或 `env:VAR`）
 - API 韧性：模型调用自动重试 429/503 错误（指数退避，最多 3 次，尊重 `Retry-After`）
 - 安全加固：后端默认仅监听 `127.0.0.1`，API 响应带基础安全头，请求体有大小上限，provider URL 会阻止常见 SSRF 目标
-- 多用户模式（可选启用）：管理员密码 + bcrypt 校验、登录失败计数与锁定（5 次失败锁 15 分钟）、进程内登录限速、Bearer token 认证（7 天 TTL，按用户限制活跃 token 数，state-changing 拒绝 Cookie auth）、IP-pinned 出站连接防 DNS-rebinding、per-user session/character 配额、自助改密、用户禁用/启用/归档删除、孤儿数据目录提示、用户管理与多用户开关向导
+- 多用户模式（可选启用）：管理员密码 + bcrypt 校验、登录失败计数与锁定（5 次失败锁 15 分钟）、进程内登录限速、Bearer token 认证（30 天 TTL，按用户限制活跃 token 数，state-changing 拒绝 Cookie auth）、IP-pinned 出站连接防 DNS-rebinding、per-user session/character 配额、自助改密、用户禁用/启用/归档删除、孤儿数据目录归档、用户管理与多用户开关向导
 - 原子文件写入：所有 state/archive 写入防崩溃/断电数据损坏
 - 结构化知情边界：`knowledge_scope` 独立追踪主角和各 NPC 已知信息，替代纯文本软约束
 - 线程生命周期管理：按类型分级保留、`cooling_down` 过渡态、`resolved_events` 归档
@@ -145,6 +145,8 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 
 关闭多用户：在同一位置点击 "关闭多用户模式"，输入密码确认。所有用户立即注销。
 
+设置页只展示必要状态与操作；会话失效、角色权限和数据目录处理规则以本文档为准。
+
 ### 用户角色与权限
 
 | 资源 | 管理员 (`default-user`) | 普通用户 |
@@ -162,7 +164,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 
 ### 认证与安全
 
-- Token 存储：`localStorage['tl_session_token']`，TTL 7 天，与服务端一致
+- Token 存储：`localStorage['tl_session_token']`，TTL 30 天；主动登出会立即失效
 - 传输：`Authorization: Bearer <token>` 头，state-changing 请求（POST/DELETE/PUT）拒绝 Cookie auth 防 CSRF
 - Session 校验：服务端只接受仍存在且未禁用用户的 token；每个用户最多保留 10 个活跃 token，超过后淘汰最旧 token
 - 登录失败计数：连续 5 次错误密码自动锁 15 分钟，成功登录或 admin 重置密码立即清零
@@ -171,7 +173,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - 自助改密：保留当前 token，撤销该用户其他设备所有 token
 - 用户禁用：管理员禁用普通用户时立即撤销该用户全部 token，但保留其 `runtime-data/<user>/` 数据目录；重新启用后可继续使用原数据
 - 归档删除：管理员归档删除普通用户时，后端会先把用户目录移动到 `runtime-data/_system/deleted-users/`，成功后才删除账号记录和 sessions；若归档移动失败，账号与 token 保持原状，避免半删除状态
-- 孤儿目录提示：用户管理接口会对比 `runtime-data/*` 与 `_system/users.json`，向管理员提示未注册的用户形态目录；不会自动删除或自动收养这些目录
+- 孤儿目录：用户管理接口会对比 `runtime-data/*` 与 `_system/users.json`，管理员可在设置面板将未注册目录归档到 `_system/deleted-users/`；系统不会自动删除或自动收养这些目录
 - 启动检查：后端启动时会收紧 `_system/users.json` / `_system/sessions.json` 权限到 `0600`、清理过期 session；若绑定非 loopback 地址但未启用多用户或未设置管理员密码，会拒绝启动（除非显式设置不安全覆盖 `THREADLOOM_ALLOW_PUBLIC_SINGLE_USER=1`）
 - 出站请求（site discovery / model 调用）走 `safe_http`：先解析 IP 再连接，每条记录都拒绝 loopback / 私网 / link-local，杜绝 DNS-rebinding
 
