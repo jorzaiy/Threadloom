@@ -484,6 +484,7 @@ function validateRuntimeDraft(draft) {
 const AUTH_BUSINESS_PATHS = new Set([
   '/api/auth/login',
   '/api/auth/change-password',
+  '/api/multi-user',
 ]);
 
 async function apiJson(url, options = {}) {
@@ -2542,7 +2543,7 @@ function applyRoleBasedUI() {
   document.querySelectorAll('[data-admin-disable]').forEach(el => { el.disabled = !isAdmin; });
   // 站点连接 / provider 是 admin-only 写。普通用户看到只读字段。
   const adminWriteFields = [
-    'siteBaseUrl', 'siteApiKey', 'siteApiType',
+    'siteBaseUrlInput', 'siteApiKeyInput', 'siteApiTypeSelect',
     'saveSiteConfigBtn', 'discoverSiteModelsBtn',
   ];
   adminWriteFields.forEach(id => {
@@ -2688,7 +2689,12 @@ function showPasswordPrompt({ title, hint, label1 = '密码', label2 = '', requi
     if (passwordPromptInput1) passwordPromptInput1.value = '';
     if (passwordPromptInput2) passwordPromptInput2.value = '';
     if (passwordPromptError) passwordPromptError.textContent = '';
-    if (passwordPromptField2) passwordPromptField2.hidden = !requireConfirm;
+    if (passwordPromptField2) {
+      passwordPromptField2.hidden = !requireConfirm;
+    }
+    if (passwordPromptInput2) {
+      passwordPromptInput2.required = Boolean(requireConfirm);
+    }
     if (passwordPromptBackdrop) passwordPromptBackdrop.hidden = false;
     if (passwordPromptModal) passwordPromptModal.hidden = false;
     setTimeout(() => passwordPromptInput1?.focus(), 0);
@@ -2757,6 +2763,11 @@ async function enableMultiUserWizard() {
         method: 'POST',
         body: JSON.stringify({ action: 'set_admin_password', password }),
       });
+      const data = await apiJson('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: 'default-user', password }),
+      });
+      setAuthToken(data.token);
     } catch (err) {
       if (multiUserNoteEl) multiUserNoteEl.textContent = `设置密码失败：${err.message}`;
       return;
@@ -2960,6 +2971,9 @@ if (userListContainerEl) {
             method: 'POST',
             body: JSON.stringify({ action: 'set_admin_password', password }),
           });
+          if (!await silentReLogin(password)) {
+            throw new Error('管理员密码已更新，但自动重新登录失败，请手动登录');
+          }
         } else {
           await apiJson('/api/users', {
             method: 'POST',
