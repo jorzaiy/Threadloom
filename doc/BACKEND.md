@@ -175,7 +175,10 @@
 - `delete_user()` 是归档删除：先把 `runtime-data/<user>/` 移动到 `runtime-data/_system/deleted-users/<user>-<timestamp>`，成功后才删除账号记录和 sessions；如果移动失败，账号和 token 保持不变，方便重试或人工处理。
 - `list_user_storage_audit()` 会返回 `orphan_dirs / missing_dirs / deleted_archives` 给管理员，用于发现未注册但仍存在的数据目录；后端不会自动删除或自动恢复这些目录。
 - `server.py` 对 `/api/auth/login` 做进程内 per-IP 与全局窗口限速；这只降低本地服务的暴力尝试成本，公网/反代部署仍应在代理层限流。
-- `startup_security_check()` 在后端启动时收紧 `_system/users.json` 与 `_system/sessions.json` 权限到 `0600`、清理过期 session，并在多用户模式监听非 loopback 地址时记录告警。
+- `startup_security_check()` 在后端启动时收紧 `_system/users.json` 与 `_system/sessions.json` 权限到 `0600`、清理过期 session；当监听非 loopback 地址但多用户未启用或管理员密码未设置时默认拒绝启动。
+- 管理员密码首次设置的无 token bootstrap 只允许本机地址访问；公网部署应先在本机完成管理员密码和多用户启用，再交给反向代理暴露。
+- 前端第三方脚本不再从 CDN 加载；Markdown renderer 作为本地 `/marked.min.js` 静态资源提供，HTML 与服务端 CSP 均使用 `script-src 'self'`。
+- 普通用户对 site/provider 写接口统一走 admin-only 后端检查；即使当前 provider delete 是不支持操作，也先做权限校验再返回业务错误。
 
 当前 keeper 调教样本分工：
 

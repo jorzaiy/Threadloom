@@ -172,8 +172,19 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 - 用户禁用：管理员禁用普通用户时立即撤销该用户全部 token，但保留其 `runtime-data/<user>/` 数据目录；重新启用后可继续使用原数据
 - 归档删除：管理员归档删除普通用户时，后端会先把用户目录移动到 `runtime-data/_system/deleted-users/`，成功后才删除账号记录和 sessions；若归档移动失败，账号与 token 保持原状，避免半删除状态
 - 孤儿目录提示：用户管理接口会对比 `runtime-data/*` 与 `_system/users.json`，向管理员提示未注册的用户形态目录；不会自动删除或自动收养这些目录
-- 启动检查：后端启动时会收紧 `_system/users.json` / `_system/sessions.json` 权限到 `0600`、清理过期 session，并在多用户模式绑定非 loopback 地址时记录告警
+- 启动检查：后端启动时会收紧 `_system/users.json` / `_system/sessions.json` 权限到 `0600`、清理过期 session；若绑定非 loopback 地址但未启用多用户或未设置管理员密码，会拒绝启动（除非显式设置不安全覆盖 `THREADLOOM_ALLOW_PUBLIC_SINGLE_USER=1`）
 - 出站请求（site discovery / model 调用）走 `safe_http`：先解析 IP 再连接，每条记录都拒绝 loopback / 私网 / link-local，杜绝 DNS-rebinding
+
+### 公网部署警告
+
+Threadloom 仍是 local-first 应用，不是开箱即用的 SaaS。准备公网访问前必须先在本机完成：
+
+1. 设置 `default-user` 管理员密码
+2. 启用多用户模式
+3. 通过可信反向代理提供 HTTPS、访问控制与 `/api/auth/login` 限流
+4. 确认反向代理没有暴露 `.env*`、`.git`、`config/`、`runtime-data/`、`backend/threadloom.log` 或任何仓库目录浏览
+
+不要直接用单用户模式暴露公网。`THREADLOOM_ALLOW_PUBLIC_SINGLE_USER=1` 只适合已经有外层身份认证 / VPN / 内网网关的受控环境。
 
 ### 忘记管理员密码
 
@@ -272,7 +283,7 @@ config/runtime.json
  - 高级角色（如 `turn_analyzer / arbiter`）当前不在普通设置页里改，但可以通过 `runtime-data/<user>/config/model-runtime.json -> advanced_models` 手动覆盖；`state_keeper_candidate` 不再单独维护模型，固定继承 State Keeper 模型选择
   - 当前前端会话管理入口：
     - 桌面端：hover 左上角 `用户 · 当前角色卡` 胶囊菜单，弹出最近会话下拉；点击胶囊仍打开“当前世界”设置
-    - 移动端：点击输入区状态栏旁的向上箭头，从底部上拉最近会话菜单
+    - 移动端：输入区状态栏只保留状态文本；会话切换继续使用左上角 `用户 · 当前角色卡` 胶囊菜单
     - 两个入口都显示当前角色卡下最近更新的最多 5 个会话
     - 下拉/上拉菜单中可直接切换、删除、开始新游戏
 

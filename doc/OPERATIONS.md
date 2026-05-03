@@ -149,6 +149,7 @@ cd /root/Threadloom/backend
 说明：
 - `backend/start.sh` 会自动加载 `/root/Threadloom/.env.local`
 - 后端默认只监听 `127.0.0.1:8765`，可用 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖；如需远程访问，应通过可信反向代理暴露，不建议直接改成公网监听。
+- 绑定非 loopback 地址时，后端要求多用户已启用且 `default-user` 已设置管理员密码；否则启动会失败。`THREADLOOM_ALLOW_PUBLIC_SINGLE_USER=1` 只作为不安全逃生阀，必须搭配外层身份认证 / VPN / 网关访问控制。
 - 推荐把真实密钥只放在 `.env.local`，`config/*.json` 中使用 `env:VAR` 引用
 - 修改站点 URL 时若没有重新输入 API Key，运行时会清空旧密钥，避免旧 key 被转发到新 endpoint。
 - 远程 provider URL 必须使用 HTTPS；本机模型服务可继续使用 `localhost` / `127.0.0.1`。
@@ -207,6 +208,52 @@ http://127.0.0.1:8765
 ```bash
 THREADLOOM_HOST=127.0.0.1 THREADLOOM_PORT=9001 ./start.sh
 ```
+
+## 公网部署前检查
+
+公网入口必须由反向代理承担 TLS、访问控制和限流；Threadloom 后端仍建议只监听本机回环地址。
+
+最低要求：
+
+- 在本机先设置 `default-user` 管理员密码并启用多用户模式。
+- 反向代理只转发 `http://127.0.0.1:8765`，不要直接暴露仓库目录。
+- 对 `/api/auth/login` 做额外限流；后端内置限流是进程内窗口，重启会清空，不能单独防公网暴力尝试。
+- 确认不会暴露：`.env*`、`.git/`、`config/`、`runtime-data/`、`backend/threadloom.log`、`doc/archive/` 中的历史报告。
+- 生产环境保持 `config/runtime.json -> trace.enabled: false`；turn trace 会包含 prompt、世界书召回、状态和正文上下文。
+
+Nginx 示例骨架：
+
+```nginx
+server {
+  listen 443 ssl http2;
+  server_name threadloom.example.com;
+
+  ssl_certificate /etc/letsencrypt/live/threadloom.example.com/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/threadloom.example.com/privkey.pem;
+
+  location = /api/auth/login {
+    limit_req zone=threadloom_login burst=10 nodelay;
+    proxy_pass http://127.0.0.1:8765;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+  }
+
+  location / {
+    proxy_pass http://127.0.0.1:8765;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+  }
+}
+```
+
+安全事件快速处置：
+
+1. 立即停止服务：`cd /root/Threadloom/backend && ./stop.sh`
+2. 清空 `runtime-data/_system/sessions.json` 为 `{}`，撤销所有 token
+3. 检查反向代理访问日志和 `backend/threadloom.log` 中的异常登录、批量请求或未知路径探测
+4. 轮换 provider API key，并确认 `.env.local` / `runtime-data/default-user/config/site.json` 未被 Web 服务器直接暴露
+5. 必要时修改 `default-user` 管理员密码后再启动
 
 ## 当前可用能力
 
