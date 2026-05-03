@@ -1353,7 +1353,6 @@ button:active {
   border-radius: 24px;
   box-shadow: 0 24px 70px rgba(33, 29, 25, 0.18);
   z-index: 80;
-  display: flex;
   flex-direction: row;
   transform: translate(-50%, -46%) scale(0.98);
   opacity: 0;
@@ -1749,14 +1748,13 @@ button:active {
   }
 
   .composer-status-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    display: block;
     align-items: center;
     gap: 6px;
   }
 
   .mobile-session-menu {
-    display: block;
+    display: none;
   }
 
   .status-bar {
@@ -1769,11 +1767,7 @@ button:active {
   }
 
   .bottom-controls {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 6px;
-    flex-wrap: nowrap;
+    display: none;
   }
 
   .settings-icon-btn {
