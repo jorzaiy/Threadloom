@@ -7,7 +7,9 @@ const debugEl = document.getElementById('debugDetail');
 const composer = document.getElementById('composer');
 const input = document.getElementById('input');
 const regenerateBtn = document.getElementById('regenerateBtn');
-const statusBar = document.getElementById('statusBar');
+const floatingPill = document.getElementById('floatingPill');
+const floatingPillText = document.getElementById('floatingPillText');
+const sendDot = document.getElementById('sendDot');
 const topbarContext = document.getElementById('topbarContext');
 const topbarSessionMenu = document.getElementById('topbarSessionMenu');
 const brandSettingsTrigger = document.getElementById('brandSettingsTrigger');
@@ -204,6 +206,8 @@ function openSettings(tab) {
   settingsPanel.setAttribute('aria-hidden', 'false');
   settingsBackdrop.hidden = false;
   settingsBtn?.setAttribute('aria-expanded', 'true');
+  if (brandSettingsTrigger) brandSettingsTrigger.style.opacity = '0';
+  if (brandSettingsTrigger) brandSettingsTrigger.style.pointerEvents = 'none';
   if (tab) switchSettingsTab(tab);
 }
 
@@ -213,6 +217,8 @@ function closeSettings() {
   settingsPanel.setAttribute('aria-hidden', 'true');
   settingsBackdrop.hidden = true;
   settingsBtn?.setAttribute('aria-expanded', 'false');
+  if (brandSettingsTrigger) brandSettingsTrigger.style.opacity = '1';
+  if (brandSettingsTrigger) brandSettingsTrigger.style.pointerEvents = 'auto';
 }
 
 function switchSettingsTab(tabName) {
@@ -307,19 +313,40 @@ function topSessions(items, { activeLimit = 5 } = {}) {
 }
 
 function setStatus(text, kind = 'info') {
-  statusBar.textContent = text;
-  statusBar.dataset.kind = kind;
-  if (statusBar._fadeTimer) clearTimeout(statusBar._fadeTimer);
-  statusBar.classList.remove('status-bar-fading');
-  if (kind === 'ok') {
-    statusBar._fadeTimer = setTimeout(() => {
-      statusBar.classList.add('status-bar-fading');
-      statusBar._fadeTimer = setTimeout(() => {
-        statusBar.textContent = '就绪';
-        statusBar.dataset.kind = 'info';
-        statusBar.classList.remove('status-bar-fading');
-      }, 400);
-    }, 3000);
+  if (floatingPillText) {
+    floatingPillText.textContent = text;
+  }
+  
+  if (floatingPill) {
+    floatingPill.hidden = false;
+    floatingPill.classList.remove('fading');
+    // trigger reflow
+    void floatingPill.offsetWidth;
+    floatingPill.classList.add('visible');
+    
+    if (floatingPill._fadeTimer) clearTimeout(floatingPill._fadeTimer);
+    if (floatingPill._hideTimer) clearTimeout(floatingPill._hideTimer);
+    
+    if (kind === 'ok' || text === '就绪') {
+      floatingPill._fadeTimer = setTimeout(() => {
+        floatingPill.classList.remove('visible');
+        floatingPill.classList.add('fading');
+        floatingPill._hideTimer = setTimeout(() => {
+          floatingPill.hidden = true;
+          floatingPillText.textContent = '';
+        }, 300);
+      }, 3000);
+    }
+  }
+
+  if (sendDot) {
+    if (kind === 'working') {
+      sendDot.dataset.status = 'generating';
+    } else if (kind === 'error') {
+      sendDot.dataset.status = 'error';
+    } else {
+      sendDot.dataset.status = 'ready';
+    }
   }
 }
 
@@ -453,7 +480,6 @@ function renderModelConfig() {
   setSelectOptions(stateKeeperModelSelect, models, modelConfig.state_keeper?.model, item => item.label);
   setSelectOptions(narratorPresetSelect, presets, modelConfig.active_preset, item => item.label);
   if (modelConfigNote && !modelConfigNote.dataset.kind) {
-    modelConfigNote.textContent = '温度和最大输出长度已固定到默认配置；叙事预设只影响 narrator 提示词。';
   }
 }
 
@@ -2615,17 +2641,8 @@ const multiUserToggleBtnEl = document.getElementById('multiUserToggleBtn');
 const multiUserNoteEl = document.getElementById('multiUserNote');
 
 function renderMultiUserStatus() {
-  if (!multiUserStatusEl || !multiUserToggleBtnEl) return;
-  if (authState.multiUserEnabled) {
-    multiUserStatusEl.textContent = '当前为多用户模式。';
-    multiUserToggleBtnEl.textContent = '关闭多用户模式';
-  } else if (authState.adminHasPassword) {
-    multiUserStatusEl.textContent = '当前为单用户模式。点击下方按钮启用多用户。';
-    multiUserToggleBtnEl.textContent = '启用多用户模式';
-  } else {
-    multiUserStatusEl.textContent = '尚未设置管理员密码；启用多用户前需要设置。';
-    multiUserToggleBtnEl.textContent = '设置管理员密码并启用多用户';
-  }
+  if (!multiUserToggleBtnEl) return;
+  multiUserToggleBtnEl.checked = !!authState.multiUserEnabled;
 }
 
 async function silentReLogin(password) {
@@ -2844,7 +2861,8 @@ async function disableMultiUserWizard() {
 }
 
 if (multiUserToggleBtnEl) {
-  multiUserToggleBtnEl.addEventListener('click', async () => {
+  multiUserToggleBtnEl.addEventListener('click', async (event) => {
+    event.preventDefault(); // Prevent default visual toggle; will update on success via renderMultiUserStatus
     if (authState.multiUserEnabled) {
       await disableMultiUserWizard();
     } else {
@@ -2883,22 +2901,26 @@ async function loadUsersList() {
       const userRows = users.map(user => {
         const roleTag = user.role === 'admin' ? '<span class="user-role-tag admin">管理员</span>' : '<span class="user-role-tag">普通用户</span>';
         const statusTag = user.disabled ? '<span class="user-role-tag">已禁用</span>' : '';
-        const created = user.created_at ? new Date(user.created_at * 1000).toLocaleString('zh-CN') : '';
+        const created = '';
         const userId = escapeHtml(user.user_id);
         const isAdminRow = user.user_id === 'default-user';
         const lifecycleAction = user.disabled
           ? `<button type="button" class="subtle-btn" data-user-action="enable" data-user-id="${userId}">启用</button>`
           : `<button type="button" class="subtle-btn" data-user-action="disable" data-user-id="${userId}">禁用</button>`;
-        const actions = isAdminRow
+        let actions = isAdminRow
           ? `<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="${userId}">重置密码</button>`
           : `<button type="button" class="subtle-btn" data-user-action="reset" data-user-id="${userId}">重置密码</button>${lifecycleAction}<button type="button" class="subtle-danger" data-user-action="delete" data-user-id="${userId}">归档删除</button>`;
+        
+        if (user.user_id === authState.userId) {
+          actions += `<button type="button" class="subtle-btn" data-user-action="change-password" data-user-id="${userId}">修改密码</button><button type="button" class="subtle-btn" data-user-action="logout" data-user-id="${userId}">登出</button>`;
+        }
         return `
         <div class="user-list-row">
           <div class="user-meta">
             <span class="user-id">${userId}</span>
             ${roleTag}
             ${statusTag}
-            <span class="muted small">${created}</span>
+            
           </div>
           <div class="user-actions">${actions}</div>
         </div>
@@ -2916,7 +2938,13 @@ async function loadUsersList() {
         </div>
       `;
       }).join('');
-      userListContainerEl.innerHTML = userRows + orphanRows + (storageNote ? `<p class="muted small">${storageNote}</p>` : '');
+      // Preserve form before innerHTML
+      const form = document.getElementById('changePasswordForm');
+      if (form && form.parentElement === userListContainerEl) {
+        document.body.appendChild(form); // move it temporarily
+        form.hidden = true;
+      }
+      userListContainerEl.innerHTML = userRows + orphanRows;
       if (userManagementNoteEl) userManagementNoteEl.textContent = storageNote || '';
   } catch (err) {
     if (userManagementNoteEl) userManagementNoteEl.textContent = `加载失败：${err.message}`;
@@ -2930,6 +2958,28 @@ if (userListContainerEl) {
     const action = target.getAttribute('data-user-action');
     const userId = target.getAttribute('data-user-id');
     if (!action || !userId) return;
+    
+    if (action === 'logout') {
+      try {
+        await apiPost('/api/logout');
+      } catch(e) {}
+      window.location.reload();
+      return;
+    }
+    
+    if (action === 'change-password') {
+      const form = document.getElementById('changePasswordForm');
+      const row = target.closest('.user-list-row');
+      if (form && row) {
+        if (form.previousElementSibling === row && !form.hidden) {
+          form.hidden = true;
+        } else {
+          row.insertAdjacentElement('afterend', form);
+          form.hidden = false;
+        }
+      }
+      return;
+    }
     if (userManagementNoteEl) userManagementNoteEl.textContent = '';
     try {
       if (action === 'delete') {

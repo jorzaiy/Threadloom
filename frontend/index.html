@@ -31,13 +31,16 @@
     </div>
 
     <div class="app" id="appShell">
+      <div id="floatingPill" class="floating-pill" hidden>
+        <span id="floatingPillText"></span>
+      </div>
       <main class="chat-column">
         <header class="topbar">
           <div class="brand-block">
-            <h1 id="brandSettingsTrigger" role="button" tabindex="0" title="打开模型连接"><img src="/favicon.svg" alt="Threadloom logo" class="brand-logo" />Threadloom</h1>
+            <h1 title="Threadloom"><img src="/favicon.svg" alt="Threadloom logo" class="brand-logo" />Threadloom</h1>
           </div>
           <div id="topbarSessionMenu" class="topbar-session-menu">
-            <div id="topbarContext" class="topbar-context" role="button" tabindex="0" aria-haspopup="true" aria-controls="sessionDockPanel" title="切换会话">user · world</div>
+            <div id="topbarContext" class="topbar-context" role="button" tabindex="0" aria-haspopup="true" aria-controls="sessionDockPanel" title="切换会话">user · world <span class="dropdown-arrow">▾</span></div>
             <div id="sessionDockPanel" class="session-dock-panel" role="menu" aria-labelledby="topbarContext" aria-hidden="true">
               <div class="session-dock-heading">
                 <div>
@@ -48,7 +51,11 @@
               <div id="sessionDockList" class="session-dock-list"></div>
             </div>
           </div>
+          
         </header>
+        <button id="brandSettingsTrigger" class="floating-settings-btn" type="button" aria-label="设置" title="打开设置">
+          <span class="material-symbols-outlined">settings</span>
+        </button>
         <div id="historyToolbar" class="history-toolbar" hidden>
           <button id="loadEarlierBtn" class="subtle-btn history-load-btn" type="button">加载更早记录</button>
         </div>
@@ -58,7 +65,7 @@
             <textarea id="input" placeholder="输入消息..." rows="2"></textarea>
             <div class="composer-footer">
               <div class="composer-status-row">
-                <div id="statusBar" class="status-bar">就绪</div>
+                
                 <div id="mobileSessionMenu" class="mobile-session-menu">
                   <button id="mobileSessionToggle" class="mobile-session-toggle" type="button" aria-label="切换会话" aria-haspopup="true" aria-expanded="false" aria-controls="mobileSessionPanel">
                     <span class="material-symbols-outlined">keyboard_arrow_up</span>
@@ -81,7 +88,7 @@
               </div>
               <div class="composer-actions">
                 <button id="regenerateBtn" type="button" hidden>重新生成上一条</button>
-                <button type="submit">发送</button>
+                <button id="sendBtn" type="submit">发送<span id="sendDot" class="status-dot"></span></button>
               </div>
             </div>
           </div>
@@ -150,7 +157,7 @@
         
         <button class="settings-tab-btn" type="button" role="tab" aria-selected="false" data-tab="user">玩家设定</button>
         <button class="settings-tab-btn" type="button" role="tab" aria-selected="false" data-tab="connection">模型连接</button>
-        <button class="settings-tab-btn" type="button" role="tab" aria-selected="false" data-tab="account">账号</button>
+        <button class="settings-tab-btn" type="button" role="tab" aria-selected="false" data-tab="account">账号管理</button>
       </nav>
     </div>
     <div class="settings-main">
@@ -166,7 +173,6 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>当前世界</h3>
-                <p>角色卡与资产。</p>
               </div>
               
               <div class="character-carousel-wrap">
@@ -181,7 +187,6 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>Session 管理</h3>
-                <p>会话切换与维护。</p>
               </div>
               <div id="settingsSessionList" class="session-dock-list settings-session-list"></div>
               <div id="settingsSessionNote" class="inline-feedback"></div>
@@ -190,7 +195,6 @@
             <section class="settings-subsection wizard-section">
               <div class="settings-section-head">
                 <h3>聊天记录导入</h3>
-                <p>导入 JSONL 历史。</p>
               </div>
               <div id="chatWizardStep1" class="wizard-step">
                 <button id="chatWizardStartBtn" type="button" class="subtle-btn wizard-trigger">选择聊天记录导入</button>
@@ -230,7 +234,6 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>站点连接</h3>
-                <p>LLM API 入口。</p>
               </div>
               <div class="config-grid">
                 <label class="field field-wide">
@@ -256,7 +259,6 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>模型分配</h3>
-                <p>模型与叙事预设。</p>
               </div>
               <div class="config-grid">
                 <label class="field">
@@ -277,7 +279,7 @@
                 <button id="deleteNarratorPresetBtn" type="button" class="subtle-danger">删除预设</button>
                 <button id="saveModelConfigBtn" type="button">保存模型配置</button>
               </div>
-              <div id="modelConfigNote" class="inline-feedback">温度和最大输出长度由系统默认管理；叙事预设只影响 narrator 提示词。</div>
+              <div id="modelConfigNote" class="inline-feedback"></div>
             </section>
           </div>
 
@@ -286,7 +288,6 @@
             <section class="settings-subsection wizard-section">
               <div class="settings-section-head">
                 <h3>角色卡导入</h3>
-                <p>导入角色卡。</p>
               </div>
               <div id="charWizardStep1" class="wizard-step">
                 <button id="charWizardStartBtn" type="button" class="subtle-btn wizard-trigger">选择角色卡文件导入</button>
@@ -331,7 +332,6 @@
             <section class="settings-subsection">
               <div class="settings-section-head">
                 <h3>玩家设定</h3>
-                <p>档案、覆盖设定与头像。</p>
               </div>
               <div class="settings-actions">
                 <button id="editBaseUserProfileBtn" type="button">维护基础设定</button>
@@ -346,16 +346,28 @@
 
           <!-- Tab: 账号（所有用户：改密 / admin 还看到多用户与用户管理） -->
           <div class="settings-tab-panel" data-tab-panel="account">
-            <section class="settings-subsection">
+            
+            <section class="settings-subsection admin-only" hidden>
+              <div class="settings-row toggle-row">
+                <span class="toggle-label">多用户模式</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="multiUserToggleBtn">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div id="multiUserNote" class="inline-feedback"></div>
+            </section>
+            <section class="settings-subsection admin-only" hidden>
               <div class="settings-section-head">
-                <h3>我的账号</h3>
-                <p>账号状态与密码。</p>
+                <h3>用户管理</h3>
               </div>
-              <div id="authIndicator" class="auth-indicator" hidden>
-                <span id="authIndicatorLabel" class="auth-indicator-label"></span>
-                <button id="logoutBtn" type="button" class="auth-logout-btn" hidden>登出</button>
+              <div id="userListContainer" class="user-list"></div>
+              <div class="settings-actions">
+                <button id="createUserBtn" type="button">新建用户</button>
+                <button id="refreshUsersBtn" type="button" class="subtle-btn">刷新</button>
               </div>
-              <form id="changePasswordForm" class="account-form" autocomplete="off">
+              <div id="userManagementNote" class="inline-feedback"></div>
+<form id="changePasswordForm" class="account-form" hidden autocomplete="off">
                 <label class="login-field">
                   <span>当前密码</span>
                   <input id="changePasswordOld" type="password" autocomplete="current-password" />
@@ -373,29 +385,6 @@
                 </div>
                 <div id="changePasswordNote" class="inline-feedback"></div>
               </form>
-            </section>
-            <section class="settings-subsection admin-only" hidden>
-              <div class="settings-section-head">
-                <h3>多用户模式</h3>
-                <p>登录与权限模式。</p>
-              </div>
-              <div class="settings-row">
-                <div id="multiUserStatus" class="multi-user-status"></div>
-                <button id="multiUserToggleBtn" type="button">启用多用户模式</button>
-              </div>
-              <div id="multiUserNote" class="inline-feedback"></div>
-            </section>
-            <section class="settings-subsection admin-only" hidden>
-              <div class="settings-section-head">
-                <h3>用户管理</h3>
-                <p>用户与数据目录。</p>
-              </div>
-              <div id="userListContainer" class="user-list"></div>
-              <div class="settings-actions">
-                <button id="createUserBtn" type="button">新建用户</button>
-                <button id="refreshUsersBtn" type="button" class="subtle-btn">刷新</button>
-              </div>
-              <div id="userManagementNote" class="inline-feedback"></div>
             </section>
           </div>
 
