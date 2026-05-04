@@ -179,6 +179,7 @@
 - `startup_security_check()` 在后端启动时收紧 `_system/users.json` 与 `_system/sessions.json` 权限到 `0600`、清理过期 session；当监听非 loopback 地址但多用户未启用或管理员密码未设置时默认拒绝启动。
 - 管理员密码首次设置的无 token bootstrap 只允许本机地址访问；公网部署应先在本机完成管理员密码和多用户启用，再交给反向代理暴露。
 - 前端第三方脚本不再从 CDN 加载；Markdown renderer 作为本地 `/marked.min.js` 静态资源提供，HTML 与服务端 CSP 均使用 `script-src 'self'`。
+- 多用户开启且未认证时，`GET /` 与 `GET /index.html` 只返回最小登录页；`/app.js` 不在公开 GET allowlist 中，必须有有效 token 才返回完整前端应用逻辑。登录页只公开加载 `/login.js`、`/styles.css`、`/favicon.svg` 等必要资源。
 - 普通用户对 site/provider 写接口统一走 admin-only 后端检查；即使当前 provider delete 是不支持操作，也先做权限校验再返回业务错误。
 
 当前 keeper 调教样本分工：
@@ -282,6 +283,18 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - 只保留对 runtime 真正有价值的结构产物
 - 把“世界知识”“开局菜单”“系统级 NPC”“封面资产”明确拆开
 - 减少旧 Tavern 前端字段、视觉字段、规则缝合内容直接污染运行时
+
+## 开发与 LSP
+
+当前后端仍按脚本方式运行：开发时从 `backend/` 目录执行 `python3 server.py`，测试时用 `PYTHONPATH=backend` 暴露同级模块。因此 `backend/*.py` 里的 `import user_manager` / `import model_config` 这类导入是运行时契约，不应和普通功能修复混在一起批量改成包内相对导入。
+
+仓库根目录的 `pyrightconfig.json` 与 `basedpyrightconfig.json` 用于让 Pyright / Basedpyright LSP 匹配这个现实：
+
+- `extraPaths: ["backend"]` 让同级后端模块按脚本入口可解析。
+- `reportImplicitRelativeImport` 关闭，避免把当前脚本式导入误报成项目级错误。
+- 类型检查保持 `basic`，并暂时关闭 unknown / missing type argument 系列噪音；逐步类型化应按模块单独推进，不和运行方式迁移混在一起。
+
+如果长期要改成真正 package 运行（例如 `python3 -m backend.server`），应单独迁移启动脚本、测试入口和所有导入，再收紧 LSP 规则。
 
 ## API Key 安全
 

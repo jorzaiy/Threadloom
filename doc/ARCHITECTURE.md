@@ -55,6 +55,20 @@
    └─ writeback
 ```
 
+## 仓库目录结构
+
+当前仓库保留代码、文档和示例模板；真实角色卡、memory、runtime 与用户数据默认留在本地，不进入 git。
+
+- `backend/`：HTTP 服务、runtime 主链、模型调用、导入器和调试工具
+- `frontend/`：浏览器端 HTML / CSS / JS 静态资源
+- `config/`：配置模板；真实 `runtime.json` / provider 配置默认本地忽略
+- `prompts/`：runtime 长期规则和提示词底板
+- `examples/`：公开可提交的最小模板内容
+- `doc/`：架构、API、运行、运维和归档文档
+- `tests/`：回归测试与质量检查
+- `runtime-data/`：本地用户、角色卡、session、账号与 token 数据，默认忽略
+- `character/`、`memory/`、`runtime/`：本地内容层与兼容路径，默认忽略
+
 ## 分层职责
 
 ### Frontend

@@ -166,7 +166,7 @@ cd /root/Threadloom/backend
 - 管理员禁用普通用户会保留 `runtime-data/<user>/`，但立即撤销该用户所有 token；归档删除会把目录移动到 `runtime-data/_system/deleted-users/` 后再删除账号记录
 - 用户管理页会提示 orphan user dirs 与 deleted archives；确认无用的孤儿目录可在设置页手动归档到 `runtime-data/_system/deleted-users/`
 - 启动时后端会把 `_system/users.json` 与 `_system/sessions.json` 权限收紧到 `0600` 并 prune 过期 sessions
-- 当前设置页已简化为单站点模式，说明文案只保留必要状态；详细权限、会话失效和数据目录规则以 README 与本文档为准：
+- 当前设置页已简化为单站点模式，说明文案只保留必要状态；详细权限、会话失效和数据目录规则以本文档与 `doc/API.md` 为准：
   - 用户只维护一个站点 URL / API Key / API 类型
   - 先点“获取模型”
   - 再给 Narrator / State Keeper 选模型
@@ -209,6 +209,60 @@ http://127.0.0.1:8765
 ```bash
 THREADLOOM_HOST=127.0.0.1 THREADLOOM_PORT=9001 ./start.sh
 ```
+
+## 多用户模式
+
+默认启动后是单用户模式，与之前体验一致；不强制登录，不暴露认证 UI。需要多人共用时，管理员可在设置面板启用多用户模式。
+
+### 启用 / 关闭流程
+
+启用：
+
+1. 管理员（`default-user`）打开 **设置 → 用户管理**。
+2. 点击“启用多用户模式 / 设置管理员密码”。
+   - 若管理员尚未设置密码：输入并二次确认至少 12 位的新密码。
+   - 若已有密码：输入管理员密码确认。
+3. 后端会清空所有 sessions，包括当前 admin token；前端会用刚输入的密码静默重登。
+4. 重载后顶栏显示“管理员 · default-user”，并显示用户管理入口。
+
+关闭：在同一位置点击“关闭多用户模式”，输入管理员密码确认。所有用户会立即注销。
+
+### 用户角色与权限
+
+| 资源 | 管理员 (`default-user`) | 普通用户 |
+|------|-------------------------|----------|
+| 站点连接（baseUrl / API Key / 模型列表 / provider） | 可读可写，全局唯一来源 | 只读，API Key mask |
+| 模型分配（Narrator / State Keeper） | 自己一份 | 自己一份 |
+| Preset 选择 | 自己一份 | 自己一份 |
+| 角色卡导入 / 切换 | 不限 | 每用户上限 10 张 |
+| Session 创建 | 不限 | 每角色卡上限 50 |
+| 自助改密 | 可用 | 可用 |
+| 用户管理（创建 / 重置密码 / 禁用 / 启用 / 归档删除） | 可用 | 不可用 |
+| 多用户模式 toggle | 可用 | 不可用 |
+
+普通用户的 site 路径在后端真正全局：`runtime-data/default-user/config/site.json` 是唯一来源；普通用户调用 `/api/site-config POST` 会被拒绝。
+
+### 登录与未认证访问
+
+- Token 存储在 `localStorage['tl_session_token']`，TTL 为 30 天；主动登出、禁用用户、归档删除或切换多用户模式会撤销对应 token。
+- state-changing 请求（POST/DELETE/PUT）只接受 `Authorization: Bearer <token>`，拒绝 Cookie token，避免浏览器自动带 Cookie 触发 CSRF。
+- 启用多用户后，未认证请求访问 `/` 或 `/index.html` 只会收到最小登录页；完整应用壳、设置面板、session 管理、调试面板和 `/app.js` bundle 都需要有效 token。
+- 登录页只公开加载 `/login.js`、`/styles.css`、`/favicon.svg` 等必要资源。
+
+### 用户数据目录
+
+- 账号注册表：`runtime-data/_system/users.json`
+- Session token 表：`runtime-data/_system/sessions.json`
+- 用户数据目录：`runtime-data/<user>/`
+- 禁用用户会保留其数据目录但撤销 token。
+- 归档删除会先把用户目录移动到 `runtime-data/_system/deleted-users/<user>-<timestamp>`，成功后才删除账号记录和 sessions。
+- 孤儿目录不会自动删除或自动恢复；管理员可在用户管理页手动归档。
+
+### 忘记管理员密码
+
+UI 不提供找回入口。停服后可手动修改 `runtime-data/_system/users.json`：删除 `default-user` 的 `password_hash` 字段，重新启动后再次走“启用多用户”向导重置。
+
+普通用户忘记密码时，由管理员在用户管理中点击“重置密码”。
 
 ## 公网部署前检查
 
