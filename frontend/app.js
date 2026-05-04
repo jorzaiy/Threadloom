@@ -249,25 +249,6 @@ function toggleMobileSessionDock(forceOpen) {
   mobileSessionToggle?.setAttribute('aria-expanded', String(nextOpen));
 }
 
-let sessionDockCloseTimer = null;
-
-function openSessionDock() {
-  if (sessionDockCloseTimer) {
-    clearTimeout(sessionDockCloseTimer);
-    sessionDockCloseTimer = null;
-  }
-  toggleSessionDock(true);
-}
-
-function closeSessionDockSoon() {
-  if (sessionDockCloseTimer) clearTimeout(sessionDockCloseTimer);
-  sessionDockCloseTimer = setTimeout(() => {
-    sessionDockCloseTimer = null;
-    topbarSessionMenu?.removeAttribute('data-suppressed');
-    toggleSessionDock(false);
-  }, 180);
-}
-
 function updateSessionIndicator() {
   topbarContext?.setAttribute('aria-label', `${currentUserDisplayName()} · ${currentCharacterDisplayName()} · ${currentSessionId || '未选择会话'}`);
 }
@@ -1934,41 +1915,6 @@ brandSettingsTrigger?.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' && event.key !== ' ') return;
   event.preventDefault();
   openSettings('connection');
-});
-
-topbarContext?.addEventListener('click', (event) => {
-  event.preventDefault();
-  event.stopPropagation();
-  if (sessionDockCloseTimer) {
-    clearTimeout(sessionDockCloseTimer);
-    sessionDockCloseTimer = null;
-  }
-  topbarSessionMenu?.setAttribute('data-suppressed', 'true');
-  toggleSessionDock(false);
-  openSettings('world');
-});
-
-topbarContext?.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  event.preventDefault();
-  if (sessionDockCloseTimer) {
-    clearTimeout(sessionDockCloseTimer);
-    sessionDockCloseTimer = null;
-  }
-  topbarSessionMenu?.setAttribute('data-suppressed', 'true');
-  toggleSessionDock(false);
-  openSettings('world');
-});
-
-topbarSessionMenu?.addEventListener('mouseenter', openSessionDock);
-topbarSessionMenu?.addEventListener('mouseleave', closeSessionDockSoon);
-sessionDockPanel?.addEventListener('mouseenter', openSessionDock);
-sessionDockPanel?.addEventListener('mouseleave', closeSessionDockSoon);
-topbarSessionMenu?.addEventListener('focusin', openSessionDock);
-topbarSessionMenu?.addEventListener('focusout', (event) => {
-  const nextTarget = event.relatedTarget;
-  if (nextTarget instanceof Node && topbarSessionMenu.contains(nextTarget)) return;
-  toggleSessionDock(false);
 });
 
 mobileSessionToggle?.addEventListener('click', (event) => {

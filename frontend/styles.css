@@ -98,16 +98,9 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  cursor: pointer;
   border-radius: 999px;
   padding: 3px 5px 3px 3px;
   margin-left: -3px;
-}
-
-.topbar h1:hover,
-.topbar h1:focus-visible {
-  background: rgba(69, 88, 73, 0.08);
-  outline: none;
 }
 
 .brand-logo {
@@ -142,17 +135,10 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: pointer;
   border-radius: 999px;
   padding-top: 4px;
   padding-right: 7px;
   padding-bottom: 4px;
-}
-
-.topbar-context:hover,
-.topbar-context:focus-visible {
-  background: rgba(69, 88, 73, 0.08);
-  outline: none;
 }
 
 .topbar-session-menu {
@@ -186,11 +172,38 @@ body {
 }
 
 .settings-icon-btn {
-  padding: 9px;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  justify-content: center;
   border: 1px solid rgba(127, 109, 91, 0.18);
   background: rgba(255, 255, 255, 0.66);
   box-shadow: var(--shadow-soft);
-  color: var(--text) !important;
+  color: var(--text);
+}
+
+.bottom-controls .settings-icon-btn,
+.bottom-controls .mobile-session-toggle {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  justify-content: center;
+  border: 1px solid rgba(127, 109, 91, 0.18);
+  background: rgba(255, 255, 255, 0.66);
+  box-shadow: var(--shadow-soft);
+  color: var(--text);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.bottom-controls .settings-icon-btn:hover,
+.bottom-controls .mobile-session-toggle:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(127, 109, 91, 0.28);
+  box-shadow: 0 8px 20px rgba(33, 29, 25, 0.08);
+  transform: translateY(-1px);
 }
 
 .topbar-actions .icon-btn,
@@ -201,6 +214,11 @@ body {
 .settings-icon-btn .material-symbols-outlined {
   font-size: 18px;
   color: var(--text) !important;
+  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+#brandSettingsTrigger:hover .material-symbols-outlined {
+  transform: rotate(90deg);
 }
 
 .icon-btn.subtle {
@@ -283,14 +301,14 @@ button:active {
 }
 
 .mobile-session-menu {
-  display: none;
+  display: block;
   position: relative;
 }
 
 .mobile-session-toggle {
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -302,12 +320,13 @@ button:active {
 }
 
 .mobile-session-toggle .material-symbols-outlined {
-  font-size: 19px;
+  font-size: 18px;
 }
 
 .mobile-session-panel {
   position: absolute;
-  right: 0;
+  left: 0;
+  right: auto;
   bottom: calc(100% + 8px);
   width: min(22rem, calc(100vw - 16px));
   max-height: 58vh;
@@ -1757,7 +1776,7 @@ button:active {
   }
 
   .mobile-session-menu {
-    display: none;
+    display: block;
   }
 
   .status-bar {
@@ -1770,13 +1789,14 @@ button:active {
   }
 
   .bottom-controls {
-    display: none;
+    display: flex;
+    justify-content: flex-start;
   }
 
   .settings-icon-btn {
-    width: 32px;
-    height: 32px;
-    min-width: 32px;
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
     padding: 0;
     justify-content: center;
   }
