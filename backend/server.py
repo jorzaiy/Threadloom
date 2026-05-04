@@ -79,7 +79,7 @@ MULTI_USER_PRODUCT_ENABLED = True
 PUBLIC_GET_PATHS = {
     '/',
     '/index.html',
-    '/app.js',
+    '/login.js',
     '/marked.min.js',
     '/styles.css',
     '/favicon.svg',
@@ -374,6 +374,42 @@ class Handler(BaseHTTPRequestHandler):
             extra_headers=extra_headers,
         )
 
+    def _send_login_page(self):
+        body = '''<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Threadloom 登录</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;700&family=Inter:wght@400;500;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/login.js" defer></script>
+  </head>
+  <body>
+    <div id="loginScreen" class="login-screen">
+      <form id="loginForm" class="login-form" autocomplete="on">
+        <h1 class="login-title"><img src="/favicon.svg" alt="" class="brand-logo" />Threadloom 登录</h1>
+        <p class="login-hint">多用户模式已启用，请输入账号信息。</p>
+        <label class="login-field">
+          <span>用户名</span>
+          <input id="loginUserId" type="text" autocomplete="username" required />
+        </label>
+        <label class="login-field">
+          <span>密码</span>
+          <input id="loginPassword" type="password" autocomplete="current-password" required />
+        </label>
+        <div id="loginError" class="login-error" role="alert"></div>
+        <button id="loginSubmitBtn" type="submit" class="primary">登录</button>
+      </form>
+    </div>
+  </body>
+</html>
+'''.encode('utf-8')
+        return self._send_raw(200, body, content_type='text/html; charset=utf-8')
+
     def log_message(self, format: str, *args):
         logger.info('%s - %s', self.address_string(), format % args)
 
@@ -635,6 +671,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {'session_id': session_id, 'entity': entity})
 
             if parsed.path in {'/', '/index.html'}:
+                if is_multi_user_enabled() and not resolve_user_from_request(dict(self.headers), allow_cookie=True):
+                    return self._send_login_page()
                 index_path = Path(__file__).resolve().parents[1] / 'frontend' / 'index.html'
                 body = index_path.read_bytes()
                 return self._send_raw(200, body, content_type='text/html; charset=utf-8')
@@ -642,6 +680,11 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/app.js':
                 app_path = Path(__file__).resolve().parents[1] / 'frontend' / 'app.js'
                 body = app_path.read_bytes()
+                return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
+
+            if parsed.path == '/login.js':
+                login_path = Path(__file__).resolve().parents[1] / 'frontend' / 'login.js'
+                body = login_path.read_bytes()
                 return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
 
             if parsed.path == '/marked.min.js':
