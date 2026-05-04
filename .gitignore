@@ -25,9 +25,7 @@ runtime/
 .venv*/
 .codex
 
-runtime-data/default-user/
-runtime-data/user-*/
-runtime-data/_system/
+runtime-data/
 tmp/
 
 # Task scratch + ad-hoc test artefacts
