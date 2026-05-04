@@ -168,6 +168,7 @@ Threadloom 是一个面向长期角色扮演与世界模拟的 runtime-first Web
 
 - Token 存储：`localStorage['tl_session_token']`，TTL 30 天；主动登出会立即失效
 - 传输：`Authorization: Bearer <token>` 头，state-changing 请求（POST/DELETE/PUT）拒绝 Cookie auth 防 CSRF
+- 未登录访问：启用多用户模式后，未认证请求访问 `/` 或 `/index.html` 只会收到最小登录页；完整应用壳、设置面板、session 管理、调试面板和 `/app.js` bundle 都需要有效 token 后才会返回。登录页只公开加载 `/login.js`、`/styles.css`、`/favicon.svg` 等必要资源。
 - Session 校验：服务端只接受仍存在且未禁用用户的 token；每个用户最多保留 10 个活跃 token，超过后淘汰最旧 token
 - 登录失败计数：连续 5 次错误密码自动锁 15 分钟，成功登录或 admin 重置密码立即清零
 - 登录限速：后端对登录请求做进程内 per-IP 与全局窗口限速，降低暴力尝试成本；该限速不替代反向代理或公网部署时的外部限流

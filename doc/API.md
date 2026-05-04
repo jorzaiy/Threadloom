@@ -55,6 +55,7 @@
 
 - 多用户关闭时，业务接口默认解析为 `default-user`，不强制登录。
 - 多用户开启后，除公开路径外都需要有效 token；POST/DELETE/PUT 等 state-changing 请求只接受 `Authorization: Bearer <token>`，不接受 Cookie token。
+- 多用户开启且未认证时，`GET /` 与 `GET /index.html` 只返回最小登录页；不会返回完整 SPA DOM。`GET /app.js` 同样需要有效 token，避免未登录用户枚举完整前端应用逻辑。登录页需要的 `/login.js`、`/styles.css`、`/favicon.svg` 仍保持公开。
 - `POST /api/auth/login` 受后端进程内 per-IP 与全局窗口限速；超过窗口返回 `429 RATE_LIMITED`。
 - token TTL 为 30 天，只对仍存在且未禁用的账号有效；主动登出、管理员禁用或归档删除账号后，残留 token 会被拒绝。
 
