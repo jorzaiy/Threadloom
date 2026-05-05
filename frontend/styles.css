@@ -35,16 +35,28 @@ body {
   margin: 0;
   height: 100vh;
   overflow: hidden;
-  font-family: 'Noto Serif SC', 'Noto Serif', serif;
+  font-family: "Noto Serif SC", "Noto Serif", serif;
   background:
-    radial-gradient(circle at top left, rgba(209, 227, 211, 0.34), transparent 28%),
-    radial-gradient(circle at top right, rgba(224, 208, 187, 0.22), transparent 26%),
+    radial-gradient(
+      circle at top left,
+      rgba(209, 227, 211, 0.34),
+      transparent 28%
+    ),
+    radial-gradient(
+      circle at top right,
+      rgba(224, 208, 187, 0.22),
+      transparent 26%
+    ),
     linear-gradient(180deg, #f9f6f1 0%, var(--background) 100%);
   color: var(--text);
 }
 
 .material-symbols-outlined {
-  font-variation-settings: 'FILL' 0, 'wght' 350, 'GRAD' 0, 'opsz' 24;
+  font-variation-settings:
+    "FILL" 0,
+    "wght" 350,
+    "GRAD" 0,
+    "opsz" 24;
 }
 
 .app {
@@ -65,8 +77,16 @@ body {
   height: 100vh;
   min-height: 0;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(249, 246, 241, 0.08) 100%),
-    radial-gradient(circle at top left, rgba(211, 232, 213, 0.18), transparent 34%);
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.34) 0%,
+      rgba(249, 246, 241, 0.08) 100%
+    ),
+    radial-gradient(
+      circle at top left,
+      rgba(211, 232, 213, 0.18),
+      transparent 34%
+    );
 }
 
 .topbar {
@@ -89,7 +109,7 @@ body {
 
 .topbar h1 {
   margin: 0;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 15px;
   line-height: 1;
   letter-spacing: -0.01em;
@@ -117,7 +137,7 @@ body {
 
 .brand-subtitle {
   margin: 0;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 10px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
@@ -128,7 +148,7 @@ body {
   min-width: 0;
   padding-left: 10px;
   border-left: 1px solid rgba(127, 109, 91, 0.12);
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 11px;
   letter-spacing: 0.02em;
   color: var(--text-muted);
@@ -238,7 +258,10 @@ body {
   color: var(--text);
   font: inherit;
   outline: none;
-  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
 }
 
 .composer textarea:focus {
@@ -257,14 +280,18 @@ button {
   border-radius: 999px;
   background: var(--primary);
   color: #fff;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   padding: 9px 14px;
   cursor: pointer;
-  transition: transform 160ms ease, opacity 160ms ease, background 160ms ease, box-shadow 160ms ease;
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
   box-shadow: 0 6px 16px rgba(64, 82, 69, 0.18);
 }
 
@@ -281,21 +308,21 @@ button:active {
   border-radius: 10px;
   padding: 4px 10px;
   background: rgba(255, 251, 245, 0.9);
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 11px;
   color: var(--text-muted);
 }
 
-.status-bar[data-kind='working'] {
+.status-bar[data-kind="working"] {
   background: #f8f3e8;
 }
 
-.status-bar[data-kind='ok'] {
+.status-bar[data-kind="ok"] {
   background: #e7f0e7;
   color: var(--ok);
 }
 
-.status-bar[data-kind='error'] {
+.status-bar[data-kind="error"] {
   background: #f8e2df;
   color: var(--danger);
 }
@@ -341,10 +368,13 @@ button:active {
   visibility: hidden;
   pointer-events: none;
   transform: translateY(4px);
-  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 140ms ease;
 }
 
-.mobile-session-panel[aria-hidden='false'] {
+.mobile-session-panel[aria-hidden="false"] {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
@@ -370,7 +400,9 @@ button:active {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.88);
   color: var(--text);
-  font: 12px/1.6 'Inter', sans-serif;
+  font:
+    12px/1.6 "Inter",
+    sans-serif;
   padding: 12px 14px;
 }
 
@@ -383,8 +415,22 @@ button:active {
   padding: 60px 28px 24px;
   min-height: 0;
   scroll-padding-bottom: 140px;
-  mask-image: linear-gradient(to bottom, transparent 0%, transparent 32px, black 52px, black calc(100% - 24px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 32px, black 52px, black calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 32px,
+    black 52px,
+    black calc(100% - 24px),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 32px,
+    black 52px,
+    black calc(100% - 24px),
+    transparent 100%
+  );
 }
 
 .history-toolbar {
@@ -460,7 +506,7 @@ button:active {
   min-height: 0;
 }
 
-.character-manage-card[data-active='true'] {
+.character-manage-card[data-active="true"] {
   border-color: rgba(64, 82, 69, 0.42);
   background: rgba(226, 238, 228, 0.9);
 }
@@ -470,13 +516,17 @@ button:active {
   aspect-ratio: 16 / 9;
   border-radius: 14px;
   overflow: hidden;
-  background: linear-gradient(160deg, rgba(69, 88, 73, 0.18), rgba(121, 105, 82, 0.18));
+  background: linear-gradient(
+    160deg,
+    rgba(69, 88, 73, 0.18),
+    rgba(121, 105, 82, 0.18)
+  );
   filter: grayscale(1);
   flex-shrink: 0;
   position: relative;
 }
 
-.character-manage-card[data-active='true'] .character-manage-cover-wrap {
+.character-manage-card[data-active="true"] .character-manage-cover-wrap {
   filter: none;
 }
 
@@ -494,7 +544,7 @@ button:active {
 }
 
 .character-manage-cover-fallback {
-  font-family: 'Noto Serif SC', serif;
+  font-family: "Noto Serif SC", serif;
   font-size: 30px;
   color: rgba(26, 28, 27, 0.45);
 }
@@ -532,7 +582,7 @@ button:active {
   border-radius: 999px;
   background: rgba(64, 82, 69, 0.14);
   color: var(--primary);
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -601,7 +651,7 @@ button:active {
 
 .msg-label {
   margin: 0;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -624,7 +674,7 @@ button:active {
   justify-content: center;
   background: rgba(127, 109, 91, 0.12);
   color: var(--text);
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 14px;
   font-weight: 700;
   flex: 0 0 auto;
@@ -784,7 +834,10 @@ button:active {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 140ms ease;
 }
 
 .session-dock-panel::before {
@@ -796,14 +849,14 @@ button:active {
   height: 12px;
 }
 
-.session-dock-panel[aria-hidden='false'] {
+.session-dock-panel[aria-hidden="false"] {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
   transform: translateY(0);
 }
 
-.topbar-session-menu[data-suppressed='true'] .session-dock-panel {
+.topbar-session-menu[data-suppressed="true"] .session-dock-panel {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -838,7 +891,7 @@ button:active {
 }
 
 .session-dock-heading small {
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -862,7 +915,7 @@ button:active {
   align-items: center;
 }
 
-.session-dock-item[data-active='true'] .session-dock-open {
+.session-dock-item[data-active="true"] .session-dock-open {
   border-color: rgba(69, 88, 73, 0.35);
   background: rgba(211, 232, 213, 0.32);
   color: var(--text);
@@ -870,7 +923,7 @@ button:active {
 
 .session-dock-open,
 .session-dock-delete {
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -941,7 +994,7 @@ button:active {
 }
 
 .typing-indicator-label {
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -970,7 +1023,9 @@ button:active {
 }
 
 @keyframes typingBounce {
-  0%, 60%, 100% {
+  0%,
+  60%,
+  100% {
     transform: translateY(0);
     opacity: 0.4;
   }
@@ -1042,7 +1097,7 @@ button:active {
 .card h2 {
   margin: 0 0 14px;
   font-size: 15px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.18em;
   color: var(--text-muted);
@@ -1062,7 +1117,11 @@ button:active {
   width: 100%;
   max-width: 280px;
   aspect-ratio: 280 / 164;
-  background: linear-gradient(160deg, rgba(69, 88, 73, 0.18), rgba(121, 105, 82, 0.18));
+  background: linear-gradient(
+    160deg,
+    rgba(69, 88, 73, 0.18),
+    rgba(121, 105, 82, 0.18)
+  );
   border-bottom: 1px solid rgba(127, 109, 91, 0.14);
 }
 
@@ -1088,7 +1147,7 @@ button:active {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: 'Noto Serif SC', serif;
+  font-family: "Noto Serif SC", serif;
   font-size: 32px;
   letter-spacing: 0.08em;
   color: rgba(26, 28, 27, 0.5);
@@ -1111,7 +1170,7 @@ button:active {
 
 .character-label {
   margin: 0 0 6px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -1120,7 +1179,7 @@ button:active {
 
 .character-scope {
   margin: 0 0 10px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -1133,7 +1192,7 @@ button:active {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.88);
   color: var(--text);
-  font-family: 'Noto Serif SC', serif;
+  font-family: "Noto Serif SC", serif;
   font-size: 14px;
   line-height: 1.3;
   padding: 6px 8px;
@@ -1177,7 +1236,7 @@ button:active {
 .state-table th {
   width: 72px;
   color: var(--text-soft);
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1205,7 +1264,7 @@ button:active {
 }
 
 .state-summary-line strong {
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.16em;
@@ -1221,7 +1280,7 @@ button:active {
 .npc-block strong {
   display: block;
   margin-bottom: 6px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.16em;
@@ -1252,7 +1311,7 @@ button:active {
   gap: 8px;
   padding: 14px 16px 12px;
   cursor: pointer;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
@@ -1268,7 +1327,7 @@ button:active {
 }
 
 .sidebar-summary::after {
-  content: '';
+  content: "";
   display: inline-block;
   width: 5px;
   height: 5px;
@@ -1378,11 +1437,13 @@ button:active {
   transform: translateX(100%);
   opacity: 0;
   pointer-events: none;
-  transition: transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 300ms ease;
+  transition:
+    transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 300ms ease;
   overflow: hidden;
 }
 
-.settings-panel[data-open='true'] {
+.settings-panel[data-open="true"] {
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
@@ -1405,7 +1466,7 @@ button:active {
 
 .settings-kicker {
   margin: 0 0 6px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -1430,7 +1491,7 @@ button:active {
 
 .settings-section h3 {
   margin: 0 0 14px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.16em;
@@ -1461,7 +1522,7 @@ button:active {
 
 .settings-section-head h3 {
   margin: 0 0 6px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.16em;
@@ -1487,7 +1548,7 @@ button:active {
 .settings-tab-btn {
   position: relative;
   padding: 10px 18px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.04em;
@@ -1496,7 +1557,9 @@ button:active {
   border: none;
   border-radius: 10px 10px 0 0;
   cursor: pointer;
-  transition: background 160ms ease, color 160ms ease;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
   white-space: nowrap;
 }
 
@@ -1505,14 +1568,14 @@ button:active {
   color: var(--text);
 }
 
-.settings-tab-btn[aria-selected='true'] {
+.settings-tab-btn[aria-selected="true"] {
   color: var(--text);
   background: transparent;
   font-weight: 600;
 }
 
-.settings-tab-btn[aria-selected='true']::after {
-  content: '';
+.settings-tab-btn[aria-selected="true"]::after {
+  content: "";
   position: absolute;
   left: 12px;
   right: 12px;
@@ -1528,7 +1591,7 @@ button:active {
   gap: 22px;
 }
 
-.settings-tab-panel[data-active='true'] {
+.settings-tab-panel[data-active="true"] {
   display: flex;
 }
 
@@ -1548,7 +1611,7 @@ button:active {
 
 .settings-micro {
   margin: 0;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -1568,7 +1631,7 @@ button:active {
 }
 
 .field span {
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -1583,12 +1646,12 @@ button:active {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.9);
   color: var(--text);
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 13px;
   padding: 8px 12px;
 }
 
-.field input[type='range'] {
+.field input[type="range"] {
   padding: 0;
   accent-color: var(--primary);
 }
@@ -1638,20 +1701,20 @@ button:active {
 .inline-feedback {
   min-height: 18px;
   margin-top: 10px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 12px;
   color: var(--text-muted);
 }
 
-.inline-feedback[data-kind='error'] {
+.inline-feedback[data-kind="error"] {
   color: var(--danger);
 }
 
-.inline-feedback[data-kind='ok'] {
+.inline-feedback[data-kind="ok"] {
   color: var(--ok);
 }
 
-.inline-feedback[data-kind='warning'] {
+.inline-feedback[data-kind="warning"] {
   color: var(--warning, #e2a308);
 }
 
@@ -1740,8 +1803,22 @@ button:active {
   .messages {
     padding: 48px 0 16px;
     gap: 18px;
-    mask-image: linear-gradient(to bottom, transparent 0%, transparent 28px, black 44px, black calc(100% - 16px), transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 28px, black 44px, black calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0%,
+      transparent 28px,
+      black 44px,
+      black calc(100% - 16px),
+      transparent 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0%,
+      transparent 28px,
+      black 44px,
+      black calc(100% - 16px),
+      transparent 100%
+    );
   }
 
   .composer {
@@ -1870,7 +1947,7 @@ button:active {
     box-shadow: 0 -8px 24px rgba(20, 23, 21, 0.08);
   }
 
-  .debug-float-panel[data-open='true'] {
+  .debug-float-panel[data-open="true"] {
     transform: translateX(-50%) translateY(0);
   }
 }
@@ -1967,10 +2044,12 @@ button:active {
   flex-direction: column;
   pointer-events: none;
   opacity: 0;
-  transition: transform 220ms ease, opacity 180ms ease;
+  transition:
+    transform 220ms ease,
+    opacity 180ms ease;
 }
 
-.debug-float-panel[data-open='true'] {
+.debug-float-panel[data-open="true"] {
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
@@ -1986,7 +2065,7 @@ button:active {
 
 .debug-float-header h2 {
   margin: 0;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -2053,8 +2132,16 @@ button:active {
   align-items: center;
   justify-content: center;
   background:
-    radial-gradient(circle at top left, rgba(209, 227, 211, 0.34), transparent 28%),
-    radial-gradient(circle at top right, rgba(224, 208, 187, 0.22), transparent 26%),
+    radial-gradient(
+      circle at top left,
+      rgba(209, 227, 211, 0.34),
+      transparent 28%
+    ),
+    radial-gradient(
+      circle at top right,
+      rgba(224, 208, 187, 0.22),
+      transparent 26%
+    ),
     linear-gradient(180deg, #f9f6f1 0%, var(--background) 100%);
   z-index: 10000;
 }
@@ -2110,7 +2197,9 @@ button:active {
   font-family: inherit;
   font-size: 12px;
   color: var(--text);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 
 .login-field input:focus {
@@ -2251,7 +2340,7 @@ button:active {
   padding: 10px 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.02);
 }
 
 .password-prompt-modal {
@@ -2332,7 +2421,7 @@ button:active {
 .settings-tab-btn {
   position: relative;
   padding: 12px 16px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.04em;
@@ -2350,14 +2439,14 @@ button:active {
   color: var(--text);
 }
 
-.settings-tab-btn[aria-selected='true'] {
+.settings-tab-btn[aria-selected="true"] {
   background: rgba(127, 109, 91, 0.12);
   color: var(--text);
   font-weight: 700;
 }
 
-.settings-tab-btn[aria-selected='true']::before {
-  content: '';
+.settings-tab-btn[aria-selected="true"]::before {
+  content: "";
   position: absolute;
   left: 0;
   top: 8px;
@@ -2407,7 +2496,9 @@ button:active {
   cursor: pointer;
   color: var(--text-soft);
   flex-shrink: 0;
-  transition: background 150ms ease, color 150ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
 }
 
 .carousel-btn:hover {
@@ -2416,27 +2507,73 @@ button:active {
 }
 
 @media (max-width: 600px) {
+  .topbar,
+  #debugToggleBtn,
+  #mobileSessionMenu {
+    display: none;
+  }
+
+  .messages {
+    padding-top: 20px;
+  }
+
+  .composer-footer {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .composer-status-row {
+    display: flex;
+    align-items: center;
+    min-width: 34px;
+  }
+
+  .bottom-controls {
+    display: flex;
+  }
+
+  .composer-actions {
+    flex: 1;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
   .settings-panel {
     flex-direction: column;
+    height: 100dvh;
+    max-height: 100dvh;
+    padding-bottom: env(safe-area-inset-bottom);
   }
-  
+
   .settings-sidebar {
     width: 100%;
+    flex: 0 0 auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
-  
+
+  .settings-header {
+    padding: 16px 16px 10px;
+  }
+
+  .settings-header h2 {
+    font-size: 20px;
+  }
+
   .settings-tabs {
     flex-direction: row;
     overflow-x: auto;
-    padding: 0 16px 12px;
+    padding: 0 12px 10px;
   }
-  
+
   .settings-tab-btn {
+    padding: 9px 12px;
+    font-size: 12px;
     white-space: nowrap;
   }
-  
-  .settings-tab-btn[aria-selected='true']::before {
+
+  .settings-tab-btn[aria-selected="true"]::before {
     left: 8px;
     right: 8px;
     bottom: 0;
@@ -2451,16 +2588,17 @@ button:active {
   }
 
   .settings-body {
-    padding: 16px 16px 24px;
+    padding: 14px 14px 22px;
   }
 
   .settings-main {
     position: static;
+    min-height: 0;
   }
 
   .settings-main-header {
-    top: 16px;
-    right: 16px;
+    top: 12px;
+    right: 12px;
   }
 }
 
@@ -2478,13 +2616,15 @@ button:active {
   border: 1px solid rgba(127, 109, 91, 0.2);
   border-radius: 999px;
   padding: 6px 16px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 13px;
   color: var(--text);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
   z-index: 100;
   opacity: 0;
-  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
+  transition:
+    transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    opacity 0.3s ease;
   pointer-events: none;
 }
 
@@ -2507,7 +2647,9 @@ button:active {
   margin-left: 6px;
   background-color: #4ade80;
   box-shadow: 0 0 8px rgba(74, 222, 128, 0.4);
-  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+  transition:
+    background-color 0.3s ease,
+    box-shadow 0.3s ease;
 }
 
 .status-dot[data-status="ready"] {
@@ -2527,8 +2669,17 @@ button:active {
 }
 
 @keyframes breathe {
-  0%, 100% { opacity: 0.5; transform: scale(0.9); box-shadow: 0 0 4px rgba(251, 146, 60, 0.3); }
-  50% { opacity: 1; transform: scale(1.1); box-shadow: 0 0 12px rgba(251, 146, 60, 0.8); }
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(0.9);
+    box-shadow: 0 0 4px rgba(251, 146, 60, 0.3);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+    box-shadow: 0 0 12px rgba(251, 146, 60, 0.8);
+  }
 }
 
 /* Dropdown Arrow in Topbar */
@@ -2555,7 +2706,9 @@ button:active {
   cursor: pointer;
   z-index: 99;
   opacity: 0.7;
-  transition: all 0.3s ease, opacity 0.3s ease;
+  transition:
+    all 0.3s ease,
+    opacity 0.3s ease;
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
@@ -2599,7 +2752,7 @@ button:active {
 }
 
 .toggle-label {
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 12px;
   font-weight: bold;
   text-transform: uppercase;
@@ -2628,7 +2781,7 @@ button:active {
   right: 0;
   bottom: 0;
   background-color: #ccc;
-  transition: .4s;
+  transition: 0.4s;
   border-radius: 34px;
 }
 
@@ -2640,9 +2793,9 @@ button:active {
   left: 3px;
   bottom: 3px;
   background-color: white;
-  transition: .4s;
+  transition: 0.4s;
   border-radius: 50%;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 input:checked + .toggle-slider {
@@ -2655,4 +2808,148 @@ input:focus + .toggle-slider {
 
 input:checked + .toggle-slider:before {
   transform: translateX(16px);
+}
+
+/* === PREMIUM UI POLISH === */
+
+/* 1. Topbar / Logo Capsule Refinement */
+.topbar {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.85),
+    rgba(250, 248, 245, 0.7)
+  );
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(127, 109, 91, 0.15);
+  transition:
+    transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.topbar:hover {
+  box-shadow:
+    0 6px 30px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+  transform: translateY(-1px);
+}
+.brand-block h1 {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.brand-logo {
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.topbar:hover .brand-logo {
+  transform: rotate(-5deg) scale(1.05);
+}
+
+/* 2. Bottom Controls (Debug, Settings, Session) Refinement */
+.bottom-controls {
+  gap: 8px;
+}
+.bottom-controls .settings-icon-btn,
+.bottom-controls .mobile-session-toggle {
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(127, 109, 91, 0.15);
+  border-radius: 12px;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  color: var(--text-soft);
+  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.bottom-controls .settings-icon-btn:hover,
+.bottom-controls .mobile-session-toggle:hover {
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--text);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+  transform: translateY(-2px);
+}
+.bottom-controls .settings-icon-btn:active,
+.bottom-controls .mobile-session-toggle:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+/* 3. Send Button Refinement */
+#sendBtn {
+  background: linear-gradient(135deg, var(--primary), #3a4a3e);
+  color: #fff;
+  border: none;
+  border-radius: 14px;
+  box-shadow:
+    0 4px 14px rgba(69, 88, 73, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+#sendBtn::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.15),
+    transparent
+  );
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+#sendBtn:hover {
+  box-shadow:
+    0 6px 20px rgba(69, 88, 73, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, #4d6352, #2f3d32);
+}
+#sendBtn:hover::after {
+  opacity: 1;
+}
+#sendBtn:active {
+  transform: translateY(1px);
+  box-shadow: 0 2px 6px rgba(69, 88, 73, 0.2);
+}
+
+/* Icon & Stroke Refinements */
+.bottom-controls .material-symbols-outlined {
+  font-variation-settings:
+    "FILL" 0,
+    "wght" 300,
+    "GRAD" 0,
+    "opsz" 20;
+  transition:
+    font-variation-settings 0.3s ease,
+    transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 0.3s ease;
+}
+
+.bottom-controls .icon-btn:hover .material-symbols-outlined,
+.bottom-controls .mobile-session-toggle:hover .material-symbols-outlined {
+  font-variation-settings:
+    "FILL" 0,
+    "wght" 500,
+    "GRAD" 0,
+    "opsz" 24;
+  color: var(--primary);
+  transform: scale(1.15);
+}
+
+.topbar .material-symbols-outlined {
+  font-variation-settings:
+    "FILL" 0,
+    "wght" 400,
+    "GRAD" 0,
+    "opsz" 20;
 }
