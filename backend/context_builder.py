@@ -992,6 +992,12 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     if not inject_lorebook_text:
         lorebook_text = ''
 
+    selected_summary_chars = int(lorebook_summary.get('total_chars', 0) or 0)
+    source_hit_chars = int(lorebook_source_hits.get('total_chars', 0) or 0)
+    index_hit_chars = len(str(lorebook_index_hits.get('text', '') or ''))
+    foundation_chars = len(str(lorebook_foundation.get('text', '') or ''))
+    effective_lorebook_chars = len(str(lorebook_text or '')) + foundation_chars
+
     # --- Preset 内容提取 ---
     preset_system_template = preset.get('systemTemplate', '')
     preset_reply_rules = preset.get('replyRules', [])
@@ -1021,6 +1027,11 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
             'foundation': lorebook_foundation,
             'index_hits': lorebook_index_hits,
             'source_hits': lorebook_source_hits,
+            'selected_summary_chars': selected_summary_chars,
+            'source_hit_chars': source_hit_chars,
+            'index_hit_chars': index_hit_chars,
+            'foundation_chars': foundation_chars,
+            'effective_total_chars': effective_lorebook_chars,
             'mode': 'opening-source' if opening_lorebook_turn else ('source-hit' if lorebook_source_hits.get('items') else ('index-hit' if lorebook_index_hits.get('items') else 'selected-summary')),
         },
         'lorebook_npc_candidates': merged_lorebook_candidates,

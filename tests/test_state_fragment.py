@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
+import sys
 import unittest
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / 'backend'))
 
 from backend.state_fragment import extract_reply_skeleton, merge_reply_skeleton, merge_state_skeleton
 from backend import state_keeper
@@ -11,7 +17,7 @@ from backend.actor_registry import update_actor_registry
 from backend.arbiter_state import merge_arbiter_state
 from backend.state_keeper import _call_state_keeper_llm, _merge_keeper_fill, _parse_fill_payload
 from backend.state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, normalize_carryover_signals, normalize_keeper_object_label
-from backend.handler_message import _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _store_turn_audit
+from backend.handler_message import _add_lightweight_knowledge_delta, _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _store_turn_audit
 from backend.summary_chunks import _fallback_chunk, _normalize_chunk
 
 
@@ -822,6 +828,62 @@ class StateFragmentTest(unittest.TestCase):
         self.assertIn('纸封未拆', merged['carryover_clues'])
         self.assertIn('账册中夹有暗号', merged['carryover_clues'])
 
+    def test_thread_dedupe_recomputes_key_when_label_changes(self):
+        state = {
+            'main_event': '陆小环体力耗尽后手抖。',
+            'immediate_goal': '继续训练。',
+            'carryover_signals': [
+                {'type': 'risk', 'text': '维克托左腿旧伤在雨后僵硬'},
+                {'type': 'risk', 'text': '陆小环体力耗尽手抖未被察觉'},
+            ],
+            'active_threads': [
+                {
+                    'key': 'risk:维克托左腿旧伤在雨后僵硬',
+                    'label': '维克托左腿旧伤在雨后僵硬',
+                    'kind': 'risk',
+                    'priority': 'secondary',
+                    'status': 'active',
+                    'goal': '避免该风险在下一轮直接失控或越界落地',
+                    'obstacle': '维克托左腿旧伤在雨后僵硬',
+                    'thread_id': 'thread_02',
+                },
+            ],
+        }
+
+        threaded = apply_thread_tracker(state, narrator_reply='陆小环体力耗尽，双手仍在发抖。')
+
+        risk_threads = [item for item in threaded['active_threads'] if item.get('kind') == 'risk']
+        for item in risk_threads:
+            self.assertIn(item['label'].rstrip('。'), item['key'])
+
+    def test_keeper_fill_resolved_signals_drop_stale_risk(self):
+        baseline = {
+            'carryover_signals': [{'type': 'risk', 'text': '维克托要求陆小环伸出双手检查'}],
+            'immediate_risks': ['维克托要求陆小环伸出双手检查'],
+            'carryover_clues': ['左边双杠握把间距比其他宽两寸'],
+        }
+        payload = {'resolved_signals': ['伸出双手检查已经完成']}
+
+        merged = _merge_keeper_fill(baseline, payload)
+        normalized = normalize_state_dict(merged, prev_state=baseline)
+        threaded = apply_thread_tracker(normalized, narrator_reply='维克托检查完双手，替陆小环缠好胶布。')
+
+        self.assertNotIn('维克托要求陆小环伸出双手检查。', normalized['immediate_risks'])
+        self.assertFalse(any('伸出双手检查' in item.get('label', '') for item in threaded['active_threads']))
+
+    def test_lightweight_knowledge_delta_records_visible_object_possession(self):
+        state = {
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '运动胶布', 'kind': 'item'}],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '维克托·奥古斯特', 'status': '塞回战术裤侧袋'}],
+        }
+
+        updated = _add_lightweight_knowledge_delta(state, '维克托·奥古斯特把运动胶布塞回战术裤侧袋。')
+
+        self.assertEqual(
+            updated['knowledge_scope']['protagonist']['learned'],
+            ['运动胶布由维克托·奥古斯特持有，状态为塞回战术裤侧袋'],
+        )
+
     def test_state_keeper_environment_filter_is_not_card_name_specific(self):
         from backend.state_keeper import _looks_like_environment_entity
 
@@ -843,7 +905,7 @@ class StateFragmentTest(unittest.TestCase):
                 'event_hits': [{'event_id': 'evt_0001', 'summary': '很长的正文不应进入审计'}],
                 'summary_chunk_hits': [{'chunk_id': 'chunk_0001', 'dense_summary': ['正文']}],
             },
-            'lorebook_injection': {'items': [{'id': 'entry_1', 'content': '不应进入审计'}], 'total_chars': 20, 'mode': 'selected'},
+            'lorebook_injection': {'items': [{'id': 'entry_1', 'content': '不应进入审计'}], 'total_chars': 20, 'source_hit_chars': 15, 'index_hit_chars': 9, 'foundation_chars': 30, 'effective_total_chars': 45, 'mode': 'selected'},
             'lorebook_text': '全文不应进入审计',
             'system_npc_candidates': [{'name': '甲'}],
             'selected_summary_chunks': [{'chunk_id': 'chunk_0001'}],
@@ -856,6 +918,8 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertEqual(meta['last_turn_audit']['selector']['event_hit_ids'], ['evt_0001'])
         self.assertEqual(meta['turn_audits'][0]['keeper']['provider_used'], 'llm')
+        self.assertEqual(meta['last_turn_audit']['lorebook_injection']['effective_total_chars'], 45)
+        self.assertEqual(meta['last_turn_audit']['lorebook_injection']['source_hit_chars'], 15)
         self.assertNotIn('content', str(meta['last_turn_audit']['lorebook_injection']))
 
     def test_summary_chunk_keeps_metadata_generic_and_payload_driven(self):

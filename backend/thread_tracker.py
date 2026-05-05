@@ -322,6 +322,9 @@ def _dedupe_similar_threads(items: list[dict], limit: int = 5) -> list[dict]:
                 existing['label'] = item.get('label')
             elif len(item_label) > len(existing_label):
                 existing['label'] = item.get('label')
+            updated_label = str(existing.get('label', '') or '').strip()
+            if updated_label:
+                existing['key'] = _make_thread_key(kind, updated_label)
             if len(str(item.get('obstacle', '') or '')) > len(str(existing.get('obstacle', '') or '')):
                 existing['obstacle'] = item.get('obstacle')
             if len(str(item.get('goal', '') or '')) > len(str(existing.get('goal', '') or '')):

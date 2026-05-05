@@ -1564,6 +1564,40 @@ def _coerce_knowledge_scope_delta(value) -> dict:
     return result
 
 
+def _normalize_resolved_signals(value) -> list[str]:
+    if isinstance(value, str):
+        value = [value] if value.strip() else []
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = _clean_signal_text(str(item or ''))
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= 4:
+            break
+    return out
+
+
+def _signal_matches_resolved(signal_text: str, resolved_text: str) -> bool:
+    left = _clean_signal_text(signal_text)
+    right = _clean_signal_text(resolved_text)
+    if not left or not right:
+        return False
+    if left in right or right in left:
+        return True
+    shorter = left if len(left) <= len(right) else right
+    longer = right if shorter == left else left
+    for idx in range(0, max(0, len(shorter) - 3)):
+        if shorter[idx:idx + 4] in longer:
+            return True
+    left_tokens = set(re.findall(r'[\u4e00-\u9fff]{2,8}|[A-Za-z][A-Za-z0-9_-]{1,20}', left))
+    right_tokens = set(re.findall(r'[\u4e00-\u9fff]{2,8}|[A-Za-z][A-Za-z0-9_-]{1,20}', right))
+    if not left_tokens or not right_tokens:
+        return False
+    return len(left_tokens & right_tokens) >= max(1, min(len(left_tokens), len(right_tokens)) // 2)
+
+
 def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id: str | None = None) -> dict:
     prev = prev_state or {}
     current = dict(state or {})
@@ -1664,7 +1698,13 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     )
     current['relevant_npcs'] = _filter_person_names_with_evidence(current['relevant_npcs'], current, prev, limit=6)
 
+    resolved_signals = _normalize_resolved_signals(current.get('resolved_signals', []))
     current['carryover_signals'] = normalize_carryover_signals(current.get('carryover_signals', prev.get('carryover_signals', [])))
+    if resolved_signals:
+        current['carryover_signals'] = [
+            item for item in current['carryover_signals']
+            if not any(_signal_matches_resolved(str(item.get('text', '') or ''), marker) for marker in resolved_signals)
+        ]
     if current['carryover_signals']:
         derived_risks, derived_clues = derive_risks_clues_from_signals(current['carryover_signals'])
         current['immediate_risks'] = normalize_text_list(derived_risks, limit=4)
@@ -1672,6 +1712,16 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     else:
         current['immediate_risks'] = normalize_text_list(current.get('immediate_risks', prev.get('immediate_risks', [])), limit=4)
         current['carryover_clues'] = normalize_text_list(current.get('carryover_clues', prev.get('carryover_clues', [])), limit=4)
+    if resolved_signals:
+        current['immediate_risks'] = [
+            item for item in current.get('immediate_risks', [])
+            if not any(_signal_matches_resolved(item, marker) for marker in resolved_signals)
+        ]
+        current['carryover_clues'] = [
+            item for item in current.get('carryover_clues', [])
+            if not any(_signal_matches_resolved(item, marker) for marker in resolved_signals)
+        ]
+        current['resolved_signals'] = resolved_signals
     tracked_objects = current.get('tracked_objects', prev.get('tracked_objects', []))
     if not isinstance(tracked_objects, list):
         tracked_objects = prev.get('tracked_objects', []) if isinstance(prev.get('tracked_objects', []), list) else []

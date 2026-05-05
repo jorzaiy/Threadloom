@@ -270,6 +270,11 @@ def _compact_lorebook_audit(lorebook_injection: dict) -> dict:
     return {
         'item_count': len(items),
         'total_chars': lorebook_injection.get('total_chars', 0),
+        'selected_summary_chars': lorebook_injection.get('selected_summary_chars', lorebook_injection.get('total_chars', 0)),
+        'source_hit_chars': lorebook_injection.get('source_hit_chars', 0),
+        'index_hit_chars': lorebook_injection.get('index_hit_chars', 0),
+        'foundation_chars': lorebook_injection.get('foundation_chars', 0),
+        'effective_total_chars': lorebook_injection.get('effective_total_chars', lorebook_injection.get('total_chars', 0)),
         'mode': lorebook_injection.get('mode'),
         'item_ids': [str(item.get('id', item.get('title', '')) or '') for item in items if isinstance(item, dict)][:8],
         'foundation_count': _safe_count((lorebook_injection.get('foundation') or {}).get('items') if isinstance(lorebook_injection.get('foundation'), dict) else []),
@@ -312,6 +317,53 @@ def _is_object_heavy_turn(user_text: str, reply: str, state: dict, state_fragmen
     if labels and any(label in combined for label in labels):
         return True
     return False
+
+
+def _merge_protagonist_knowledge_delta(state: dict, learned_items: list[str]) -> dict:
+    cleaned = []
+    for item in learned_items:
+        text = str(item or '').strip().rstrip('。')
+        if text and text not in cleaned:
+            cleaned.append(text)
+    if not cleaned:
+        return state
+    next_state = copy.deepcopy(state or {})
+    scope = next_state.get('knowledge_scope', {}) if isinstance(next_state.get('knowledge_scope', {}), dict) else {}
+    protagonist = scope.get('protagonist', {}) if isinstance(scope.get('protagonist', {}), dict) else {}
+    learned = [str(item).strip().rstrip('。') for item in (protagonist.get('learned', []) or []) if str(item).strip()]
+    for item in cleaned:
+        if item not in learned:
+            learned.append(item)
+    if learned:
+        scope['protagonist'] = {'learned': learned[-10:]}
+        next_state['knowledge_scope'] = scope
+    return next_state
+
+
+def _add_lightweight_knowledge_delta(state: dict, narrator_reply: str) -> dict:
+    if not isinstance(state, dict):
+        return state
+    reply = str(narrator_reply or '')
+    object_labels = {
+        str(item.get('object_id', '') or ''): str(item.get('label', '') or '').strip()
+        for item in (state.get('tracked_objects', []) or [])
+        if isinstance(item, dict) and str(item.get('object_id', '') or '').strip() and str(item.get('label', '') or '').strip()
+    }
+    learned: list[str] = []
+    for item in state.get('possession_state', []) or []:
+        if not isinstance(item, dict):
+            continue
+        object_id = str(item.get('object_id', '') or '').strip()
+        label = object_labels.get(object_id, '')
+        holder = str(item.get('holder', '') or '').strip()
+        status = str(item.get('status', '') or '').strip()
+        if not label or not holder or label not in reply:
+            continue
+        if status:
+            learned.append(f'{label}由{holder}持有，状态为{status}')
+        else:
+            learned.append(f'{label}由{holder}持有')
+    return _merge_protagonist_knowledge_delta(state, learned[:3])
 
 
 def _store_turn_audit(meta: dict, audit: dict) -> None:
@@ -973,6 +1025,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             current_user = None
     recent_pairs = recent_pairs[-3:]
 
+    state = _add_lightweight_knowledge_delta(state, reply)
     state = update_actor_registry(
         state,
         narrator_reply=reply,
