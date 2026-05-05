@@ -294,6 +294,15 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
 - selector：summary chunk 的 `keywords` 应优先保存稳定检索键：人物名、地点名、关键物件、事件短语、关系线。turn audit 会记录 `npc_profile_load`，包括目标、实际加载、缺失项与 profile 目录，用来诊断 profile target 和 narrator 注入之间的断链。
 - narrator：若最近几轮已经反复停在观察、判断、沉默、不点破、目光变化或心理揣测，本轮必须推进一个客观可感知的新变化；用户输入只做轻承接，正文主体应写用户动作之后世界如何回应。
 
+## 2026-05-05 Keeper / Selector 质量修复
+
+- keeper/thread：risk / clue thread 去重时，若更具体的 `label` 覆盖旧标签，必须同步重算 `key`，避免出现 `key` 仍指向旧风险、`label` 已变成新风险的状态污染。
+- keeper/signals：fill keeper 可输出 `resolved_signals`，用于显式关闭本轮已经完成检查、解除风险或落地的旧信号。`normalize_state_dict` 会在 thread tracker 前过滤对应的 `carryover_signals / immediate_risks / carryover_clues`，避免 stale risk 每轮复活。
+- keeper/knowledge：非 full keeper turn 也会补一层轻量可见知识 delta。当前先覆盖本轮 narrator 明确写到的可见物件持有状态，再交给 actor registry 折叠进 `knowledge_records`。
+- selector/event：event recall 不再只按 topic overlap + NPC 名加分；现在更偏向当前 `user_text / location / main_event` 命中的事件，并用 recency bonus 与同分新 turn 优先减少旧事件机械回流。
+- selector/event：高频反复出现的 carryover clue 会降权，避免同一个旧 clue 让 `evt_0002/0003/0004` 之类早期事件长期占据召回位。
+- lorebook audit：`lorebook_injection.total_chars` 只代表候选 summary 体量，不再被当作有效注入总量。turn audit 额外记录 `selected_summary_chars / source_hit_chars / index_hit_chars / foundation_chars / effective_total_chars`，用于区分“没有 selected summary”与“仍有 foundation/source/index 实际入 prompt”。
+
 ## 当前 persona 门槛
 
 - 默认连续 5 轮稳定出现，才自动进入 `scene persona`

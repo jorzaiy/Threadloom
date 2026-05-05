@@ -126,8 +126,10 @@
 
 当前 keeper 写回质量边界：
 - `skeleton keeper` 只维护 `time / location / main_event / onstage_npcs / immediate_goal` 最小骨架。
-- `fill keeper` 只输出本轮增量 patch，主要补 `carryover_signals / tracked_objects / possession_state / object_visibility / knowledge_scope`。
+- `fill keeper` 只输出本轮增量 patch，主要补 `carryover_signals / resolved_signals / tracked_objects / possession_state / object_visibility / knowledge_scope`。
+- `resolved_signals` 是关闭旧 risk / clue 的显式通道，必须先过滤 state 信号层，再让 thread tracker 重建 active threads。
 - `knowledge_scope` 是本轮新增知情 delta，不是长期知识库；长期知识只写入 actor-id 版 `knowledge_records`，并做轻量相似去重。
+- 非 consolidation turn 可以补轻量可见知识 delta，尤其是本轮明确可见的物件持有状态，避免 `knowledge_records` 只停留在开局几条信息。
 - object patch 不应携带 baseline 全量对象；物件消耗、摧毁、遗失或归档通过 `lifecycle_status` 表达，并进入 `graveyard_objects`。
 - `keeper_record_archive.json` 是派生缓存；刷新前会 prune 超过当前有效 pair count 的未来 records，避免 undo / regenerate 后召回坏档。
 
@@ -267,7 +269,8 @@
 
 当前 selector 已从 `context_builder.py` 中抽离为独立模块：
 - `backend/selector.py`
-- 职责：在 narrator 开写前决定这一轮是否值得补 `lorebook_text / system_npc_candidates / lorebook_npc_candidates / npc_profiles`
+- 职责：在 narrator 开写前决定这一轮是否值得补 `lorebook_text / system_npc_candidates / lorebook_npc_candidates / npc_profiles / event_summaries / summary_chunks`
+- event recall 的排序优先当前场景文本、地点、主事件和最近事件；长期反复出现的 NPC 名或 carryover clue 只作弱信号，避免旧事件机械回流。
 
 当前 keeper 前也已接入一层最小 `event_ledger`：
 - `backend/event_ledger.py`
