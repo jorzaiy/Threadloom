@@ -40,38 +40,78 @@ def _event_text(item: dict) -> str:
     return ' '.join(pieces)
 
 
+def _turn_index(item: dict, fallback: int = 0) -> int:
+    for field in ('turn_id', 'event_id'):
+        text = str(item.get(field, '') or '')
+        match = re.search(r'(\d+)$', text)
+        if match:
+            try:
+                return int(match.group(1))
+            except Exception:
+                return fallback
+    return fallback
+
+
+def _repeated_token_counts(items: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        tokens = _topic_tokens(' '.join(str(x or '') for x in (item.get('clues', []) or [])))
+        tokens |= _topic_tokens(' '.join(str(x or '') for x in (item.get('signals', []) or [])))
+        for token in tokens:
+            counts[token] = counts.get(token, 0) + 1
+    return counts
+
+
 def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_history: list[dict], user_text: str = '') -> list[dict]:
-    query_text = '\n'.join([
-        joined_recent_text(recent_history),
+    recent_text = joined_recent_text(recent_history)
+    current_text = '\n'.join([
         str(user_text or ''),
         str(state_json.get('location', '') or ''),
         str(state_json.get('main_event', '') or ''),
+    ])
+    query_text = '\n'.join([
+        recent_text,
+        current_text,
         ' '.join(str(x or '') for x in (state_json.get('onstage_npcs', []) or [])),
         ' '.join(str(x or '') for x in (state_json.get('relevant_npcs', []) or [])),
         ' '.join(str(x or '') for x in (state_json.get('immediate_risks', []) or [])),
         ' '.join(str(x.get('text', '') or '') for x in (state_json.get('carryover_signals', []) or []) if isinstance(x, dict)),
     ])
     query_tokens = _topic_tokens(query_text)
+    current_tokens = _topic_tokens(current_text)
+    location_tokens = _topic_tokens(str(state_json.get('location', '') or ''))
+    recent_events = [item for item in event_summaries[-20:] if isinstance(item, dict)]
+    repeated_counts = _repeated_token_counts(recent_events)
+    latest_turn = max((_turn_index(item, idx + 1) for idx, item in enumerate(recent_events)), default=0)
     hits = []
-    for item in event_summaries[-20:]:
+    for idx, item in enumerate(recent_events):
         if not isinstance(item, dict):
             continue
         event_tokens = _topic_tokens(_event_text(item))
         shared = sorted(query_tokens & event_tokens)
+        current_shared = sorted(current_tokens & event_tokens)
+        location_shared = sorted(location_tokens & event_tokens)
         actor_bonus = 0
         for name in (item.get('actors', []) or []):
             if str(name or '').strip() and str(name).strip() in query_text:
-                actor_bonus += 2
-        score = len(shared) + actor_bonus
+                actor_bonus += 1
+        turn_idx = _turn_index(item, idx + 1)
+        distance = max(0, latest_turn - turn_idx) if latest_turn else 0
+        recency_bonus = max(0.0, 2.0 - min(distance, 8) * 0.25)
+        repeated_penalty = sum(1 for token in shared if repeated_counts.get(token, 0) >= 4) * 0.5
+        score = (len(shared) * 0.75) + (len(current_shared) * 2.0) + len(location_shared) + actor_bonus + recency_bonus - repeated_penalty
         if score <= 0:
             continue
         hits.append({
             'event_id': item.get('event_id'),
             'score': score,
             'reason': 'topic_overlap',
-            'keyword_hits': shared[:8],
+            'keyword_hits': (current_shared + [token for token in shared if token not in current_shared])[:8],
+            'turn_index': turn_idx,
         })
-    hits.sort(key=lambda x: -x['score'])
+    hits.sort(key=lambda x: (-x['score'], -int(x.get('turn_index', 0) or 0)))
     return hits[:4]
 
 
