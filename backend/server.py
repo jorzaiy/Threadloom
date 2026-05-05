@@ -94,6 +94,17 @@ PUBLIC_POST_PATHS = {
 USER_ASSET_CACHE_HEADERS = {'Cache-Control': 'no-store'}
 
 
+_SAFE_TOKEN_CHARS = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_')
+
+
+def is_safe_session_token(token: str) -> bool:
+    # secrets.token_urlsafe(32) only emits URL-safe base64 characters; rejecting
+    # anything outside that alphabet stops attacker-controlled bytes (CR, LF, ;)
+    # from being interpolated into Set-Cookie when /api/auth/me reflects the
+    # caller's bearer token back as a cookie.
+    return bool(token) and len(token) <= 256 and all(ch in _SAFE_TOKEN_CHARS for ch in token)
+
+
 def auth_cookie_header(token: str) -> str:
     return f'session_token={token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax'
 
@@ -598,7 +609,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': 'login required'}})
                 role = 'admin' if uid == DEFAULT_USER_ID else 'user'
                 token = self._extract_token()
-                headers = {'Set-Cookie': auth_cookie_header(token)} if uid and token else None
+                headers = {'Set-Cookie': auth_cookie_header(token)} if uid and is_safe_session_token(token) else None
                 # admin_has_password lets the frontend know whether the
                 # "enable multi-user" wizard needs to set a password first.
                 return self._send(200, {

@@ -33,3 +33,7 @@ tmp/
 doc/archive/
 doc/test-reports/
 *.backup
+
+# Local dev scratch
+.playwright-mcp/
+homepage/

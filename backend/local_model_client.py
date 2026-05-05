@@ -7,14 +7,18 @@
 import json
 import logging
 import time
-import urllib.request
-from urllib.error import HTTPError, URLError
+
+try:
+    from .safe_http import UnsafeTargetError, open_safe_connection
+except ImportError:
+    from safe_http import UnsafeTargetError, open_safe_connection
 
 log = logging.getLogger(__name__)
 
 _RETRY_STATUS_CODES = (429, 503)
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 2.0
+_REQUEST_TIMEOUT_SECONDS = 180.0
 
 
 def call_local_model(config: dict, system_prompt: str, user_prompt: str) -> tuple[str, dict]:
@@ -52,28 +56,40 @@ def call_local_model(config: dict, system_prompt: str, user_prompt: str) -> tupl
     }
 
     url = f'{base_url}/chat/completions'
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-        headers=headers,
-        method='POST',
-    )
+    body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
 
-    try:
-        for attempt in range(_MAX_RETRIES + 1):
+    data: dict | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            conn, path = open_safe_connection(url, timeout=_REQUEST_TIMEOUT_SECONDS)
+        except UnsafeTargetError as err:
+            raise RuntimeError(f'Local model URL refused by SSRF guard: {err}') from err
+        try:
             try:
-                with urllib.request.urlopen(req, timeout=180) as resp:
-                    data = json.loads(resp.read().decode('utf-8'))
-                break
-            except HTTPError as err:
-                if err.code not in _RETRY_STATUS_CODES or attempt >= _MAX_RETRIES:
-                    body = err.read().decode('utf-8', errors='ignore')[:500]
-                    raise RuntimeError(f'Local model error {err.code}: {body}') from err
+                conn.request('POST', path, body=body, headers=headers)
+                resp = conn.getresponse()
+                status = resp.status
+                resp_body = resp.read()
+            except OSError as err:
+                raise RuntimeError(f'Local model unreachable at {url}: {err}') from err
+            if status in _RETRY_STATUS_CODES and attempt < _MAX_RETRIES:
                 wait = _BACKOFF_BASE ** attempt
-                log.warning('本地模型 HTTP %d，第 %d 次重试，等待 %.1fs', err.code, attempt + 1, wait)
+                log.warning('本地模型 HTTP %d，第 %d 次重试，等待 %.1fs', status, attempt + 1, wait)
                 time.sleep(wait)
-    except URLError as err:
-        raise RuntimeError(f'Local model unreachable at {url}: {err}') from err
+                continue
+            if status >= 400:
+                snippet = resp_body.decode('utf-8', errors='ignore')[:500]
+                raise RuntimeError(f'Local model error {status}: {snippet}')
+            try:
+                data = json.loads(resp_body.decode('utf-8'))
+            except (UnicodeDecodeError, json.JSONDecodeError) as err:
+                raise RuntimeError(f'Local model returned non-JSON body: {err}') from err
+            break
+        finally:
+            conn.close()
+
+    if data is None:
+        raise RuntimeError(f'Local model unreachable at {url}: retries exhausted')
 
     # 提取回复内容
     choice = (data.get('choices') or [{}])[0]
