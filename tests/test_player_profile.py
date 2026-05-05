@@ -90,3 +90,42 @@ def test_effective_profile_normalizes_after_merge(monkeypatch):
 
     assert profile['name'] == '陆小环'
     assert profile['courtesyName'] == '小环'
+
+
+def test_runtime_render_supports_nested_character_override_schema():
+    profile = player_profile.normalize_player_profile({
+        'character': {
+            'basic_info': {
+                'age': 18,
+                'gender': '女性（伪装成男性）',
+                'race': '人类',
+            },
+            'appearance': {
+                'hair': {'color': '黑色', 'style': '短发，发型偏中性'},
+                'body': {
+                    'height': '170cm左右（在男生中偏矮）',
+                    'figure': '身材纤细，肩膀窄，缺乏肌肉，体能较差',
+                },
+            },
+            'abilities': {
+                'talents': {'hacking': '黑客技术不错，擅长入侵和信息收集'},
+                'combat': {'judo': {'level': '黑带水平', 'specialties': ['摔技', '关节技']}},
+            },
+            'weaknesses': ['耐力极差，长跑和持久战是短板'],
+            'disguise': {
+                'techniques': ['刻意压低声线说话'],
+                'weaknesses': ['喉结不明显'],
+            },
+            'goals': ['在学院中生存下去，不被发现真实身份'],
+        }
+    })
+
+    rendered = player_profile.render_runtime_player_profile_markdown(profile)
+
+    assert '女性（伪装成男性）' in rendered
+    assert '170cm左右（在男生中偏矮）' in rendered
+    assert '黑客技术不错' in rendered
+    assert '黑带水平' in rendered
+    assert '耐力极差' in rendered
+    assert '刻意压低声线说话' in rendered
+    assert '在学院中生存下去' in rendered

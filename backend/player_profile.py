@@ -43,8 +43,8 @@ PROFILE_FIELD_ALIASES = {
         '角色.常用称呼',
         '角色.昵称',
     ),
-    'gender': ('gender', 'character.gender', 'basic.gender', 'profile.gender', '性别', '角色.gender', '角色.性别'),
-    'age': ('age', 'character.age', 'basic.age', 'profile.age', '年龄', '角色.age', '角色.年龄'),
+    'gender': ('gender', 'character.gender', 'character.basic_info.gender', 'basic.gender', 'profile.gender', '性别', '角色.gender', '角色.性别'),
+    'age': ('age', 'character.age', 'character.basic_info.age', 'basic.age', 'profile.age', '年龄', '角色.age', '角色.年龄'),
     'birthday': (
         'birthday',
         'birthDay',
@@ -60,10 +60,135 @@ PROFILE_FIELD_ALIASES = {
         '角色.生辰',
         '角色.生日',
     ),
-    'height': ('height', 'character.height', 'basic.height', 'profile.height', '身高', '身量', '角色.height', '角色.身高', '角色.身量'),
+    'height': ('height', 'character.height', 'character.appearance.body.height', 'basic.height', 'profile.height', '身高', '身量', '角色.height', '角色.身高', '角色.身量'),
     'origin': ('origin', 'hometown', 'birthplace', 'character.origin', 'basic.origin', 'profile.origin', '出身', '籍贯', '来历', '角色.origin', '角色.出身'),
     'status': ('status', 'identity', 'role', 'character.status', 'basic.status', 'profile.status', '身份', '定位', '角色.status', '角色.身份'),
 }
+
+PROFILE_LABELS = {
+    'mathematics': '数学',
+    'hacking': '黑客技术',
+    'judo': '柔道',
+    'shooting': '射击',
+    'speed': '速度',
+    'agility': '敏捷',
+    'strength': '力量',
+    'endurance': '耐力',
+    'level': '水平',
+    'start_age': '开始年龄',
+    'specialties': '擅长',
+    'experience': '经验',
+    'skill': '能力',
+    'additional': '补充',
+    'height': '身高',
+    'figure': '体型',
+    'chest': '胸部',
+    'skin': '皮肤',
+}
+
+
+def _character_layer(profile: dict) -> dict:
+    character = profile.get('character', {}) if isinstance(profile, dict) else {}
+    return character if isinstance(character, dict) else {}
+
+
+def _compact_text(value) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, list):
+        return '；'.join(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            text = _compact_text(item)
+            if text:
+                label = PROFILE_LABELS.get(str(key), '')
+                parts.append(f'{label}={text}' if label else text)
+        return '；'.join(parts)
+    return str(value).strip()
+
+
+def _append_bullets(lines: list[str], title: str, items: list[str], *, limit: int = 6) -> None:
+    clean = []
+    for item in items:
+        text = str(item or '').strip()
+        if text and text not in clean:
+            clean.append(text)
+    if not clean:
+        return
+    lines.extend([f'## {title}', *[f'- {item}' for item in clean[:limit]], ''])
+
+
+def _nested_character_runtime_sections(profile: dict) -> list[str]:
+    character = _character_layer(profile)
+    if not character:
+        return []
+    lines: list[str] = []
+
+    appearance = character.get('appearance', {}) if isinstance(character.get('appearance', {}), dict) else {}
+    body = appearance.get('body', {}) if isinstance(appearance.get('body', {}), dict) else {}
+    clothing = appearance.get('clothing', {}) if isinstance(appearance.get('clothing', {}), dict) else {}
+    appearance_items = []
+    hair = _compact_text(appearance.get('hair'))
+    eyes = _compact_text(appearance.get('eyes'))
+    face = _compact_text(appearance.get('face'))
+    body_text = _compact_text({
+        'height': body.get('height'),
+        'figure': body.get('figure'),
+        'chest': body.get('chest'),
+        'skin': body.get('skin'),
+    })
+    clothing_text = _compact_text(clothing)
+    for item in (hair, eyes, face, body_text, clothing_text):
+        if item:
+            appearance_items.append(item)
+    _append_bullets(lines, '角色卡外貌锚点', appearance_items, limit=5)
+
+    abilities = character.get('abilities', {}) if isinstance(character.get('abilities', {}), dict) else {}
+    ability_items = []
+    for group_key in ('talents', 'combat'):
+        group = abilities.get(group_key, {}) if isinstance(abilities.get(group_key, {}), dict) else {}
+        for name, detail in group.items():
+            text = _compact_text(detail)
+            if text:
+                ability_items.append(f'{PROFILE_LABELS.get(str(name), str(name))}：{text}')
+    physical_stats = abilities.get('physical_stats', {}) if isinstance(abilities.get('physical_stats', {}), dict) else {}
+    physical_text = _compact_text(physical_stats)
+    if physical_text:
+        ability_items.append(f'身体素质：{physical_text}')
+    _append_bullets(lines, '角色卡稳定能力', ability_items, limit=6)
+
+    weakness_items = [_compact_text(item) for item in character.get('weaknesses', [])] if isinstance(character.get('weaknesses', []), list) else []
+    _append_bullets(lines, '角色卡身体短板', weakness_items, limit=6)
+
+    disguise = character.get('disguise', {}) if isinstance(character.get('disguise', {}), dict) else {}
+    disguise_items = []
+    if disguise.get('level'):
+        disguise_items.append(f"伪装水平：{_compact_text(disguise.get('level'))}")
+    for key in ('techniques', 'weaknesses'):
+        value = disguise.get(key, [])
+        if isinstance(value, list):
+            disguise_items.extend(_compact_text(item) for item in value)
+        else:
+            text = _compact_text(value)
+            if text:
+                disguise_items.append(text)
+    _append_bullets(lines, '角色卡伪装约束', disguise_items, limit=8)
+
+    personality = character.get('personality', {}) if isinstance(character.get('personality', {}), dict) else {}
+    trait_items = []
+    for key in ('traits', 'hidden_traits'):
+        value = personality.get(key, [])
+        if isinstance(value, list):
+            trait_items.extend(_compact_text(item) for item in value)
+    _append_bullets(lines, '角色卡性格锚点', trait_items, limit=6)
+
+    background_items = [_compact_text(item) for item in character.get('background', [])] if isinstance(character.get('background', []), list) else []
+    _append_bullets(lines, '角色卡背景线索', background_items, limit=6)
+
+    goal_items = [_compact_text(item) for item in character.get('goals', [])] if isinstance(character.get('goals', []), list) else []
+    _append_bullets(lines, '角色卡剧情目标', goal_items, limit=5)
+    return lines
 
 
 def _value_at_path(data: dict, dotted_path: str):
@@ -332,6 +457,9 @@ def render_runtime_player_profile_markdown(profile: dict) -> str:
     for key, label in (
         ('name', '名字'),
         ('courtesyName', '常用称呼'),
+        ('age', '年龄'),
+        ('gender', '性别'),
+        ('height', '身高'),
         ('origin', '出身'),
         ('status', '身份'),
     ):
@@ -340,6 +468,16 @@ def render_runtime_player_profile_markdown(profile: dict) -> str:
             basics.append(f'- {label}：{value}')
     if basics:
         lines.extend(['## 核心身份', *basics, ''])
+
+    nested_character = _character_layer(profile)
+    nested_basic = nested_character.get('basic_info', {}) if isinstance(nested_character.get('basic_info', {}), dict) else {}
+    nested_basics = []
+    for key, label in (('race', '种族'),):
+        value = str(nested_basic.get(key, '') or '').strip()
+        if value and not str(profile.get(key, '') or '').strip():
+            nested_basics.append(f'- {label}：{value}')
+    if nested_basics:
+        lines.extend(['## 核心身份补充', *nested_basics, ''])
 
     skills = profile.get('skills', []) if isinstance(profile.get('skills', []), list) else []
     skill_lines = []
@@ -374,6 +512,8 @@ def render_runtime_player_profile_markdown(profile: dict) -> str:
     notes = [str(item).strip() for item in (adaptation.get('notes', []) or []) if str(item).strip()][:3]
     if notes:
         lines.extend(['## 世界适配说明', *[f'- {item}' for item in notes], ''])
+
+    lines.extend(_nested_character_runtime_sections(profile))
 
     while lines and not lines[-1].strip():
         lines.pop()
