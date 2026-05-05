@@ -58,12 +58,15 @@ web input
 - 世界书由三层处理：开局首个 narrator 回合用原始 alwaysOn/foundation 条目大预算定底；后续每轮常驻蒸馏出的基础护栏；selector 命中世界书 index 后回源到原始 `lorebook.json` 片段交给 narrator，而不是只给蒸馏摘要。
 - keeper 主导“后台结构化维护世界状态”，其中：
   - `signals` 负责“当前还没消失、会继续影响下一拍”的东西；
+  - `resolved_signals` 负责显式关闭本轮已经解决的旧风险或旧线索，关闭发生在 thread tracker 重建前；
   - `knowledge_scope` 只负责本轮新增知情 delta，长期情报由 `knowledge_records` 承担；
   - `objects` 负责 active 物件、持有关系、可见性和生命周期退出；
   - `event` 负责“前几轮到底发生了什么值得检索”；
   - `summary` 负责“更长阶段该如何压缩”；
   - `thread` 若保留，也更偏 debug/state 辅助，而不是 steering 层。
 - 当前 event 链已开始按这个方向实现：事件总结默认读取最近 `1~3` 对 turn 窗口，并在 selector 判断需要时作为 recall / summary 的前置材料使用，而不是把 event 当当前 narrator 的常驻 steering 块。
+- 当前 selector 的 event recall 会优先 current-scene 命中和较新事件；同 NPC、同旧 clue 只能作为弱辅助信号，不能长期压过当前地点/动作/主事件。
+- lorebook audit 分为候选摘要、source hit、index hit、foundation 和 effective total 五类字符统计。调试时应看 `effective_total_chars` 判断实际入 prompt 体量，而不是只看 `total_chars`。
 
 ## 2026-04-28 Keeper / Selector 稳定性修复
 
