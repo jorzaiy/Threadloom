@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import copy
+import logging
 import time
 from typing import Any
 
@@ -54,6 +55,8 @@ except ImportError:
 
 
 TRACE_PROMPT_LIMIT = 4000
+NARRATOR_FAILED_REPLY_TRACE_LIMIT = 12000
+logger = logging.getLogger(__name__)
 OBJECT_TRANSFER_TERMS = (
     '递给', '交给', '塞给', '接过', '拿走', '夺过', '收走', '放下', '放回', '搁下', '摆回',
     '收起', '亮出', '摸出', '掏出', '握住', '拿起', '取出', '归还', '还给', '落到', '交回',
@@ -131,12 +134,26 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_att
                 attempt['finish_reason'] = finish_reason
                 attempts.append(attempt)
                 continue
-            if finish_reason in ('length', 'error') or looks_incomplete_reply(reply):
+            heuristic_incomplete = looks_incomplete_reply(reply)
+            if finish_reason in ('length', 'error') or heuristic_incomplete:
                 last_error = 'incomplete narrator reply'
                 attempt['ok'] = False
                 attempt['error'] = last_error
                 attempt['finish_reason'] = finish_reason or 'incomplete'
+                attempt['incomplete_heuristic_rejected'] = bool(heuristic_incomplete)
+                attempt['reply_chars'] = len(str(reply or ''))
                 attempt['reply_excerpt'] = _trim_trace_text(reply, 500)
+                attempt['raw_reply'] = _trim_trace_text(reply, NARRATOR_FAILED_REPLY_TRACE_LIMIT)
+                logger.warning(
+                    'NARRATOR_INCOMPLETE_REJECTED attempt=%s role=%s model=%s finish_reason=%s heuristic=%s reply_chars=%s reply_tail=%r',
+                    attempt_count,
+                    role,
+                    attempt.get('model'),
+                    finish_reason,
+                    heuristic_incomplete,
+                    attempt['reply_chars'],
+                    str(reply or '')[-500:],
+                )
                 attempts.append(attempt)
                 continue
             attempt['ok'] = True
@@ -249,6 +266,8 @@ def _safe_count(value) -> int:
 def _compact_selector_audit(selector: dict) -> dict:
     if not isinstance(selector, dict):
         return {}
+    raw_profile_load = selector.get('npc_profile_load')
+    profile_load: dict = raw_profile_load if isinstance(raw_profile_load, dict) else {}
     return {
         'selector_version': selector.get('selector_version'),
         'inject_lorebook_text': bool(selector.get('inject_lorebook_text')),
@@ -258,6 +277,9 @@ def _compact_selector_audit(selector: dict) -> dict:
         'summary_chunk_hit_count': _safe_count(selector.get('summary_chunk_hits')),
         'npc_profile_target_count': _safe_count(selector.get('npc_profile_targets')),
         'npc_roster_count': _safe_count(selector.get('npc_roster')),
+        'npc_profile_load_reason': profile_load.get('reason'),
+        'npc_profile_missing_names': [str(name) for name in (profile_load.get('missing') or [])[:8]],
+        'npc_profile_loaded_names': [str(name) for name in (profile_load.get('loaded') or [])[:8]],
         'event_hit_ids': [str(item.get('event_id', '') or '') for item in (selector.get('event_hits') or []) if isinstance(item, dict) and item.get('event_id')][:8],
         'summary_chunk_ids': [str(item.get('chunk_id', '') or '') for item in (selector.get('summary_chunk_hits') or []) if isinstance(item, dict) and item.get('chunk_id')][:8],
     }
@@ -823,9 +845,17 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         completion_status = 'partial'
         finish_reason = finish_reason or 'incomplete'
         usage['finish_reason'] = finish_reason
+        logger.warning(
+            'NARRATOR_INCOMPLETE_POSTCALL_REJECTED turn_id=%s finish_reason=%s reply_chars=%s reply_tail=%r',
+            turn_id,
+            finish_reason,
+            len(str(reply or '')),
+            str(reply or '')[-500:],
+        )
     turn_trace['runtime']['completion'] = {
         'completion_status': completion_status,
         'finish_reason': finish_reason,
+        'incomplete_heuristic_rejected': completion_status == 'partial' and looks_incomplete_reply(reply),
     }
 
     if fallback_used and not reply.strip():

@@ -47,18 +47,20 @@ def test_narrator_retries_incomplete_replies(monkeypatch):
     assert trace['attempts'][2]['ok'] is True
 
 
-def test_narrator_returns_unavailable_after_three_incomplete_replies(monkeypatch):
+def test_narrator_returns_unavailable_after_three_incomplete_replies(monkeypatch, caplog):
     attempts = []
+    incomplete_reply = '像一头耐心的狼，领着一群疲惫的'
 
     def fake_resolve_provider_model(role):
         return _model_config(role)
 
     def fake_call_model(_model_cfg, _system_prompt, _user_prompt):
         attempts.append(1)
-        return '像一头耐心的狼，领着一群疲惫的', {'finish_reason': 'stop', 'model': 'narrator'}
+        return incomplete_reply, {'finish_reason': 'stop', 'model': 'narrator'}
 
     monkeypatch.setattr(handler_message, 'resolve_provider_model', fake_resolve_provider_model)
     monkeypatch.setattr(handler_message, 'call_model', fake_call_model)
+    caplog.set_level('WARNING')
 
     reply, usage, trace = handler_message._call_narrator_with_retries('system', 'user')
 
@@ -68,6 +70,14 @@ def test_narrator_returns_unavailable_after_three_incomplete_replies(monkeypatch
     assert trace['last_error'] == 'incomplete narrator reply'
     assert len(trace['attempts']) == 3
     assert len(attempts) == 3
+    for attempt in trace['attempts']:
+        assert attempt['ok'] is False
+        assert attempt['error'] == 'incomplete narrator reply'
+        assert attempt['incomplete_heuristic_rejected'] is True
+        assert attempt['reply_chars'] == len(incomplete_reply)
+        assert attempt['reply_excerpt'] == incomplete_reply
+        assert attempt['raw_reply'] == incomplete_reply
+    assert 'NARRATOR_INCOMPLETE_REJECTED' in caplog.text
 
 
 def test_history_filter_hides_partial_turn_pair():
