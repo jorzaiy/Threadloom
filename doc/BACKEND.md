@@ -69,6 +69,7 @@
 - skeleton keeper 当前每个完整回复后都会运行，避免非合并轮长期沿用旧 `state_fragment` 造成硬锚点滞后；完整 fill keeper 仍按合并轮运行
 - 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补物品、情报与信号；默认每 2 轮运行一次，不再接管 `time / location / main_event / onstage_npcs / immediate_goal` 这类当前硬锚点
 - actor registry 当前在每个完整 narrator 回复后运行：narrator 后处理只允许创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份视为锁定，不允许后续覆盖；持续承担行动链、关系压力或信息承载功能的匿名个体也可用正文稳定称呼建 actor；LLM 失败时不从旧 `scene_entities` fallback 建 actor，避免把旧污染写成不可变设定
+- actor registry 对“实名揭示”有窄口径例外：若已有 generic actor 后续在 narrator 正文中明确自报姓名或被点名，且上下文能唯一绑定到该 generic actor，则只追加实名到 `aliases` 并更新 mention turn，不改写原 `name / personality / appearance / identity`
 - actor registry 创建新 actor 时会读取最近 1~3 对 turn，因此上一轮 actor registry LLM 失败后，下一轮仍可从 recent window 补建，不需要依赖脏 fallback
 - actor registry 已内置 `protagonist`，物品持有和情报记录可统一绑定到 `actor_id`；`possession_state` 会补 `holder_actor_id`，`object_visibility` 会补 `known_to_actor_ids`，本轮 `knowledge_scope` 会派生长期 `knowledge_records`
 - 12 轮未被正文提及的 actor 会进入 `actor_context_index.archived_actor_ids`，只影响后续上下文注入，不修改 actor 基础设定；再次被正文提及时会回到 active

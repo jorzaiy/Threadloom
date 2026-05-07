@@ -236,6 +236,21 @@
 
 仍需继续观察：persona observation 当前是轻量片段，不是完整 LLM 人物小传；它用于补足 narrator profile 断链，不应替代角色卡、system NPC source 或 actor registry。
 
+## 2026-05-07 实名揭示 alias-upsert
+
+`8c94e5` 继续测试时发现：NPC 已在 narrator 正文中自报姓名或被点名，但 state 仍保留旧 generic actor，例如“剃寸头的高个子学员”没有绑定为“秦野”，“迟到新生”没有绑定为“赵明”。
+
+根因是 actor registry 为保护基础设定采取“只创建新 actor，不修改已有 actor”的策略，导致实名只进入 `knowledge_records / risk / main_event` 文本，未绑定回 actor alias。
+
+本轮补最小正确修复：
+
+- 只在 narrator 正文出现明确实名揭示时触发，例如“姓秦。秦野。”或“赵——赵明。”。
+- 只在上下文能唯一匹配已有 generic actor 时追加 alias。
+- 不改写 actor 原始 `name / personality / appearance / identity`，避免破坏不可变基础设定。
+- alias 更新会刷新 `actor_context_index.last_mentioned_turn`，并让后续 `knowledge_scope.npc_local.<实名>` 能绑定到已有 actor_id。
+
+这不是通用重命名系统，仍需继续观察复杂多人同场、多个 generic actor 同时自报姓名时的歧义处理。
+
 ## 建议的下一步优先级
 
 ## 2026-05-06 维克托 session 0bfef1 观察记录
