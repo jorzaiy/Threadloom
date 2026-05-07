@@ -42,7 +42,7 @@ SUMMARY_CHUNK_SYSTEM = """你是 RP 历史分段整理器。
 5. 不维护 NPC 性格设定；人物设定由 actor registry 管。
 6. 不维护物品主账本或谁知道什么；这些由 keeper 管。
 7. 保留台词里的关键信息，但不要整段抄 prose。
-8. keywords 不要输出随机中文碎片或泛词；优先输出 2-12 字的稳定检索键，如人物名、地点名、关键物件、事件短语、关系线（例：陆小环训练、涂山教官、操场考核、回答提问、手环异常）。
+8. keywords 不要输出随机中文碎片、断句或泛词；优先输出 2-12 字的稳定检索键，如完整人物名、地点名、关键物件、事件短语、关系线（例：新人训练、带队教官、场地考核、回答提问、手环异常）。
 """
 
 
@@ -79,16 +79,17 @@ def _keyword_quality(value: str) -> bool:
         return False
     if any(mark in text for mark in ('，', '。', '！', '？', '：', '；', '“', '”', '…')):
         return False
+    if any(mark in text for mark in ('（', '）', '(', ')', '、')):
+        return False
     return True
 
 
 def _extract_keyword_candidates(text: str) -> list[str]:
     candidates: list[str] = []
-    for token in re.findall(r'[\u4e00-\u9fff]{2,6}', text):
-        if any(marker in token for marker in ('训练', '考核', '提问', '回答', '追问', '搜查', '线索', '风险', '异常', '转场', '冲突', '观察')):
-            candidates.append(token)
     for match in re.findall(r'[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?', text):
         candidates.append(match)
+    for phrase in re.findall(r'[\u4e00-\u9fff]{2,8}(?:训练|考核|提问|回答|追问|搜查|线索|风险|异常|转场|冲突|观察|检查|调查)[\u4e00-\u9fff]{0,4}', text):
+        candidates.append(phrase)
     return candidates
 
 
@@ -104,18 +105,24 @@ def _dedupe_keywords(candidates: list[str], limit: int = 30) -> list[str]:
     return out
 
 
-def _structured_keywords(payload: dict, fallback: dict, pairs: list[tuple[str, str]], limit: int = 30) -> list[str]:
+def _metadata_keywords(payload: dict, fallback: dict) -> list[str]:
     candidates: list[str] = []
     for field in ('actors_mentioned', 'locations', 'objects_mentioned'):
         for source in (payload, fallback):
             values = source.get(field, []) if isinstance(source.get(field, []), list) else []
             candidates.extend(str(item or '') for item in values)
+    return candidates
+
+
+def _structured_keywords(payload: dict, fallback: dict, pairs: list[tuple[str, str]], limit: int = 30) -> list[str]:
+    candidates: list[str] = _metadata_keywords(payload, fallback)
     for field in ('key_events', 'unresolved', 'dense_summary'):
         values = payload.get(field, []) if isinstance(payload.get(field, []), list) else []
         for item in values[:8]:
             candidates.extend(_extract_keyword_candidates(str(item or '')))
     joined = '\n'.join(' '.join(pair) for pair in pairs)
-    candidates.extend(_extract_keyword_candidates(joined))
+    if len(_dedupe_keywords(candidates, limit=limit)) < 8:
+        candidates.extend(_extract_keyword_candidates(joined))
     return _dedupe_keywords(candidates, limit=limit)
 
 
