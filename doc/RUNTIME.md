@@ -31,6 +31,10 @@
 - 防止 relevant NPC / lore 选择长期失焦
 - 用较早结构记录补足窗口外连续性
 
+当前实现补充说明：selector 选中 NPC profile target 后，优先读取角色卡 source 下的 markdown profile；若缺失，会回落到当前 session 的 `persona/scene`、`persona/longterm`、`persona/archive` JSON seed，并把其中的身份、persona hooks 与近期观察片段格式化为 narrator 的 NPC profile。这样可以避免“persona 已经生成但 narrator 仍显示 profile missing”的断链。
+
+Session-local persona seed 仍不是完整人物传记。它每轮可更新重要度、前后台层级和近期观察，但 observation 只从 assistant 叙事中抽取与该 NPC 相关的短片段，不把用户 prompt 原文写入人物详情，也不把同一片段重复塞进多个字段。
+
 ### 深刷新（默认每 20 轮或事件触发）
 
 在以下情况做一次更完整的上下文重组：
@@ -148,6 +152,7 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 - 当前角色卡核心与 `世界设定锁`
 - 当前 onstage / relevant NPC
 - persona hooks
+- selector 命中的 NPC profile；当 source profile 缺失时，可由 session persona seed 兜底生成轻量 profile
 - relevant lore
 - available cast / 可调入世界书人物
 - 最近完整正文窗口（默认 6 对 user/assistant）
@@ -178,6 +183,8 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 - `summary`
 - `persona seeds`
 - scene/archive/restore 流转
+
+Persona 写回的职责边界：`persona_updater` 负责人物 seed 的 scene/archive/longterm 流转、重要度计数与近期观察沉淀；`actor_registry` 仍负责不可变人物基础设定，不应被 persona 的短期观察覆盖。Persona observation 只提供“最近表现/关系压力”的轻量提示，不能替代角色卡或 actor registry。
 
 输出：
 - 新的 `state`

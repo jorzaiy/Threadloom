@@ -46,6 +46,8 @@ web input
 - 防污染判断不靠固定关键词表。不同角色卡的题材边界差异很大，运行时提示要求按整体语境、因果规则、时代感、社会制度、技术/超自然边界和人物身份兼容性来判断是否承接候选内容。
 - runtime fallback / bootstrap 的词表只允许使用通用职能词、通用地点后缀和通用物件类别；不应把某张角色卡的固定人名、组织名、session id 或剧情专属物件写进生产逻辑来强化表现。
 - 同一层还负责用户控制权边界：用户主角只是世界内角色，不是作者、导演、GM 或世界主宰。用户输入只能提出尝试，不能直接决定 NPC 服从、行动成功、关系成立、物品归属、场景改写或客观结论；这些必须由当前世界的因果、资源、制度和 NPC 反应结算。
+- NPC profile 注入分两级：source markdown profile 是强档案；当前 session 的 persona seed 是兜底档案。兜底内容只包含身份、persona hooks 和 assistant 叙事中观察到的短片段，不能从用户 prompt 原文生成 NPC 事实。
+- `relevant_npcs` 只保留有正向人物证据的名字；当当前 `main_event` 或连续性文本提到一个不在 onstage 的重要人物 / actor / scene entity 时，可以把它保留为 relevant，以便 selector 后续召回，但不能从地点、标题残片或 active thread 文本反推虚假 NPC。
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。
@@ -65,6 +67,7 @@ web input
   - `event` 负责“前几轮到底发生了什么值得检索”；
   - `summary` 负责“更长阶段该如何压缩”；
   - `thread` 若保留，也更偏 debug/state 辅助，而不是 steering 层。
+- keeper archive 的中程 digest 应优先从窗口正文自身提取时间、地点、持续人物、持续事件和物件，而不是复用当前 state 的硬锚点。窗口中可用的 NPC registry 名字会参与稳定人物识别，避免 archive 只留下“围绕某地持续演化”这类低密度事件句。
 - 当前 event 链已开始按这个方向实现：事件总结默认读取最近 `1~3` 对 turn 窗口，并在 narrator recent window 中作为“前段提纲”承接完整正文之外的较早回合；selector 仍可把它作为 recall / summary 的前置材料使用。
 - 当前 selector 的 event recall 会优先 current-scene 命中和较新事件；同 NPC、同旧 clue 只能作为弱辅助信号，不能长期压过当前地点/动作/主事件。
 - lorebook audit 分为候选摘要、source hit、index hit、foundation 和 effective total 五类字符统计。调试时应看 `effective_total_chars` 判断实际入 prompt 体量，而不是只看 `total_chars`。
@@ -91,7 +94,17 @@ web input
 - active thread 的 main 线程匹配更保守；地点相同不再足以继承旧线程，必须有 goal / label / signature 的实际连续性，避免新事件继承旧 `stability_turns`。
 - summary chunk keywords 改为结构化检索键，优先人物、地点、物件、事件短语和关系线，而不是随机中文碎片。
 - selector audit 现在记录 `npc_profile_load`，包括请求的 profile targets、实际加载项、缺失项、profile 目录和失败原因，便于定位“selector 有 target 但 narrator 无 profile”的断链。
+- selector 的 NPC profile 读取现在会在 source markdown profile 缺失时回落到 session persona seed。audit 中 `loaded` 可因此包含来自 session persona 的人物；若 target 仍缺失，才说明 source 与 session persona 均没有可用档案。
 - narrator prompt 增加重复观察抑制：若最近几轮已反复出现“观察—判断—不点破/沉默”等镜头，本轮必须推进可感知的外部变化，而不是扩写用户输入或换词重复心理观察。
+
+## 2026-05-07 NPC Profile / Persona / Archive 修复
+
+针对 `bd4769` 一类长跑中“NPC 详情仍停在初始骨架”的问题，runtime 补上以下链路：
+
+- `load_npc_profiles()` 在 source `.md` profile 缺失时，会读取当前 session 的 `persona/scene`、`persona/longterm`、`persona/archive` JSON seed，并格式化为 narrator 可读的轻量 profile。
+- `persona_updater` 现在把 NPC 相关的近期 assistant 叙事片段写入 `observations`，用于记录最近行为和关系压力；不读取用户 prompt 原文，不把同一片段重复写入多个 observation 字段。
+- keeper archive 构建窗口 digest 时会把 NPC registry 传入 mid-context heuristic，提升 stable_entities 与 ongoing_events 的信息密度。
+- state normalization 会在当前 `main_event` / continuity 文本提到非 onstage 的稳定人物时，把它保留在 `relevant_npcs`，避免场景相关 NPC 因未站在前台而从 selector 视野消失。
 
 ## 当前 Threadloom 的建议优先级
 
