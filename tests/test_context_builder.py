@@ -7,7 +7,10 @@ sys.path.insert(0, str(ROOT / 'backend'))
 
 import json
 
-from context_builder import _slim_character_core, load_lorebook_source_hits, load_npc_profiles, npc_profile_load_audit, select_lorebook_text_for_turn, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
+from context_builder import _format_persona_profile_content, _slim_character_core, load_lorebook_source_hits, load_npc_profiles, npc_profile_load_audit, select_lorebook_text_for_turn, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
+from persona_runtime import build_persona_seed  # noqa: E402
+from persona_updater import _observed_context  # noqa: E402
+from runtime_store import save_persona_seed  # noqa: E402
 from narrator_input import _format_recent_outline, _format_recent_window  # noqa: E402
 
 
@@ -177,3 +180,64 @@ def test_npc_profile_load_audit_reports_loaded_targets(tmp_path):
     assert loaded[0]['name'] == '韩骁'
     assert audit['reason'] == 'loaded'
     assert audit['missing'] == []
+
+
+def test_session_persona_json_loads_as_npc_profile_when_targeted(tmp_path, monkeypatch):
+    session_root = tmp_path / 'runtime-data' / 'sessions'
+    monkeypatch.setenv('THREADLOOM_RUNTIME_DATA_DIR', str(tmp_path / 'runtime-data'))
+    # paths are resolved from env at import time in normal app flow; patch direct resolver for this focused unit.
+    import runtime_store
+
+    monkeypatch.setattr(runtime_store, 'resolve_session_dir', lambda session_id, create=False: session_root / session_id)
+    seed = {
+        'display_name': '测试甲',
+        'seed_layer': 'longterm',
+        'identity': {'role_label': '线索提供者', 'faction': '本地', 'base_region': '前厅'},
+        'persona_seed': {'archetype': {'value': '谨慎协助者'}, 'runtime_hooks': {'speech_rhythm': {'value': '短句'}}},
+        'observations': {'recent_behavior': '测试甲低声提醒主角保管账册。'},
+    }
+    save_persona_seed('generic-session', 'longterm', seed)
+
+    loaded = load_npc_profiles(tmp_path / 'missing-npcs', ['测试甲'], session_id='generic-session')
+
+    assert loaded[0]['name'] == '测试甲'
+    assert loaded[0]['source'] == 'session_persona'
+    assert '线索提供者' in loaded[0]['content']
+    assert '测试甲低声提醒主角保管账册' in loaded[0]['content']
+
+
+def test_persona_seed_accumulates_recent_behavior_fields_from_observed_turns():
+    history = [
+        {'role': 'user', 'content': '询问测试乙的看法'},
+        {'role': 'assistant', 'content': '测试乙先观察门口，再低声提醒主角别急着打开包裹。'},
+    ]
+    seed = build_persona_seed(
+        '测试乙',
+        '临时协助者',
+        appearance_turns=1,
+        observed_context=_observed_context(history, '测试乙'),
+    )
+
+    assert seed['importance']['appearance_turns'] == 1
+    assert seed['observations']['recent_behavior']
+    assert seed['observations']['recent_story_snippets']
+    assert '低声提醒' in seed['observations']['recent_behavior']
+    assert '询问测试乙' not in seed['observations']['recent_behavior']
+
+
+def test_persona_profile_content_dedupes_observation_lines():
+    seed = {
+        'display_name': '测试丙',
+        'seed_layer': 'longterm',
+        'identity': {'role_label': '旁观者'},
+        'persona_seed': {'archetype': {'value': '谨慎者'}, 'runtime_hooks': {}},
+        'observations': {
+            'recent_behavior': '测试丙低声提醒主角别急着打开包裹。',
+            'recent_detail': '测试丙低声提醒主角别急着打开包裹。',
+            'recent_story_snippets': ['测试丙低声提醒主角别急着打开包裹。'],
+        },
+    }
+
+    content = _format_persona_profile_content(seed)
+
+    assert content.count('测试丙低声提醒主角别急着打开包裹') == 1

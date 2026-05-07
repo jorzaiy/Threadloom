@@ -654,17 +654,65 @@ def load_persona_summaries(names: list[str], limit: int = 6, session_id: str | N
     return out[:limit]
 
 
-def load_npc_profiles(npc_dir: Path, names: list[str], limit: int = 4) -> list[dict]:
+def _format_persona_profile_content(seed: dict) -> str:
+    identity = seed.get('identity', {}) if isinstance(seed.get('identity', {}), dict) else {}
+    persona_seed = seed.get('persona_seed', {}) if isinstance(seed.get('persona_seed', {}), dict) else {}
+    hooks = persona_seed.get('runtime_hooks', {}) if isinstance(persona_seed.get('runtime_hooks', {}), dict) else {}
+    observations = seed.get('observations', {}) if isinstance(seed.get('observations', {}), dict) else {}
+    lines = [
+        f"seed_layer: {seed.get('seed_layer', 'scene')}",
+        f"role_label: {identity.get('role_label', '待确认')}",
+        f"faction: {identity.get('faction', '待确认')}",
+        f"base_region: {identity.get('base_region', '待确认')}",
+        f"archetype: {persona_seed.get('archetype', {}).get('value', '待确认') if isinstance(persona_seed.get('archetype', {}), dict) else persona_seed.get('archetype', '待确认')}",
+    ]
+    for key in ('decision_style', 'social_strategy', 'conflict_style', 'speech_rhythm', 'stress_response'):
+        value = hooks.get(key, {}) if isinstance(hooks.get(key, {}), dict) else {}
+        text = str(value.get('value', '') or '').strip()
+        if text:
+            lines.append(f"{key}: {text}")
+    seen_observations = set()
+    for key in ('recent_behavior', 'recent_detail', 'recent_relationship'):
+        value = str(observations.get(key, '') or '').strip()
+        if value and value not in seen_observations:
+            lines.append(f"{key}: {value}")
+            seen_observations.add(value)
+    snippets = observations.get('recent_story_snippets', []) if isinstance(observations.get('recent_story_snippets', []), list) else []
+    seen_snippets = set()
+    for snippet in snippets[:3]:
+        text = str(snippet or '').strip()
+        if text and text not in seen_snippets and text not in seen_observations:
+            lines.append(f"- observed: {text}")
+            seen_snippets.add(text)
+    return '\n'.join(lines)
+
+
+def load_npc_profiles(npc_dir: Path, names: list[str], limit: int = 4, session_id: str | None = None) -> list[dict]:
     """加载 NPC 档案内容（而不仅仅是路径）"""
-    if not npc_dir.exists():
-        return []
     out = []
-    for path in sorted(npc_dir.glob('*.md')):
-        name = path.stem
-        if names and name not in names:
-            continue
-        content = read_text(path)
-        out.append({'name': name, 'content': content})
+    requested = list(dict.fromkeys(str(name or '').strip() for name in (names or []) if str(name or '').strip()))
+    if npc_dir.exists():
+        for path in sorted(npc_dir.glob('*.md')):
+            name = path.stem
+            if requested and name not in requested:
+                continue
+            content = read_text(path)
+            out.append({'name': name, 'content': content})
+            if len(out) >= limit:
+                return out[:limit]
+    if requested and session_id and len(out) < limit:
+        loaded_names = {item['name'] for item in out}
+        persona_index = load_persona_index(session_id)
+        for name in requested:
+            if name in loaded_names:
+                continue
+            seed = persona_index.get(name)
+            if not seed:
+                continue
+            out.append({'name': name, 'content': _format_persona_profile_content(seed), 'source': 'session_persona'})
+            loaded_names.add(name)
+            if len(out) >= limit:
+                break
     return out[:limit]
 
 
@@ -991,7 +1039,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     inject_npc_candidates = bool(selector_decision.get('inject_npc_candidates'))
     npc_profile_targets = selector_decision.get('npc_profile_targets', []) or []
     npc_profile_dir = resolve_source(sources['npc_profiles_dir'])
-    npc_profiles = load_npc_profiles(npc_profile_dir, npc_profile_targets) if npc_profile_targets else []
+    npc_profiles = load_npc_profiles(npc_profile_dir, npc_profile_targets, session_id=session_id) if npc_profile_targets else []
     selector_decision['npc_profile_load'] = npc_profile_load_audit(npc_profile_dir, npc_profile_targets, npc_profiles)
     if not inject_npc_candidates:
         system_npc_candidates = []

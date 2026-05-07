@@ -143,13 +143,13 @@ def build_persona_seed(
     onstage: bool = False,
     relevant: bool = False,
     identity_overrides: dict | None = None,
+    observed_context: dict | None = None,
     scene_signature: str | None = None,
     reason_suffix: str | None = None,
 ) -> dict:
     previous = previous or {}
     traits = infer_persona_traits(display_name, role_label)
     prev_importance = previous.get('importance', {})
-    prev_identity = previous.get('identity', {})
     prev_turns = int(prev_importance.get('appearance_turns', 0) or 0)
     turns = max(appearance_turns if appearance_turns is not None else prev_turns, 1)
 
@@ -186,6 +186,20 @@ def build_persona_seed(
         for key, value in identity_overrides.items():
             if value:
                 identity[key] = value
+    observations = previous.get('observations', {}) if isinstance(previous.get('observations', {}), dict) else {}
+    if isinstance(observed_context, dict):
+        observations = dict(observations)
+        for key in ('recent_behavior', 'recent_detail', 'recent_relationship'):
+            value = str(observed_context.get(key, '') or '').strip()
+            if value:
+                observations[key] = value
+        snippets = observations.get('recent_story_snippets', []) if isinstance(observations.get('recent_story_snippets', []), list) else []
+        for snippet in observed_context.get('recent_story_snippets', []) if isinstance(observed_context.get('recent_story_snippets', []), list) else []:
+            text = str(snippet or '').strip()
+            if text and text not in snippets:
+                snippets.append(text)
+        if snippets:
+            observations['recent_story_snippets'] = snippets[-5:]
     return {
         'npc_id': display_name,
         'display_name': display_name,
@@ -202,6 +216,7 @@ def build_persona_seed(
             'dormant_turns': dormant_turns,
         },
         'persona_seed': traits,
+        'observations': observations,
         'uncertainties': previous.get('uncertainties', [
             '当前 seed 为运行时骨架，不应把单轮情绪直接固化为长期人格。',
             '若后续多个回合表现稳定变化，应重评而不是沿用旧钩子。',

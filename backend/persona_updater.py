@@ -70,7 +70,7 @@ def _match_existing_persona(entity: dict, previous_pool: dict[str, dict]) -> tup
             best_name = name
             best_seed = seed
             best_score = score
-    if best_seed and best_score >= 0.5:
+    if best_name and best_seed and best_score >= 0.5:
         return best_name, best_seed
     return None
 
@@ -174,6 +174,32 @@ def _count_consecutive_quiet_turns(history: list[dict], name: str, aliases: list
     return quiet
 
 
+def _short_observation(text: str, limit: int = 120) -> str:
+    value = ' '.join(str(text or '').split()).strip()
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 3)] + '...'
+
+
+def _observed_context(history: list[dict], name: str, aliases: list[str] | None = None, limit_turns: int = 4) -> dict:
+    tokens = [token for token in [name] + list(aliases or []) if token]
+    snippets: list[str] = []
+    for _user_text, assistant_text in _turn_pairs(history)[-limit_turns:]:
+        if any(token in assistant_text for token in tokens):
+            snippets.append(_short_observation(assistant_text))
+    if not snippets:
+        return {}
+    latest = snippets[-1]
+    out = {
+        'recent_behavior': latest,
+        'recent_story_snippets': snippets[-3:],
+    }
+    relation_terms = ('关系', '信任', '敌意', '戒备', '配合', '挑衅', '照应', '怀疑', '保护', '试探')
+    if any(term in latest for term in relation_terms):
+        out['recent_relationship'] = latest
+    return out
+
+
 def _is_service_npc(name: str, role_label: str) -> bool:
     tokens = get_service_role_tokens()
     if not tokens:
@@ -274,7 +300,7 @@ def update_persona(session_id: str, reference_candidates: list[dict] | None = No
             continue
         matched = _match_existing_persona(entity, {**local_existing, **inherited})
         if matched is not None:
-            matched_name, matched_seed = matched
+            matched_name, _matched_seed = matched
             if matched_name != name:
                 name = matched_name
                 entity['primary_label'] = matched_name
@@ -339,6 +365,7 @@ def update_persona(session_id: str, reference_candidates: list[dict] | None = No
                         'faction': lore_identity.get('faction'),
                         'base_region': lore_identity.get('base_region'),
                     },
+                    observed_context=_observed_context(history, name, entity.get('aliases', [])),
                     scene_signature=current_scene_signature,
                     reason_suffix=f'场景已切换，且已连续 {quiet_turns} 轮无互动，降为 archive。',
                 )
@@ -371,6 +398,7 @@ def update_persona(session_id: str, reference_candidates: list[dict] | None = No
                 'faction': lore_identity.get('faction'),
                 'base_region': lore_identity.get('base_region'),
             },
+            observed_context=_observed_context(history, name, entity.get('aliases', [])),
             scene_signature=current_scene_signature,
             reason_suffix=early_seed_reason or '当前由 Threadloom session-local persona 流转维护。',
         )
@@ -392,6 +420,7 @@ def update_persona(session_id: str, reference_candidates: list[dict] | None = No
             dormant_turns=dormant_turns,
             onstage=False,
             relevant=False,
+            observed_context=_observed_context(history, name),
             scene_signature=current_scene_signature,
             reason_suffix='本轮未继续在场或 relevant，转入 archive。',
         )
