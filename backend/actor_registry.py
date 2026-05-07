@@ -9,10 +9,12 @@ try:
     from .llm_manager import call_role_llm
     from .local_model_client import parse_json_response
     from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment
+    from .card_hints import get_canonical_name, get_character_primary_name
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
     from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment
+    from card_hints import get_canonical_name, get_character_primary_name
 
 
 ARCHIVE_AFTER_QUIET_TURNS = 12
@@ -43,7 +45,7 @@ ACTOR_REGISTRY_SYSTEM = """你是 narrator 生成后的角色注册表维护器�
 3. 不记录是否在场、受伤、被围、昏迷、离开、当前位置等短期状态。
 4. 不要把主角、玩家、你、我登记为 NPC。
 5. 不要登记背景群体、路人群、势力名、地点、物品、抽象概念。
-6. 如果只是“一名差役”“几个皂衣人”这类一次性功能人且没有稳定个体特征，可以不登记。
+6. 如果只是“一名差役”“几个制服人”这类一次性功能人且没有稳定个体特征，可以不登记。
 7. 但如果某个匿名称呼在连续回合承担明确行动链、关系压力或信息承载功能，即使真名未知，也要用正文中的稳定称呼登记，以便后续保持基础称呼、外貌和身份口径一致。
 8. 不确定就少输出。
 """
@@ -120,12 +122,57 @@ def _actor_names(actor: dict) -> set[str]:
     return names
 
 
+NPC_TITLE_SUFFIXES = (
+    '教官', '老师', '先生', '小姐', '女士', '夫人', '长官', '队长', '局长', '主管', '管理员', '医生', '大夫',
+)
+
+
+def _name_surfaces(name: str) -> set[str]:
+    clean = sanitize_runtime_name(name)
+    if not clean:
+        return set()
+    surfaces = {clean}
+    canonical = sanitize_runtime_name(get_canonical_name(clean))
+    if canonical:
+        surfaces.add(canonical)
+    for suffix in NPC_TITLE_SUFFIXES:
+        if clean.endswith(suffix) and len(clean) > len(suffix):
+            stripped = clean[:-len(suffix)].strip()
+            if stripped:
+                surfaces.add(stripped)
+                mapped = sanitize_runtime_name(get_canonical_name(stripped))
+                if mapped:
+                    surfaces.add(mapped)
+    for item in list(surfaces):
+        if '·' in item:
+            surfaces.update(part for part in item.split('·') if part)
+    card_name = sanitize_runtime_name(get_character_primary_name())
+    if card_name and '·' in card_name:
+        card_parts = {part for part in card_name.split('·') if part}
+        if clean == card_name or clean in card_parts or surfaces & card_parts:
+            surfaces.add(card_name)
+            surfaces.update(card_parts)
+            surfaces.update(f'{part}{suffix}' for part in card_parts for suffix in NPC_TITLE_SUFFIXES)
+    return {item for item in surfaces if item}
+
+
+def _actor_name_matches(actor: dict, name: str) -> bool:
+    target_surfaces = _name_surfaces(name)
+    if not target_surfaces:
+        return False
+    actor_surfaces: set[str] = set()
+    for actor_name in _actor_names(actor):
+        actor_surfaces.update(_name_surfaces(actor_name))
+    return bool(actor_surfaces & target_surfaces)
+
+
 def _ensure_protagonist(actors: dict, player_name: str = '') -> None:
     aliases = ['你', '主角']
     cleaned_player = sanitize_runtime_name(player_name)
     if cleaned_player and cleaned_player not in aliases:
         aliases.append(cleaned_player)
-    existing = actors.get('protagonist') if isinstance(actors.get('protagonist'), dict) else {}
+    raw_existing = actors.get('protagonist')
+    existing = raw_existing if isinstance(raw_existing, dict) else {}
     existing_aliases = _actor_aliases(existing)
     for alias in aliases:
         if alias not in existing_aliases:
@@ -161,9 +208,45 @@ def _find_actor_id_by_name(actors: dict, name: str) -> str:
     if is_protagonist_name(cleaned) or cleaned in protagonist_names():
         return 'protagonist'
     for actor_id, actor in actors.items():
-        if isinstance(actor, dict) and cleaned in _actor_names(actor):
+        if isinstance(actor, dict) and _actor_name_matches(actor, cleaned):
             return str(actor_id)
     return ''
+
+
+NPC_EPISTEMIC_MARKERS = (
+    '注意到', '观察到', '察觉', '发现', '看到', '听到', '听见', '怀疑', '觉得',
+    '认为', '判断', '推断', '意识到', '留意到', '看出',
+)
+
+
+def _protagonist_labels(actors: dict) -> set[str]:
+    labels = set(protagonist_names())
+    raw_protagonist = actors.get('protagonist')
+    protagonist = raw_protagonist if isinstance(raw_protagonist, dict) else {}
+    name = sanitize_runtime_name(protagonist.get('name', ''))
+    if name:
+        labels.add(name)
+    for alias in protagonist.get('aliases', []) or []:
+        alias_name = sanitize_runtime_name(alias)
+        if alias_name and not is_protagonist_name(alias_name):
+            labels.add(alias_name)
+    return labels
+
+
+def _mentions_protagonist(text: str, actors: dict) -> bool:
+    value = str(text or '')
+    if any(label and label in value for label in _protagonist_labels(actors)):
+        return True
+    return value.startswith(('主角', '玩家', '她', '他'))
+
+
+def _frame_npc_protagonist_knowledge(text: str, *, holder_name: str, actors: dict) -> str:
+    value = _clean_text(text, 160)
+    if not value or not holder_name or not _mentions_protagonist(value, actors):
+        return value
+    if any(marker in value for marker in NPC_EPISTEMIC_MARKERS):
+        return value
+    return _clean_text(f'{holder_name}注意到{value}', 160)
 
 
 def _valid_actor_candidate(item: dict) -> dict | None:
@@ -237,7 +320,7 @@ def _candidate_overlaps_existing_actor(candidate: dict, actors: dict, state: dic
     if not names:
         return True
     for actor in actors.values():
-        if isinstance(actor, dict) and names & _actor_names(actor):
+        if isinstance(actor, dict) and any(_actor_name_matches(actor, name) for name in names):
             return True
     for entity in state.get('scene_entities', []) or []:
         if not isinstance(entity, dict):
@@ -330,9 +413,11 @@ def _bind_actor_ids(state: dict, actors: dict, *, turn_number: int) -> None:
         actor_id = _find_actor_id_by_name(actors, name)
         if not actor_id:
             continue
+        holder_name = _actor_name(actors.get(actor_id, {})) or sanitize_runtime_name(name)
         for text in data.get('learned', []) or []:
             value = _clean_text(text, 160)
             if value:
+                value = _frame_npc_protagonist_knowledge(value, holder_name=holder_name, actors=actors)
                 records.append({'holder_actor_id': actor_id, 'text': value})
     if records:
         merged = []

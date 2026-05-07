@@ -407,6 +407,27 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(diagnostics['raw_reply_excerpt'], '')
         self.assertIn('Failed to parse JSON', diagnostics['error'])
 
+    def test_actor_registry_treats_card_name_parts_with_titles_as_existing_actor(self):
+        state = {
+            'actors': {
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '维克托·奥古斯特',
+                    'aliases': [],
+                    'created_turn': 1,
+                },
+            },
+        }
+        usage = {'model': 'test-model'}
+
+        with patch('backend.actor_registry.get_character_primary_name', return_value='维克托·奥古斯特'):
+            with patch('backend.actor_registry.call_role_llm', return_value=('{"new_actors":[{"name":"奥古斯特教官","aliases":[]}] }', usage)):
+                updated = update_actor_registry(state, narrator_reply='奥古斯特教官合上记录板。', turn_number=9, use_llm=True)
+
+        self.assertEqual([actor_id for actor_id in updated['actors'] if actor_id != 'protagonist'], ['npc_001'])
+        self.assertEqual(updated['actor_registry_diagnostics']['created_actor_ids'], [])
+
     def test_normalize_state_keeps_archived_actor_possession_holder(self):
         state = {
             'onstage_npcs': [],
@@ -622,6 +643,67 @@ class StateFragmentTest(unittest.TestCase):
         self.assertIn({'holder_actor_id': 'npc_001', 'text': '铜牌来自旧案', 'source_turn': 2}, updated['knowledge_records'])
         self.assertIn({'holder_actor_id': 'protagonist', 'text': '铜牌上有残纹', 'source_turn': 2}, updated['knowledge_records'])
 
+    def test_actor_registry_frames_npc_protagonist_knowledge(self):
+        state = {
+            'actors': {
+                'protagonist': {
+                    'actor_id': 'protagonist',
+                    'kind': 'protagonist',
+                    'name': '陆小环',
+                    'aliases': ['你', '主角'],
+                },
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '维克托·奥古斯特',
+                    'aliases': ['教官'],
+                },
+            },
+            'knowledge_scope': {
+                'npc_local': {
+                    '教官': {
+                        'learned': [
+                            '陆小环听觉范围比正常宽',
+                        ]
+                    }
+                }
+            },
+        }
+
+        updated = update_actor_registry(state, narrator_reply='维克托看向陆小环。', turn_number=3, use_llm=False)
+
+        records = [item for item in updated['knowledge_records'] if item['holder_actor_id'] == 'npc_001']
+        self.assertIn({'holder_actor_id': 'npc_001', 'text': '维克托·奥古斯特注意到陆小环听觉范围比正常宽', 'source_turn': 3}, records)
+        self.assertFalse(any(item['text'] == '陆小环听觉范围比正常宽' for item in records))
+
+    def test_actor_registry_preserves_existing_npc_knowledge_frame(self):
+        state = {
+            'actors': {
+                'protagonist': {
+                    'actor_id': 'protagonist',
+                    'kind': 'protagonist',
+                    'name': '陆小环',
+                    'aliases': ['你', '主角'],
+                },
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '维克托·奥古斯特',
+                    'aliases': ['教官'],
+                },
+            },
+            'knowledge_scope': {
+                'npc_local': {'教官': {'learned': ['维克托注意到陆小环保持稳定步频']}}
+            },
+        }
+
+        updated = update_actor_registry(state, narrator_reply='维克托看向陆小环。', turn_number=3, use_llm=False)
+
+        self.assertIn(
+            {'holder_actor_id': 'npc_001', 'text': '维克托注意到陆小环保持稳定步频', 'source_turn': 3},
+            updated['knowledge_records'],
+        )
+
     def test_knowledge_scope_is_per_turn_delta(self):
         prev = {
             'knowledge_scope': {'protagonist': {'learned': ['旧情报']}},
@@ -692,6 +774,61 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['scene_entities'][0]['primary_label'], '维克托·奥古斯特')
         self.assertIn('维克托', normalized['scene_entities'][0]['aliases'])
         self.assertEqual(normalized['scene_entities'][0]['possible_link'], 'npc_001')
+
+    def test_scene_entities_canonicalize_card_name_part_with_title(self):
+        state: dict[str, Any] = {
+            'actors': {
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '维克托·奥古斯特',
+                    'aliases': [],
+                },
+            },
+            'onstage_npcs': ['奥古斯特教官'],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_01', 'primary_label': '奥古斯特教官', 'aliases': [], 'role_label': '教官', 'onstage': True}
+            ],
+        }
+
+        with patch('backend.state_bridge.get_character_primary_name', return_value='维克托·奥古斯特'):
+            normalized = normalize_state_dict(state)
+
+        self.assertEqual(normalized['onstage_npcs'], ['维克托·奥古斯特'])
+        self.assertEqual(normalized['scene_entities'][0]['primary_label'], '维克托·奥古斯特')
+        self.assertIn('奥古斯特教官', normalized['scene_entities'][0]['aliases'])
+
+    def test_important_npc_present_now_ignores_merely_relevant_names(self):
+        from backend.important_npc_tracker import update_important_npcs
+
+        state = {
+            'time': '中午',
+            'location': '图书馆公共终端区',
+            'main_event': '安全组人员要求陆小环前往训练部谈话。',
+            'relevant_npcs': ['维克托'],
+            'important_npcs': [
+                {
+                    'key': 'important:维克托',
+                    'primary_label': '维克托',
+                    'aliases': [],
+                    'role_label': '特工学院教官',
+                    'locked': True,
+                    'importance_score': 6,
+                    'present_now': True,
+                    'inactive_turns': 0,
+                    'last_location': '训练场',
+                }
+            ],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_01', 'primary_label': '维克托', 'aliases': [], 'role_label': '特工学院教官', 'onstage': False},
+            ],
+        }
+
+        updated = update_important_npcs(state, history=[])
+
+        victor = updated['important_npcs'][0]
+        self.assertFalse(victor['present_now'])
+        self.assertEqual(victor['last_location'], '训练场')
 
     def test_possession_holder_alias_canonicalizes_to_actor_name(self):
         state: dict[str, Any] = {
@@ -871,6 +1008,14 @@ class StateFragmentTest(unittest.TestCase):
         self.assertNotIn('维克托要求陆小环伸出双手检查。', normalized['immediate_risks'])
         self.assertFalse(any('伸出双手检查' in item.get('label', '') for item in threaded['active_threads']))
 
+    def test_keeper_prompts_keep_core_fields_scene_focused(self):
+        self.assertIn('下一轮可能直接改变行动', state_keeper.STATE_KEEPER_FILL_SYSTEM)
+        self.assertIn('预约、背景悬念', state_keeper.STATE_KEEPER_FILL_SYSTEM)
+        self.assertIn('优先写主角当前正在参与的互动', state_keeper.SKELETON_KEEPER_SYSTEM)
+        self.assertIn('旁观者、监督者、提及者', state_keeper.SKELETON_KEEPER_SYSTEM)
+        self.assertIn('必须站在主角视角', state_keeper.SKELETON_KEEPER_SYSTEM)
+        self.assertIn('不要写 NPC 的目标', state_keeper.SKELETON_KEEPER_SYSTEM)
+
     def test_lightweight_knowledge_delta_records_visible_object_possession(self):
         state = {
             'tracked_objects': [{'object_id': 'obj_01', 'label': '运动胶布', 'kind': 'item'}],
@@ -904,6 +1049,13 @@ class StateFragmentTest(unittest.TestCase):
                 'inject_lorebook_text': True,
                 'event_hits': [{'event_id': 'evt_0001', 'summary': '很长的正文不应进入审计'}],
                 'summary_chunk_hits': [{'chunk_id': 'chunk_0001', 'dense_summary': ['正文']}],
+                'npc_profile_targets': ['韩骁', '资料管理员'],
+                'npc_profile_load': {
+                    'reason': 'target_profile_missing',
+                    'missing': ['韩骁', '资料管理员'],
+                    'loaded': [],
+                    'available_profile_names': ['维克托'],
+                },
             },
             'lorebook_injection': {'items': [{'id': 'entry_1', 'content': '不应进入审计'}], 'total_chars': 20, 'source_hit_chars': 15, 'index_hit_chars': 9, 'foundation_chars': 30, 'effective_total_chars': 45, 'mode': 'selected'},
             'lorebook_text': '全文不应进入审计',
@@ -917,6 +1069,8 @@ class StateFragmentTest(unittest.TestCase):
         _store_turn_audit(meta, audit)
 
         self.assertEqual(meta['last_turn_audit']['selector']['event_hit_ids'], ['evt_0001'])
+        self.assertEqual(meta['last_turn_audit']['selector']['npc_profile_load_reason'], 'target_profile_missing')
+        self.assertEqual(meta['last_turn_audit']['selector']['npc_profile_missing_names'], ['韩骁', '资料管理员'])
         self.assertEqual(meta['turn_audits'][0]['keeper']['provider_used'], 'llm')
         self.assertEqual(meta['last_turn_audit']['lorebook_injection']['effective_total_chars'], 45)
         self.assertEqual(meta['last_turn_audit']['lorebook_injection']['source_hit_chars'], 15)
@@ -940,6 +1094,8 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(fallback['locations'], ['旧渡口库房'])
         self.assertEqual(normalized['actors_mentioned'], ['林越'])
         self.assertEqual(normalized['objects_mentioned'], ['铜牌'])
+        self.assertNotIn('护具（护胸、', normalized['keywords'])
+        self.assertNotIn('维克托在', normalized['keywords'])
 
     def test_extract_reply_skeleton_skips_main_event_without_terminal_punctuation(self):
         # P3.8 regression: previously the first paragraph was sliced to 100 chars

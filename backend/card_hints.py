@@ -137,6 +137,11 @@ def get_canonical_name(surface: str) -> str:
     return load_card_hints()['npc_canonical_mappings'].get(surface, '')
 
 
+def get_character_primary_name() -> str:
+    """Return the active character card's primary name, if available."""
+    return str(_load_character_data().get('name', '') or '').strip()
+
+
 def get_time_era_prefix() -> str:
     return load_card_hints()['time_era_prefix']
 

@@ -10,12 +10,12 @@ try:
     from .continuity_hints import match_continuity_hint
     from .character_assets import load_system_npcs
     from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment
-    from .card_hints import get_known_npc_role
+    from .card_hints import get_known_npc_role, get_canonical_name, get_character_primary_name
 except ImportError:
     from continuity_hints import match_continuity_hint
     from character_assets import load_system_npcs
     from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment
-    from card_hints import get_known_npc_role
+    from card_hints import get_known_npc_role, get_canonical_name, get_character_primary_name
 
 
 STRUCTURED_NAME_RE = re.compile(r'[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?')
@@ -44,7 +44,7 @@ ABSTRACT_CONTINUITY_SUFFIXES = ('机制', '系统', '规则', '判定', '反馈'
 ENTITY_DESCRIPTOR_SUFFIXES = (
     '身影', '背影', '影子', '影', '之人', '那人', '此人', '来人',
     '男人', '女人', '女子', '青年', '少年', '老者', '壮汉',
-    '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
+    '制服人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
 )
 GENERIC_SHADOW_LABELS = {'暗影', '黑影', '影子', '人影'}
 PERSON_EVIDENCE_SUFFIXES = ENTITY_DESCRIPTOR_SUFFIXES + (
@@ -324,6 +324,7 @@ def _actor_name_pool(*states: dict[str, Any]) -> set[str]:
                 name = sanitize_runtime_name(raw)
                 if name and not is_protagonist_name(name):
                     names.add(name)
+                    names.update(_actor_surface_variants(name))
     return names
 
 
@@ -682,7 +683,7 @@ def _normalize_important_npcs(items: list[dict], protected_names: set[str], onst
         )
         merged['aliases'] = _filter_entity_aliases(merged['primary_label'], aliases, protected_names)
         merged['importance_score'] = max(int(entry.get('importance_score', 0) or 0) for entry in cluster)
-        merged['present_now'] = merged['primary_label'] in onstage_names or merged['primary_label'] in relevant_names
+        merged['present_now'] = merged['primary_label'] in onstage_names
         normalized.append(merged)
 
     return normalized
@@ -695,7 +696,7 @@ def _is_degraded_entity_label(name: str) -> bool:
     if text in GENERIC_SHADOW_LABELS:
         return True
     generic_patterns = (
-        r'^皂衣人\d+$',
+        r'^制服人\d+$',
         r'^黑衣人\d+$',
         r'^蒙面人\d+$',
         r'^衙役\d+$',
@@ -1191,7 +1192,40 @@ def _actor_canonical_lookup(actors: dict) -> dict[str, dict[str, Any]]:
             name = sanitize_runtime_name(raw_name)
             if name and name not in lookup:
                 lookup[name] = record
+        for raw_name in aliases:
+            for surface in _actor_surface_variants(raw_name):
+                if surface and surface not in lookup:
+                    lookup[surface] = record
     return lookup
+
+
+def _actor_surface_variants(name: str) -> set[str]:
+    clean = sanitize_runtime_name(name)
+    if not clean:
+        return set()
+    variants = {clean}
+    canonical = sanitize_runtime_name(get_canonical_name(clean))
+    if canonical:
+        variants.add(canonical)
+    for suffix in ('教官', '老师', '先生', '小姐', '女士', '夫人', '长官', '队长', '局长', '主管', '管理员', '医生', '大夫'):
+        if clean.endswith(suffix) and len(clean) > len(suffix):
+            stripped = clean[:-len(suffix)].strip()
+            if stripped:
+                variants.add(stripped)
+                mapped = sanitize_runtime_name(get_canonical_name(stripped))
+                if mapped:
+                    variants.add(mapped)
+    for item in list(variants):
+        if '·' in item:
+            variants.update(part for part in item.split('·') if part)
+    card_name = sanitize_runtime_name(get_character_primary_name())
+    if card_name and '·' in card_name:
+        card_parts = {part for part in card_name.split('·') if part}
+        if clean == card_name or clean in card_parts or variants & card_parts:
+            variants.add(card_name)
+            variants.update(card_parts)
+            variants.update(f'{part}{suffix}' for part in card_parts for suffix in ('教官', '老师', '先生', '小姐', '女士', '夫人', '长官', '队长', '局长', '主管', '管理员', '医生', '大夫'))
+    return {item for item in variants if item}
 
 
 def _canonicalize_actor_name(name: str, actor_lookup: dict[str, dict[str, Any]]) -> str:
@@ -1973,17 +2007,17 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             current['scene_entities'] = _filter_scene_entities_with_person_evidence(current.get('scene_entities', []), current, prev)
     current_main_event = str(current.get('main_event', '') or '').strip()
     current_location = str(current.get('location', '') or '').strip()
-    present_names = set(current.get('onstage_npcs', []) or []) | set(current.get('relevant_npcs', []) or [])
+    onstage_names = set(current.get('onstage_npcs', []) or [])
     for item in current.get('important_npcs', []) or []:
         if not isinstance(item, dict):
             continue
         label = sanitize_runtime_name(item.get('primary_label', ''))
         if current_main_event:
             item['last_main_event'] = current_main_event
-        if current_location and label and label in present_names:
+        if current_location and label and label in onstage_names:
             item['last_location'] = current_location
         if label:
-            item['present_now'] = label in present_names
+            item['present_now'] = label in onstage_names
             item['role_label'] = _choose_role_label(
                 label,
                 item.get('role_label', ''),
