@@ -116,9 +116,14 @@ def _heuristic_digest(mid_pairs: list[tuple[dict, dict]], hard_anchors: dict, fr
         for user_item, assistant_item in mid_pairs
     )
 
-    # 通用实体提取：从锚点中查找在中程窗口出现的人物
+    # 通用实体提取：从锚点和 NPC registry 中查找在中程窗口出现的人物
     entities = []
-    for name in _dedupe(list(hard.get('onstage_npcs', []) or []) + list(hard.get('relevant_npcs', []) or []), limit=8):
+    registry_names = []
+    npc_registry = hard.get('npc_registry', {}) if isinstance(hard.get('npc_registry', {}), dict) else {}
+    for item in npc_registry.get('entities', []) if isinstance(npc_registry.get('entities', []), list) else []:
+        if isinstance(item, dict):
+            registry_names.append(str(item.get('primary_label') or item.get('name') or '').strip())
+    for name in _dedupe(list(hard.get('onstage_npcs', []) or []) + list(hard.get('relevant_npcs', []) or []) + registry_names, limit=12):
         if name and name in combined:
             entities.append({'name': name, 'status': '跨中程窗口持续出现'})
 
@@ -213,6 +218,15 @@ def _score_events(mid_pairs: list[tuple[dict, dict]]) -> list[str]:
     if not events and persistent:
         top = [p for _, p in persistent[:3]]
         events.append(f'围绕{"、".join(top)}的局势仍在持续演化')
+
+    if not events:
+        action_patterns = re.findall(r'([\u4e00-\u9fff]{2,12}(?:搜查|盘问|追踪|调查|审查|逃离|守卫|战斗|谈判|试探|隐瞒|威胁|观察|等待|对峙|商议|密谈|交易|潜入|暴露|争吵|合作)[^。！？\n]{0,18})', '\n'.join(str(assistant_item.get('content', '') or '') for _, assistant_item in mid_pairs))
+        for item in action_patterns:
+            text = _short(item, limit=48)
+            if text and text not in events:
+                events.append(text)
+            if len(events) >= 4:
+                break
 
     return events
 

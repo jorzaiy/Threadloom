@@ -73,6 +73,7 @@ def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overl
                 'onstage_npcs': state.get('onstage_npcs', []),
                 'relevant_npcs': state.get('relevant_npcs', []),
                 'tracked_objects': state.get('tracked_objects', []),
+                'npc_registry': registry,
             },
             max_pairs=window_size,
             use_llm=use_llm,

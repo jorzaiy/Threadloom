@@ -144,6 +144,33 @@ class KeeperArchiveWindowTests(unittest.TestCase):
         self.assertEqual(archive['source_pair_count'], 12)
         self.assertNotIn('半截回复', str(archive['records']))
 
+    def test_keeper_archive_digest_uses_window_anchors_events_and_npc_registry(self):
+        history = []
+        for idx in range(1, 4):
+            history.extend([
+                {'role': 'user', 'content': f'第{idx}轮继续调查账册'},
+                {'role': 'assistant', 'content': f'【午后，前厅】\n测试掌柜第{idx}次配合调查账册，账册搜查仍在推进。'},
+            ])
+
+        with patch.object(keeper_archive, 'load_history', return_value=history), \
+                patch.object(keeper_archive, 'load_state', return_value={'time': '夜里', 'location': '后院'}), \
+                patch.object(keeper_archive, 'ensure_npc_registry', return_value={'entities': [{'primary_label': '测试掌柜'}]}), \
+                patch.object(keeper_archive, 'ensure_object_registry', return_value=None), \
+                patch.object(keeper_archive, 'ensure_clue_registry', return_value=None):
+            archive = keeper_archive.build_keeper_record_archive(
+                'test-session',
+                window_size=3,
+                overlap_recent_pairs=0,
+                use_llm=False,
+            )
+
+        record = archive['records'][0]
+        self.assertEqual(record['time_anchor'], '午后')
+        self.assertEqual(record['location_anchor'], '前厅')
+        self.assertIn({'name': '测试掌柜', 'status': '跨中程窗口持续出现'}, record['stable_entities'])
+        self.assertTrue(record['ongoing_events'])
+        self.assertEqual(archive['npc_registry']['entities'][0]['primary_label'], '测试掌柜')
+
     def test_retrieve_keeper_records_can_disable_archive_writes(self):
         stale_archive = {
             'version': 1,
