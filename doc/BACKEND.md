@@ -10,8 +10,8 @@
 - `handler_message.py`：`POST /api/message` 主链入口
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照
 - `bootstrap_session.py`：新 session bootstrap
-- `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，不是只有 `recent window + keeper archive`
-- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表
+- `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接
+- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及 recent window 前段 event outline + 近端完整正文
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `server.py` 当前默认绑定 `127.0.0.1:8765`，可通过 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）；调用方必须显式提供 `base_url` 与 `model`，不再内置旧本地模型默认值
@@ -47,9 +47,9 @@
 - narrator 已接上真实模型调用
 - 新 session 会继承 root `canon / summary / state`
 - state / summary / persona / threads / important NPC / actor registry 都已接入 session-local 写回
-- narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / items / knowledge / 最近 12 轮完整窗口 / user input`
-- `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近 12 轮为准
-- `event` 不再进入 narrator prompt，也不再写回 state；12 轮外历史改由固定 `summary_chunks` 通过 selector 条件召回
+- narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / items / knowledge / recent window 前段提纲 / 最近完整正文 / user input`
+- `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近完整正文 + 前段提纲 + 本轮输入为准
+- `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回
 - 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
 - `state_keeper` 优先，`state_updater` 兜底
 - arbiter 已接入主链，不再只是文档占位
@@ -80,7 +80,8 @@
 - 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里存在；`thread_tracker / context_builder / state_snapshot` 等核心消费点已开始优先使用统一信号层，再兼容旧字段
 - `onstage_npcs` 当前只作为 state/UI 快照存在，不进入 narrator 主 prompt，也不承载长期人物基础设定；长期人物基础设定进入不可变 `actors`
 - `onstage_npcs / relevant_npcs / scene_entities` 当前必须有正向人物证据：稳定 actor、important NPC、continuity hint、明确人物 role，或正文/事件中“人物称谓 + 行动锚点”。地点、标题残片、事件短语不能从 `main_event/location` 反推出 NPC
-- narrator prompt 当前不靠列举“翻墙/离场”等剧情关键词维持连续性，而是通过完整 recent 12 和通用原则约束空间关系、视线范围、人物控制权与行动链的承接
+- narrator prompt 当前不靠列举“翻墙/离场”等剧情关键词维持连续性，而是通过 recent window（前段提纲 + 近端完整正文）和通用原则约束空间关系、视线范围、人物控制权与行动链的承接
+- runtime heuristic / prompt examples 当前避免绑定具体角色卡或 session：summary keyword 示例、clue 组织触发词、persona archetype 兜底和 state fallback 物件提示均应使用通用职能/物件词，不使用某张卡的固定角色名、组织名或剧情专属物件来强化表现
 - 当前目标分工草案：
 - `event`：中程检索层，服务于 recall / summary，不默认主导 narrator
 - `signal`：当前方向约束层，可直接进入 narrator / selector
@@ -343,8 +344,9 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - `lorebookStrategy.maxTotalChars`: 2200（旧 world-sim-balanced 预设）
 
 **修改后**：
-- `recent_history_turns`: **12 轮**（`config/runtime.json`）— 保持完整 recent window 连续性
-- `narrator.max_output_tokens`: **1000** — 降低每轮生成的 token 消耗
+- `recent_history_turns`: **12 轮**（`config/runtime.json`）— 保持 recent window 总覆盖范围
+- `recent_full_prose_turns`: **6 轮**（`config/runtime.json`）— narrator 只吃最近 6 轮完整正文，更早的同窗口回合用 event outline 桥接
+- `narrator.max_output_tokens`: **2000** — 避免长回复在同一位置被 `finish_reason=length` 截断
 - `lorebookStrategy.maxTotalChars`: **1500**（当前 active preset）— 减少世界书注入上限
 
 单轮总上下文约从 30KB 降至 22-25KB。

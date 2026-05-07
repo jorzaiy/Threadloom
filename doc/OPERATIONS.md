@@ -343,7 +343,7 @@ server {
 - 新 session 会从 root `canon / summary / state` bootstrap，不从空壳 state 起步
 - opening 已经是独立状态机，不再只是输出一段开局提示
 - 开局选择后的首轮 narrator 正文现在会直接接入首轮 keeper 写回：通常能落下时间/地点/主事件/在场人物/风险等基础状态，不再只留一个 opening 壳 state；`immediate_goal` 当前仍可能偏保守或回到 `待确认`
-- 首个 narrator 回合会用大预算注入原始 alwaysOn/foundation 世界书片段给世界定底；后续普通回合改为“蒸馏基础护栏 + selector 回源原文片段”，避免 raw lore 每轮压过最近 12 轮
+- 首个 narrator 回合会用大预算注入原始 alwaysOn/foundation 世界书片段给世界定底；后续普通回合改为“蒸馏基础护栏 + selector 回源原文片段”，避免 raw lore 每轮压过 recent window
 - 同一 `session_id` 的 HTTP 写请求现在会串行执行，降低并发覆盖风险
 - 每个 turn 现在会额外落一份 `turn-trace/turn-XXXX.json`，用于单回合精确回放
 - `runtime.json -> trace.enabled / trace.keep_last_turns` 可控制 trace 是否启用以及最多保留多少轮
@@ -367,13 +367,14 @@ server {
 - `main_event` 当前不再无条件反压主线程 `label`：只有当 `main_event` 自身质量明显更高，或主线程标签仍是低质量占位时，才会接管主线程标签；避免低频事件锚点把更快更新的 `active_threads` 主线压回旧值
 - `active_threads` 当前已做去主导化实验：线程层仍继续落盘并保留给 debug/state 观察，但 `【活跃线程】` 已退出 narrator prompt，selector 也不再把 thread 当主要触发依据；当前方向约束更偏向 `recent window + carryover_signals + event recall`
 - 当前目标分工草案：
-  - `event`：3 回合级中程检索层，默认不给 narrator 常驻输入
+  - `event`：3 回合级中短程提纲/检索层，可作为 recent window 前段提纲进入 narrator
   - `summary`：12 回合级长程压缩层，只在 selector 判断需要时回流
   - `signal`：当前方向约束层，可直接进入 narrator / selector
   - `thread`：state/debug 辅助层，不再默认承担 steering 职责
 - `event` 当前真实行为已更接近这份草案：
   - 每 3 轮写入一次 `event_summaries`
   - 事件总结当前已真正读取最近 `1~3` 对 turn 窗口，而不是只看当前轮 narrator prose
+  - narrator 会把同一 recent window 中较早、未进入完整正文窗口的回合渲染为 `【最近窗口前段提纲】`，避免把所有连续性都压给 keeper
   - fallback event summary 当前已不再优先抓天气/氛围句，开始更像阶段事件压缩；后续若继续打磨，主方向应是 clue/risk 的结构化质量，而不是继续扩大窗口
 - NPC / object / clue registry 当前已改为批量刷新：默认累计到至少 3 个新的对话对后才触发一次 sidecar 更新，不再每轮都检查一次 gemma
 - entity candidate judge 当前已收成单一入口：保留 `state_updater.py` 中的判定，移除 `state_bridge.py` 中的重复 judge，减少每轮额外 gemma 调用
@@ -424,15 +425,15 @@ server {
 
 - 开局选择是否正常落到 runtime 主链
 - 世界书与系统级 NPC 候选是否真的进入 narrator prompt
-- `12` 对 recent window 是否真的作为 narrator 主上下文
+- recent window 是否按“前段提纲 + 近端完整正文”进入 narrator 主上下文
 - keeper archive 是否会在窗口外真实回流
 - 长跑后 state / threads / important_npcs 是否出现明显漂移
 
 当前已确认：
 
 - 系统级 NPC 候选与世界书预算注入已真实进入 narrator prompt
-- `12` 对 recent window 已真实生效
-- recent window 在 narrator prompt 中按完整正文注入，不再按短摘要截断；连续性问题优先检查 turn trace 的 `【最近12轮完整上下文】` 是否包含上一轮关键变化
+- recent window 已真实生效，并拆成 `【最近窗口前段提纲】` 与 `【最近N轮完整上下文】`
+- 连续性问题优先检查 turn trace 的 `【最近窗口前段提纲】` 是否覆盖掉出完整正文窗口的回合，以及 `【最近N轮完整上下文】` 是否包含上一轮关键变化
 - keeper archive 在记录真正掉出 recent window 后，会以 `【较早结构记录】` 真实进入 narrator prompt
 - HTTP 层已修：客户端提前断开时，backend 不再把已完成请求伪装成 `500`，只记录轻量断连日志
 
