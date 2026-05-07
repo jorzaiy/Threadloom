@@ -71,32 +71,51 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
         str(state_json.get('location', '') or ''),
         str(state_json.get('main_event', '') or ''),
     ])
+    carryover_text = '\n'.join([
+        ' '.join(str(x or '') for x in (state_json.get('immediate_risks', []) or [])),
+        ' '.join(str(x.get('text', '') or '') for x in (state_json.get('carryover_signals', []) or []) if isinstance(x, dict)),
+    ])
     query_text = '\n'.join([
         recent_text,
         current_text,
         ' '.join(str(x or '') for x in (state_json.get('onstage_npcs', []) or [])),
         ' '.join(str(x or '') for x in (state_json.get('relevant_npcs', []) or [])),
-        ' '.join(str(x or '') for x in (state_json.get('immediate_risks', []) or [])),
-        ' '.join(str(x.get('text', '') or '') for x in (state_json.get('carryover_signals', []) or []) if isinstance(x, dict)),
+        carryover_text,
+    ])
+    actor_context_text = '\n'.join([
+        recent_text,
+        current_text,
+        ' '.join(str(x or '') for x in (state_json.get('onstage_npcs', []) or [])),
+        ' '.join(str(x or '') for x in (state_json.get('relevant_npcs', []) or [])),
     ])
     query_tokens = _topic_tokens(query_text)
     current_tokens = _topic_tokens(current_text)
+    recent_tokens = _topic_tokens(recent_text)
     location_tokens = _topic_tokens(str(state_json.get('location', '') or ''))
+    carryover_tokens = _topic_tokens(carryover_text)
     recent_events = [item for item in event_summaries[-20:] if isinstance(item, dict)]
     repeated_counts = _repeated_token_counts(recent_events)
     latest_turn = max((_turn_index(item, idx + 1) for idx, item in enumerate(recent_events)), default=0)
     hits = []
+    seen_clues: set[str] = set()
     for idx, item in enumerate(recent_events):
         if not isinstance(item, dict):
             continue
         event_tokens = _topic_tokens(_event_text(item))
         shared = sorted(query_tokens & event_tokens)
         current_shared = sorted(current_tokens & event_tokens)
+        recent_shared = sorted(recent_tokens & event_tokens)
         location_shared = sorted(location_tokens & event_tokens)
+        carryover_shared = sorted(carryover_tokens & event_tokens)
+        clue_key = '\n'.join(sorted(str(clue or '').strip() for clue in (item.get('clues', []) or []) if str(clue or '').strip()))
         actor_bonus = 0
         for name in (item.get('actors', []) or []):
-            if str(name or '').strip() and str(name).strip() in query_text:
+            if str(name or '').strip() and str(name).strip() in actor_context_text:
                 actor_bonus += 1
+        if carryover_shared and not current_shared and not recent_shared and not location_shared and actor_bonus == 0:
+            continue
+        if clue_key and clue_key in seen_clues and carryover_shared and not current_shared and not location_shared:
+            continue
         turn_idx = _turn_index(item, idx + 1)
         distance = max(0, latest_turn - turn_idx) if latest_turn else 0
         recency_bonus = max(0.0, 2.0 - min(distance, 8) * 0.25)
@@ -104,6 +123,8 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
         score = (len(shared) * 0.75) + (len(current_shared) * 2.0) + len(location_shared) + actor_bonus + recency_bonus - repeated_penalty
         if score <= 0:
             continue
+        if clue_key:
+            seen_clues.add(clue_key)
         hits.append({
             'event_id': item.get('event_id'),
             'score': score,

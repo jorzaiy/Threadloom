@@ -359,7 +359,12 @@ def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[
         if text and text not in normalized_clues:
             normalized_clues.append(text)
     if not normalized_clues:
-        normalized_clues = [str(item).strip() for item in (carryover_clues or [])[:2] if str(item).strip()]
+        source_text = summary
+        normalized_clues = [
+            str(item).strip()
+            for item in (carryover_clues or [])[:2]
+            if str(item).strip() and str(item).strip().rstrip('。') in source_text
+        ]
 
     return {
         'event_id': f'evt_{turn_id[-4:]}',

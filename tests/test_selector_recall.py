@@ -105,6 +105,39 @@ class SelectorRecallTests(unittest.TestCase):
 
         self.assertEqual(hits[0]['event_id'], 'evt_0002')
 
+    def test_event_recall_skips_carryover_only_stale_clue_hits_after_scene_shift(self):
+        events = [
+            {
+                'event_id': 'evt_0004',
+                'turn_id': 'turn-0004',
+                'summary': '维克托在训练场记录体检日单独跟进。',
+                'actors': ['维克托'],
+                'clues': ["维克托记录'体检日，单独跟进'。"],
+            },
+            {
+                'event_id': 'evt_0014',
+                'turn_id': 'turn-0014',
+                'summary': '安全组人员在图书馆指出系统记录与陆小环说法不符。',
+                'actors': ['拿平板的人', '管理员'],
+                'clues': [],
+            },
+        ]
+
+        hits = event_summary_hits(
+            events,
+            state_json={
+                'location': '特工学院图书馆公共终端区',
+                'main_event': '安全组人员要求陆小环前往训练部安全组谈话',
+                'onstage_npcs': ['拿平板的人', '管理员'],
+                'relevant_npcs': [],
+                'carryover_signals': [{'type': 'clue', 'text': "维克托记录'体检日，单独跟进'"}],
+            },
+            recent_history=[{'role': 'user', 'content': '我在查资料'}],
+            user_text='跟着安全组人员走',
+        )
+
+        self.assertEqual([hit['event_id'] for hit in hits], ['evt_0014'])
+
 
 if __name__ == '__main__':
     unittest.main()
