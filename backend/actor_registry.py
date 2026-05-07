@@ -219,6 +219,17 @@ NPC_EPISTEMIC_MARKERS = (
 )
 
 
+GENERIC_ACTOR_HINTS = (
+    '男生', '女生', '学员', '新生', '高年级', '助教', '老师', '教官', '医生', '护士', '杂工', '炊事员',
+    '寸头', '高个子', '圆脸', '金发', '瘦高', '迟到', '受伤', '年轻', '老人', '小个子',
+)
+
+NON_NAME_DIALOGUE = {
+    '不用', '不要', '到', '嗯', '哦', '医务室', '理论课', '名字', '腿', '看前面', '跟上', '去食堂',
+    '迟到', '作业', '地图', '目标', '漏洞', '卫星图', '我也不想', '你叫什么',
+}
+
+
 def _protagonist_labels(actors: dict) -> set[str]:
     labels = set(protagonist_names())
     raw_protagonist = actors.get('protagonist')
@@ -247,6 +258,121 @@ def _frame_npc_protagonist_knowledge(text: str, *, holder_name: str, actors: dic
     if any(marker in value for marker in NPC_EPISTEMIC_MARKERS):
         return value
     return _clean_text(f'{holder_name}注意到{value}', 160)
+
+
+def _looks_like_revealed_name(value: str) -> bool:
+    name = sanitize_runtime_name(re.sub(r'[—\-－~～…\s]+', '', str(value or '')))
+    if not name or name in NON_NAME_DIALOGUE or '什么' in name or is_protagonist_name(name) or looks_like_bad_entity_fragment(name):
+        return False
+    if not re.fullmatch(r'[\u4e00-\u9fff]{2,4}', name):
+        return False
+    if any(name.endswith(suffix) for suffix in ('学员', '新生', '男生', '女生', '教官', '助教', '老师')):
+        return False
+    return True
+
+
+def _clean_revealed_name(value: str) -> str:
+    name = sanitize_runtime_name(re.sub(r'[—\-－~～…\s]+', '', str(value or '')))
+    if len(name) >= 3 and name[0] == name[1]:
+        name = name[1:]
+    return name
+
+
+def _extract_name_reveals(text: str) -> list[dict]:
+    value = str(text or '')
+    reveals: list[dict] = []
+    for match in re.finditer(r'["“](?P<quoted>[^"”]{1,16})["”]', value):
+        quoted = str(match.group('quoted') or '').strip().strip('。！？!?，,')
+        candidates = [quoted]
+        if '姓' in quoted:
+            candidates = []
+            continue
+        if '——' in quoted or '—' in quoted or '-' in quoted or '－' in quoted:
+            candidates.append(_clean_revealed_name(quoted))
+        for candidate in candidates:
+            name = _clean_revealed_name(candidate)
+            if not _looks_like_revealed_name(name):
+                continue
+            before = value[max(0, match.start() - 900):match.start()]
+            after = value[match.end():min(len(value), match.end() + 120)]
+            surname = name[:1]
+            surname_match = bool(re.search(rf'["“]姓{re.escape(surname)}[。！？!?]?["”]', before[-160:]))
+            reveals.append({'name': name, 'window': before + after, 'surname_match': surname_match})
+    deduped: list[dict] = []
+    seen = set()
+    for item in reveals:
+        name = item.get('name')
+        if name and name not in seen:
+            deduped.append(item)
+            seen.add(name)
+    return deduped[:6]
+
+
+def _generic_actor_terms(actor: dict) -> set[str]:
+    text = ' '.join(str(actor.get(key, '') or '') for key in ('name', 'appearance', 'identity'))
+    text += ' ' + ' '.join(str(alias or '') for alias in actor.get('aliases', []) or [])
+    terms = set()
+    for hint in GENERIC_ACTOR_HINTS:
+        if hint in text:
+            terms.add(hint)
+    for token in re.findall(r'[\u4e00-\u9fff]{2,5}', text):
+        if any(hint in token for hint in GENERIC_ACTOR_HINTS):
+            terms.add(token)
+    return {term for term in terms if term}
+
+
+def _actor_reveal_score(actor: dict, reveal: dict, haystack: str) -> int:
+    if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
+        return 0
+    if _actor_name_matches(actor, str(reveal.get('name', '') or '')):
+        return 0
+    terms = _generic_actor_terms(actor)
+    if not terms:
+        return 0
+    window = str(reveal.get('window', '') or '')
+    score = 0
+    for term in terms:
+        if term and term in haystack:
+            score += 1
+        if term and term in window:
+            score += 2
+    actor_name = _actor_name(actor)
+    if actor_name and actor_name in haystack:
+        score += 3
+    if reveal.get('surname_match'):
+        score += 2
+    return score
+
+
+def _upsert_revealed_actor_aliases(actors: dict, narrator_reply: str) -> list[dict]:
+    reveals = _extract_name_reveals(narrator_reply)
+    if not reveals:
+        return []
+    haystack = str(narrator_reply or '')
+    updates: list[dict] = []
+    for reveal in reveals:
+        name = str(reveal.get('name', '') or '')
+        if not name or _find_actor_id_by_name(actors, name):
+            continue
+        scored = []
+        for actor_id, actor in actors.items():
+            score = _actor_reveal_score(actor, reveal, haystack)
+            if score > 0:
+                scored.append((score, str(actor_id), actor))
+        if not scored:
+            continue
+        scored.sort(key=lambda item: item[0], reverse=True)
+        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+            continue
+        score, actor_id, actor = scored[0]
+        if score < 4:
+            continue
+        aliases = _actor_aliases(actor)
+        if name not in aliases and name != _actor_name(actor):
+            aliases.append(name)
+            actor['aliases'] = aliases[:6]
+            updates.append({'actor_id': actor_id, 'alias': name, 'score': score})
+    return updates
 
 
 def _valid_actor_candidate(item: dict) -> dict | None:
@@ -476,10 +602,13 @@ def update_actor_registry(state: dict, *, narrator_reply: str, turn_number: int,
         }
         created_ids.append(actor_id)
 
+    alias_updates = _upsert_revealed_actor_aliases(actors, narrator_reply)
     current['actors'] = actors
     mentioned = _mentioned_actor_ids(actors, f'{user_text}\n{narrator_reply}') | set(created_ids)
+    mentioned.update(str(item.get('actor_id')) for item in alias_updates if item.get('actor_id'))
     current['actor_context_index'] = _normalize_actor_context_index(current, actors, int(turn_number or 1), mentioned)
     _bind_actor_ids(current, actors, turn_number=int(turn_number or 1))
     diagnostics['created_actor_ids'] = created_ids
+    diagnostics['alias_updates'] = alias_updates
     current['actor_registry_diagnostics'] = diagnostics
     return current

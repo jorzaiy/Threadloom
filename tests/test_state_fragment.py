@@ -428,6 +428,58 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual([actor_id for actor_id in updated['actors'] if actor_id != 'protagonist'], ['npc_001'])
         self.assertEqual(updated['actor_registry_diagnostics']['created_actor_ids'], [])
 
+    def test_actor_registry_adds_revealed_name_alias_to_existing_generic_actor(self):
+        state = {
+            'actors': {
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '剃寸头的高个子学员',
+                    'aliases': [],
+                    'appearance': '剃寸头，高个子，膝盖有擦伤',
+                    'identity': '新生学员',
+                    'created_turn': 3,
+                },
+            },
+            'actor_context_index': {'last_mentioned_turn': {'npc_001': 3}},
+            'knowledge_scope': {
+                'npc_local': {
+                    '秦野': {'learned': ['秦野注意到陆小环刚才超了自己']},
+                },
+            },
+        }
+        reply = '寸头高个子的脚步拖得很沉。走出三四步之后他停了一下，没回头。"姓秦。"他说，"秦野。"然后继续往前挪。'
+
+        updated = update_actor_registry(state, narrator_reply=reply, turn_number=8, use_llm=False)
+
+        actor = updated['actors']['npc_001']
+        self.assertEqual(actor['name'], '剃寸头的高个子学员')
+        self.assertIn('秦野', actor['aliases'])
+        self.assertEqual(updated['actor_context_index']['last_mentioned_turn']['npc_001'], 8)
+        self.assertEqual(updated['actor_registry_diagnostics']['alias_updates'][0]['alias'], '秦野')
+        self.assertTrue(any(item['holder_actor_id'] == 'npc_001' and '陆小环' in item['text'] for item in updated['knowledge_records']))
+
+    def test_actor_registry_adds_stuttered_revealed_name_alias(self):
+        state = {
+            'actors': {
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '迟到新生',
+                    'aliases': [],
+                    'appearance': '瘦高，胸口起伏大，额头冒汗',
+                    'identity': '新生学员',
+                    'created_turn': 9,
+                },
+            },
+        }
+        reply = '维克托看向迟到那个新生。"你叫什么。"那个瘦高的新生站起来。"赵——赵明。"'
+
+        updated = update_actor_registry(state, narrator_reply=reply, turn_number=10, use_llm=False)
+
+        self.assertIn('赵明', updated['actors']['npc_001']['aliases'])
+        self.assertEqual(updated['actor_context_index']['last_mentioned_turn']['npc_001'], 10)
+
     def test_normalize_state_keeps_archived_actor_possession_holder(self):
         state = {
             'onstage_npcs': [],
