@@ -220,6 +220,12 @@
 
 ## 建议的下一步优先级
 
+## 2026-05-06 维克托 session 0bfef1 观察记录
+
+- 观察到 narrator 在安全/权威机构反制时容易过于完美化：安全组可以发现异常，但不应默认一步拿到完整、无争辩空间的证据链。
+- 暂不修改 narrator prompt；先更换 narrator/keeper 相关 LLM 后继续观察。
+- 后续若仍复现，考虑约束反制节奏为“怀疑 → 试探 → 施压 → 证据”，给玩家保留解释、装傻、交易或转移风险的 RP 空间。
+
 1. **narrator_input block 顺序对齐 v1.0 规范** — 硬锚点和人物连续性表应前移
 2. ~~**实时消息处理添加 429 重试**~~ — ✅ 已完成：`model_client.py` 和 `local_model_client.py` 均已加入 `_retry_on_rate_limit` 装饰器（429/503 指数退避，最多 3 次，尊重 `Retry-After`）
 3. **世界书预算参数暴露到 runtime.example.json** — 让用户可配置
