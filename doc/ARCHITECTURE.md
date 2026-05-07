@@ -198,6 +198,34 @@
 - narrator 运行时只消费一份收短后的玩家档案摘要，避免完整人物设定每轮过度挤占上下文
 - `player-profile.json` / `player-profile.md` 当前主要作为兼容副本与可读导出
 
+## 外部记忆层评估：mem0
+
+2026-05 调研结论：[`mem0`](https://github.com/mem0ai/mem0) 对 Threadloom 有参考价值，但不应在 v1.0 作为核心记忆引擎替换现有 runtime 记忆系统。
+
+mem0 的定位是 AI agent 的通用长期记忆层：从对话中自动提取用户偏好、事实与实体关系，再通过语义检索、BM25 与实体检索召回。它适合保存“用户偏好 / 长期印象 / 事实碎片”，但 Threadloom 的核心记忆是叙事结构化事实面：`canon`、`state`、`persona`、`threads`、recent window、keeper archive 与 actor registry 共同维护当前世界连续性。两者不是同一种真相模型。
+
+当前边界：
+
+- 不把 mem0 作为 `canon/state/keeper archive/actor registry` 的 drop-in replacement。
+- 不在 v1.0 主链强依赖向量数据库、外部 memory server 或额外每轮 LLM 抽取调用。
+- 不让 mem0 的事实碎片直接覆盖 Threadloom 的叙事事实层。
+
+后续可考虑的可选集成方向：
+
+- **玩家偏好记忆**：用 `user_id` 保存跨 session 的玩法偏好、题材口味、节奏偏好，作为 `player-profile.base.json` 的智能补充，而不是替代角色卡内的主角设定。
+- **语义 keeper recall**：保留 keeper archive 的文件格式与结构记录，额外把记录索引进向量/语义检索层，用 mem0 结果补充现有 keyword / entity / location scorer。
+- **NPC 长期印象**：按 `npc_id + player_id` 保存 NPC 对玩家的长期印象或关系倾向，作为 persona runtime 的附加上下文，不写入 canon。
+- **多用户扩展**：如果后续 Threadloom 从本地多人模式走向更明确的多用户长期服务，mem0 的 `user_id/session_id/agent_id` 隔离模型可作为 optional backend 参考。
+
+引入成本与风险：
+
+- 需要 Qdrant / Chroma / Pinecone / Redis 等向量存储或 mem0 server，明显增加部署复杂度。
+- `memory.add()` 通常会额外调用 LLM 做事实抽取，带来延迟与费用。
+- 现有 flat-file session 数据与 mem0 记忆格式不能直接互换，需要单独索引/迁移层。
+- 通用事实抽取可能误把临时剧情、角色内台词或错误推断保存成长期偏好，必须通过 runtime 边界和注入权重约束。
+
+推荐定位：mem0 可以作为未来的 **optional semantic / personal memory layer**，不作为 Threadloom 的 memory engine replacement。
+
 ### Runtime 启动顺序
 
 `runtime-first` 版本的启动顺序应固定为：
@@ -210,7 +238,7 @@
 6. `memory/state.md`
 7. relevant `memory/npcs/*.md`
 8. relevant `runtime/persona-seeds/*`
-9. 最近 `12` 对 recent history
+9. 最近窗口：前段逐回合提纲 + 最近完整正文
 10. keeper archive recall 命中
 
 原则：
@@ -221,7 +249,7 @@
 
 第一真相源：
 - 本轮用户输入
-- 最近 12 对完整 recent window
+- 最近完整正文窗口与同一 recent window 的前段逐回合提纲
 - `runtime-rules` 中的主角控制权、知情边界与世界运行原则
 
 辅助真相源：
@@ -237,7 +265,7 @@
 强约束层：
 - 玩家档案（runtime slim 版）
 - 知情边界
-- 最近窗口
+- 最近窗口（前段提纲 + 近端完整正文）
 
 连续性层：
 - actor registry（长期基础设定，不表示当前在场）
@@ -256,7 +284,7 @@
 - 世界书正文
 
 当前运行原则：
-- 本轮用户输入与最近 12 对完整上下文是当前场景事实源。
+- 本轮用户输入、最近完整正文与前段逐回合提纲是当前场景事实源；提纲只桥接连续性，不要求逐条复述。
 - 连续性层只用于保持长期设定、物件归属、知情边界和 recent window 外历史，不可回滚 recent window 中已经发生的空间关系、控制权或行动链变化。
 - 候选知识层只表示“可调用”，不表示“此刻已在场”或“当前已发生”。
 - prompt 中避免为具体剧情动作维护关键词式规则；连续性要求用通用的空间关系、视线范围、人物控制权与行动链原则表达。
@@ -287,9 +315,9 @@
   - 更新频率：高频，尽量每轮都能维护
 
 - `event`
-  - 面向 recall / summary
-  - 表示：最近 3 回合左右到底发生了什么值得检索的事件片段
-  - 默认不直送 narrator；只有 selector 判断 recent window 不足以恢复背景时才回流
+  - 面向 recent outline / recall / summary
+  - 表示：最近 3 回合左右到底发生了什么值得检索和承接的事件片段
+  - 在 narrator 的 recent window 中可作为前段逐回合提纲桥接近端完整正文之外的回合；更早历史仍由 selector/summary chunk 条件回流
 
 - `summary`
   - 面向长程压缩

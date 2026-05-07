@@ -34,7 +34,7 @@ web input
 
 关键差异：
 - `runtime-rules` 与当前角色卡世界设定是 narrator 的最高约束；`state` 是当前场景的结构化承接层，`summary` 不再是 narrator 主输入。
-- `history` 只保留最近窗口承接，不再承担完整骨架职责，也不能把角色卡的时代、题材、身份边界或世界机制改写成另一套设定。
+- `history` 只保留最近窗口承接，不再承担完整骨架职责；narrator 现在用“最近完整正文 + 前段逐回合提纲”桥接同一窗口内较早回合，避免大段 prose 淹没关键事实。
 - 更早历史优先收敛成 keeper archive，而不是自由摘要层。
 - 写回时先收口到结构化状态；`summary` 可继续保留为调试/运维产物，但不再主导 narrator。
 - state 写入分三类：opening 只做开局状态机 checkpoint；`handler_message.py` 负责每个完整 turn 的最终权威提交；keeper archive 写入只维护派生缓存。
@@ -44,11 +44,12 @@ web input
 - keeper archive 的读路径默认允许维护派生缓存；需要只读检查时，调用方可通过 `allow_archive_write=False` 禁止 prune/rebuild 落盘，默认运行行为不变。
 - narrator 输入会注入“世界设定锁”：本轮用户输入只表达主角当前行动/对白/意图，不能切换主世界题材；召回历史、世界书候选或用户输入若与当前角色卡世界不兼容，只能在当前世界观内转译或收束。
 - 防污染判断不靠固定关键词表。不同角色卡的题材边界差异很大，运行时提示要求按整体语境、因果规则、时代感、社会制度、技术/超自然边界和人物身份兼容性来判断是否承接候选内容。
+- runtime fallback / bootstrap 的词表只允许使用通用职能词、通用地点后缀和通用物件类别；不应把某张角色卡的固定人名、组织名、session id 或剧情专属物件写进生产逻辑来强化表现。
 - 同一层还负责用户控制权边界：用户主角只是世界内角色，不是作者、导演、GM 或世界主宰。用户输入只能提出尝试，不能直接决定 NPC 服从、行动成功、关系成立、物品归属、场景改写或客观结论；这些必须由当前世界的因果、资源、制度和 NPC 反应结算。
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。
-- `event`：中程检索层。默认不直送 narrator，主要作为 3 回合级事件总结与 recall / summary 的前置索引。
+- `event`：中短程提纲 / 检索层。每轮 event summary 既供 selector recall，也可作为 recent window 前段提纲直送 narrator，用于承接最近完整正文外的几轮事实；它不是要求 narrator 逐条复述的 steering 块。
 - `summary`：长程压缩层。默认只在 selector 判断 recent window 不足、且旧事件确实回流时才补给 narrator。
 - `thread`：当前实验中已开始降级为 state/debug 辅助层，不再默认主导 narrator 或 selector。
 
@@ -64,7 +65,7 @@ web input
   - `event` 负责“前几轮到底发生了什么值得检索”；
   - `summary` 负责“更长阶段该如何压缩”；
   - `thread` 若保留，也更偏 debug/state 辅助，而不是 steering 层。
-- 当前 event 链已开始按这个方向实现：事件总结默认读取最近 `1~3` 对 turn 窗口，并在 selector 判断需要时作为 recall / summary 的前置材料使用，而不是把 event 当当前 narrator 的常驻 steering 块。
+- 当前 event 链已开始按这个方向实现：事件总结默认读取最近 `1~3` 对 turn 窗口，并在 narrator recent window 中作为“前段提纲”承接完整正文之外的较早回合；selector 仍可把它作为 recall / summary 的前置材料使用。
 - 当前 selector 的 event recall 会优先 current-scene 命中和较新事件；同 NPC、同旧 clue 只能作为弱辅助信号，不能长期压过当前地点/动作/主事件。
 - lorebook audit 分为候选摘要、source hit、index hit、foundation 和 effective total 五类字符统计。调试时应看 `effective_total_chars` 判断实际入 prompt 体量，而不是只看 `total_chars`。
 

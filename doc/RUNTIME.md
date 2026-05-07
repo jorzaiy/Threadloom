@@ -14,7 +14,7 @@
 - 当前角色卡核心与世界约束字段
 - `state`
 - `scene persona seeds`
-- 最近 `12` 对 recent history
+- 最近窗口：默认读取 `12` 对 complete history，其中靠近当前的 `6` 对以完整正文进入 narrator，前段回合以逐回合 event outline 承接
 
 这些不是同一优先级：`runtime-rules`、当前角色卡世界观、时代、题材、身份边界和世界机制是最高约束；recent history 与本轮用户输入只负责短期场景承接，不能反向改写角色卡世界。用户主角只是世界内角色，可以尝试行动和表达态度，但不能直接指定 NPC 服从、行动必然成功、关系成立、物品凭空出现或客观结论生效。
 
@@ -87,7 +87,7 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 - `state`
 - 相关 `npc profiles`
 - `persona seeds`
-- 最近 `12` 对 turn 的 rolling window
+- 最近 rolling window：完整近端正文 + 前段逐回合提纲
 - 命中的 keeper archive
 - 可调入世界书人物
 
@@ -150,6 +150,8 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 - persona hooks
 - relevant lore
 - available cast / 可调入世界书人物
+- 最近完整正文窗口（默认 6 对 user/assistant）
+- 同一 recent window 前段逐回合提纲（来自 `event_summaries`，只用于连续性桥接，不要求逐条复述）
 - correction rules
 - 当前用户输入
 
