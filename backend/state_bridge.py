@@ -974,13 +974,9 @@ def _recover_names_from_structure(current: dict, prev: dict) -> list[str]:
 
 
 def _recover_relevant_from_continuity(current: dict, prev: dict) -> list[str]:
-    if current.get('onstage_npcs') or current.get('relevant_npcs'):
-        return current.get('relevant_npcs', [])
     important_npcs = current.get('important_npcs', prev.get('important_npcs', []))
     if not isinstance(important_npcs, list):
         important_npcs = []
-    if not important_npcs:
-        return current.get('relevant_npcs', [])
     active_threads = current.get('active_threads', [])
     if not isinstance(active_threads, list):
         active_threads = []
@@ -994,13 +990,24 @@ def _recover_relevant_from_continuity(current: dict, prev: dict) -> list[str]:
     )
     clue_text = ' '.join(str(item or '') for item in carryover_clues)
     recent_assistant_text = _recent_assistant_text(prev)
-    haystack = ' '.join([thread_text, clue_text, recent_assistant_text])
+    main_event_text = str(current.get('main_event', '') or '')
+    haystack = ' '.join([main_event_text, thread_text, clue_text, recent_assistant_text])
     recovered: list[str] = []
-    for item in important_npcs:
+    onstage = set(current.get('onstage_npcs', []) or [])
+    current_relevant = set(current.get('relevant_npcs', []) or [])
+    candidate_items = list(important_npcs)
+    for entity in (prev.get('scene_entities', []) or []) + (current.get('scene_entities', []) or []):
+        if isinstance(entity, dict):
+            candidate_items.append(entity)
+    actors = current.get('actors', prev.get('actors', {}))
+    for actor in (actors.values() if isinstance(actors, dict) else []):
+        if isinstance(actor, dict):
+            candidate_items.append({'primary_label': actor.get('name', ''), 'aliases': actor.get('aliases', [])})
+    for item in candidate_items:
         if not isinstance(item, dict):
             continue
         label = sanitize_runtime_name(item.get('primary_label', ''))
-        if not label or is_protagonist_name(label):
+        if not label or is_protagonist_name(label) or label in onstage or label in current_relevant:
             continue
         aliases = [sanitize_runtime_name(alias) for alias in (item.get('aliases', []) or []) if sanitize_runtime_name(alias)]
         if any(name and name in haystack for name in [label] + aliases):

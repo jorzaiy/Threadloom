@@ -479,6 +479,26 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['scene_entities'], [])
         self.assertEqual(normalized['main_event'], '主角独自整理铜牌。')
 
+    def test_normalize_state_retains_current_related_non_onstage_npc(self):
+        prev: dict[str, Any] = {
+            'scene_entities': [
+                {'primary_label': '测试掌柜', 'aliases': ['掌柜'], 'role_label': '客栈掌柜', 'onstage': False},
+            ],
+            'important_npcs': [{'primary_label': '测试掌柜', 'aliases': ['掌柜'], 'role_label': '客栈掌柜', 'locked': True}],
+        }
+        state = {
+            'time': '午后',
+            'location': '前厅',
+            'main_event': '主角整理账册时，测试掌柜仍在门外等待结果。',
+            'onstage_npcs': [],
+            'relevant_npcs': [],
+            'scene_entities': [],
+        }
+
+        normalized = normalize_state_dict(state, prev_state=prev)
+
+        self.assertIn('测试掌柜', normalized['relevant_npcs'])
+
     def test_normalize_state_rejects_scene_title_fragment_as_npc(self):
         main_event = '**2026年4月28日 清晨，训练场跑道。** 维克托独自在跑道上调整呼吸。'
         state = {
