@@ -10,7 +10,7 @@
 - `handler_message.py`：`POST /api/message` 主链入口
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照
 - `bootstrap_session.py`：新 session bootstrap
-- `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接
+- `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed
 - `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及 recent window 前段 event outline + 近端完整正文
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `server.py` 当前默认绑定 `127.0.0.1:8765`，可通过 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
@@ -22,13 +22,13 @@
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
 - `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流
 - `lorebook_distiller.py`：角色卡导入 / 手动重建时把 `lorebook.json` 固化为 `lorebook-foundation.json` 与 `lorebook-index.json`
-- `persona_updater.py` / `persona_runtime.py`：session-local persona 流转与展示骨架
+- `persona_updater.py` / `persona_runtime.py`：session-local persona 流转、重要度计数、近期观察沉淀与展示骨架；observation 只来自 assistant 叙事中与 NPC 相关的短片段，不把用户 prompt 原文固化为 NPC 事实
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档
 - `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重
 - `event_ledger.py`：事件账本；产出阶段事件摘要，不再负责人物短期状态写回
-- `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器
+- `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化会保留当前事件中有正向证据的非 onstage 稳定人物，供 selector 继续召回
 - `opening.py`：opening 菜单与开局状态机；其 state 写入是阶段 checkpoint，最终 turn state 仍由 `handler_message.py` 统一提交
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
@@ -80,6 +80,9 @@
 - 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里存在；`thread_tracker / context_builder / state_snapshot` 等核心消费点已开始优先使用统一信号层，再兼容旧字段
 - `onstage_npcs` 当前只作为 state/UI 快照存在，不进入 narrator 主 prompt，也不承载长期人物基础设定；长期人物基础设定进入不可变 `actors`
 - `onstage_npcs / relevant_npcs / scene_entities` 当前必须有正向人物证据：稳定 actor、important NPC、continuity hint、明确人物 role，或正文/事件中“人物称谓 + 行动锚点”。地点、标题残片、事件短语不能从 `main_event/location` 反推出 NPC
+- source NPC profile 缺失时，当前 session persona seed 可作为 narrator NPC profile 兜底；该 profile 只包含身份、hooks 与近期 observation，不覆盖 actor registry 的不可变人物基础设定
+- session persona observation 只从 assistant 叙事中提取，不从用户 prompt 原文生成 NPC 事实；输出到 narrator profile 前会去重，避免同一观察片段在 behavior/detail/snippet 中重复放大
+- keeper archive 的 heuristic digest 当前会消费 NPC registry，以提升中程窗口的 stable_entities / ongoing_events 密度；archive 仍是派生缓存，不是权威事实源
 - narrator prompt 当前不靠列举“翻墙/离场”等剧情关键词维持连续性，而是通过 recent window（前段提纲 + 近端完整正文）和通用原则约束空间关系、视线范围、人物控制权与行动链的承接
 - runtime heuristic / prompt examples 当前避免绑定具体角色卡或 session：summary keyword 示例、clue 组织触发词、persona archetype 兜底和 state fallback 物件提示均应使用通用职能/物件词，不使用某张卡的固定角色名、组织名或剧情专属物件来强化表现
 - 当前目标分工草案：

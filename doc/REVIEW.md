@@ -218,6 +218,24 @@
 - 复杂多 NPC 场景中的知情推理仍可能被 narrator 模型忽略
 - `knowledge_scope` 的实际效果仍需更多长对话验证
 
+## 2026-05-07 NPC profile / persona 长跑检查
+
+针对 `bd4769` 的 narrator / keeper / selector 检查结论：summary chunk 的第二段按固定 12 轮窗口应在 `13-24` 后生成，`turn 23` 仍只有 `chunk_0001 / 1-12` 属正常现象。真正暴露的问题是 NPC 详情层和召回层：
+
+- selector 已能识别 NPC profile targets，但 source profile 缺失时 narrator `npc_profile_count` 仍为 0。
+- session persona longterm 文件虽然已晋级并更新重要度计数，但人格 hooks 和剧情观察长期停在骨架状态。
+- keeper archive 中程 digest 有窗口记录，但部分 `time_anchor / location_anchor / ongoing_events / npc_registry` 信息密度偏低。
+- 当前事件中相关但未站在前台的人物容易从 `relevant_npcs` 消失，影响后续 selector 召回。
+
+本轮已收紧：
+
+- source NPC profile 缺失时，`context_builder.load_npc_profiles()` 回落到当前 session persona seed，并把身份、hooks、observations 格式化为 narrator profile。
+- `persona_updater` 开始把近期 assistant 叙事中的 NPC 相关片段写入 `observations`；不读取用户 prompt 原文，不重复放大同一观察片段。
+- keeper archive heuristic digest 接入 NPC registry，并更积极从窗口正文提取具体事件锚点。
+- `state_bridge` 会在 `main_event` / continuity 文本中保留有证据的非 onstage 稳定人物为 `relevant_npcs`。
+
+仍需继续观察：persona observation 当前是轻量片段，不是完整 LLM 人物小传；它用于补足 narrator profile 断链，不应替代角色卡、system NPC source 或 actor registry。
+
 ## 建议的下一步优先级
 
 ## 2026-05-06 维克托 session 0bfef1 观察记录
