@@ -4,11 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).parent / 'backend'))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'backend'))
 
 import keeper_archive
 import keeper_record_retriever
-from mid_context_agent import build_mid_window_digest, _is_mid_context_object_relevant
+from mid_context_agent import build_mid_window_digest, _is_mid_context_object_relevant, _normalize_digest, _score_open_loops
 
 
 def _history(pair_count: int) -> list[dict]:
@@ -62,6 +62,47 @@ class KeeperArchiveWindowTests(unittest.TestCase):
         self.assertEqual(record['window']['to_turn'], 'turn-0010')
         self.assertEqual(record['window']['end_pair_index'], 10)
         self.assertIn('第10轮', record['history_digest'][-1]['user'])
+
+    def test_mid_digest_anchors_come_from_window_not_current_state(self):
+        history = [
+            {'role': 'user', 'content': '继续在训练场观察'},
+            {'role': 'assistant', 'content': '【上午八点，训练场跑道】\n维克托继续盯着跑道。'},
+            {'role': 'user', 'content': '去器械室'},
+            {'role': 'assistant', 'content': '【上午八点十分，器械室门口】\n陆小环靠近器械架。'},
+        ]
+
+        digest = build_mid_window_digest(
+            history=history,
+            hard_anchors={'time': '下午两点', 'location': '医务室'},
+            max_pairs=2,
+            use_llm=False,
+            exclude_recent_pairs=0,
+        )
+
+        self.assertEqual(digest['time_anchor'], '上午八点')
+        self.assertEqual(digest['location_anchor'], '器械室门口')
+
+        normalized = _normalize_digest(
+            {'time_anchor': '下午两点', 'location_anchor': '医务室', 'open_loops': ['与"怎么"存在未解的疑问']},
+            'turn-0001',
+            'turn-0002',
+            2,
+            [(history[0], history[1]), (history[2], history[3])],
+        )
+        self.assertEqual(normalized['time_anchor'], '上午八点')
+        self.assertEqual(normalized['location_anchor'], '器械室门口')
+        self.assertEqual(normalized['open_loops'], [])
+
+    def test_mid_digest_open_loops_reject_question_word_fragments(self):
+        pairs = [
+            ({'content': '怎么回事'}, {'content': '他问：怎么回事？身份问题仍没完全揭示。'}),
+            ({'content': '继续问'}, {'content': '她又问：怎么回事？身份问题仍在压着局势。'}),
+        ]
+
+        loops = _score_open_loops(pairs)
+
+        self.assertFalse(any('"怎么"' in item for item in loops))
+        self.assertTrue(any('身份' in item for item in loops))
 
     def test_mid_digest_object_filter_is_salience_based_not_label_based(self):
         self.assertTrue(_is_mid_context_object_relevant({'label': '包', 'kind': 'container', 'story_relevant': True}))

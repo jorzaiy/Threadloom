@@ -21,6 +21,8 @@ MID_CONTEXT_SYSTEM = """你是 RP 中程场景摘要器。
 - 不要把现有 state 摘要字段原样抄回来
 
 只输出 JSON 对象，字段只允许：
+- time_anchor: str
+- location_anchor: str
 - stable_entities: [{name, status}]
 - ongoing_events: [str]
 - tracked_objects: [{label, kind}]
@@ -35,6 +37,8 @@ MID_CONTEXT_SYSTEM = """你是 RP 中程场景摘要器。
 5. history_digest 只保留 2 到 3 对最能代表中程演化的 user/assistant 对，不要原文长抄。
 6. `ongoing_events` 与 `open_loops` 必须写成结构化摘要句，不要复述某一轮 assistant prose。
 7. 若某条内容仍然像“原文片段”或长叙事句，应继续压缩到更抽象的状态描述。
+8. `time_anchor` / `location_anchor` 必须来自本窗口正文实际发生的主要场景；不要用当前最新 state 覆盖历史窗口。
+9. `open_loops` 只保留可行动的未解决事项，必须能回答“谁/什么事还没解决”；不要记录普通疑问词、语气疑问或无法指导后续剧情的碎片。
 """
 
 
@@ -72,6 +76,36 @@ def _dedupe(items, limit: int = 6) -> list[str]:
     return out
 
 
+def _window_anchor_candidates(mid_pairs: list[tuple[dict, dict]]) -> dict:
+    headers: list[str] = []
+    for _user_item, assistant_item in mid_pairs:
+        content = str(assistant_item.get('content', '') or '')
+        headers.extend(re.findall(r'【([^】]{2,60})】', content))
+    if not headers:
+        return {'time_anchor': '', 'location_anchor': ''}
+    time_anchor = ''
+    location_anchor = ''
+    for header in headers:
+        parts = [part.strip() for part in re.split(r'[，,、/｜|]', header) if part.strip()]
+        if len(parts) >= 2:
+            time_anchor = time_anchor or parts[0]
+            location_anchor = parts[-1]
+        elif parts:
+            location_anchor = location_anchor or parts[0]
+    return {'time_anchor': time_anchor, 'location_anchor': location_anchor}
+
+
+def _anchor_from_window_or_blank(anchor: str, mid_pairs: list[tuple[dict, dict]]) -> str:
+    value = str(anchor or '').strip()
+    if not value:
+        return ''
+    combined = '\n'.join(
+        ' '.join([str(user_item.get('content', '') or ''), str(assistant_item.get('content', '') or '')])
+        for user_item, assistant_item in mid_pairs
+    )
+    return value if value in combined else ''
+
+
 def _heuristic_digest(mid_pairs: list[tuple[dict, dict]], hard_anchors: dict, from_turn: str, to_turn: str) -> dict:
     hard = hard_anchors if isinstance(hard_anchors, dict) else {}
     combined = '\n'.join(
@@ -94,14 +128,15 @@ def _heuristic_digest(mid_pairs: list[tuple[dict, dict]], hard_anchors: dict, fr
     # 通用未决点提取：检测疑问/悬念模式
     loops = _score_open_loops(mid_pairs)
 
+    anchors = _window_anchor_candidates(mid_pairs)
     return {
         'window': {
             'pair_count': len(mid_pairs),
             'from_turn': from_turn,
             'to_turn': to_turn,
         },
-        'time_anchor': str(hard.get('time', '') or '').strip(),
-        'location_anchor': str(hard.get('location', '') or '').strip(),
+        'time_anchor': anchors['time_anchor'] or _anchor_from_window_or_blank(str(hard.get('time', '') or '').strip(), mid_pairs),
+        'location_anchor': anchors['location_anchor'] or _anchor_from_window_or_blank(str(hard.get('location', '') or '').strip(), mid_pairs),
         'stable_entities': entities[:5],
         'ongoing_events': _dedupe(events, limit=4),
         'tracked_objects': [
@@ -186,7 +221,7 @@ def _score_open_loops(mid_pairs: list[tuple[dict, dict]]) -> list[str]:
     """通用评分式未决点提取：检测悬念和未解决问题。"""
     loops = []
     suspense_patterns = [
-        (r'(谁|什么|为什么|怎么|哪里|何时).*[？?]', '存在未解的疑问'),
+        (r'([^。！？\n]{4,40}(?:谁|什么|为什么|怎么|哪里|何时)[^。！？\n]{0,40})[？?]', '存在未解的疑问'),
         (r'(身份|来历|目的|真相|秘密|阴谋)', '相关问题仍未完全揭示'),
         (r'(暗示|似乎|可能|或许|好像)', '存在暗示但尚未证实的信息'),
         (r'(承诺|约定|答应|保证)', '存在尚未兑现的承诺'),
@@ -199,8 +234,24 @@ def _score_open_loops(mid_pairs: list[tuple[dict, dict]]) -> list[str]:
         matches = re.findall(pattern, all_text)
         if len(matches) >= 2:
             keyword = matches[0] if isinstance(matches[0], str) else matches[0]
-            loops.append(f'与"{keyword}"{description}')
+            loop = f'与"{keyword}"{description}'
+            if _is_actionable_open_loop(loop):
+                loops.append(loop)
     return loops
+
+
+def _is_actionable_open_loop(text: str) -> bool:
+    value = str(text or '').strip()
+    if not value or len(value) < 8:
+        return False
+    quoted = re.findall(r'"([^"]+)"', value)
+    if quoted:
+        core = quoted[0].strip()
+        if len(core) < 2:
+            return False
+        if core in {'谁', '什么', '为什么', '怎么', '哪里', '何时'}:
+            return False
+    return True
 
 
 
@@ -224,7 +275,7 @@ def _build_user_prompt(mid_pairs: list[tuple[dict, dict]], hard_anchors: dict, f
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _normalize_digest(payload: dict, from_turn: str, to_turn: str, pair_count: int) -> dict:
+def _normalize_digest(payload: dict, from_turn: str, to_turn: str, pair_count: int, mid_pairs: list[tuple[dict, dict]] | None = None) -> dict:
     if not isinstance(payload, dict):
         return {}
 
@@ -291,18 +342,22 @@ def _normalize_digest(payload: dict, from_turn: str, to_turn: str, pair_count: i
             out.append({'user': user, 'assistant': assistant})
         return out[:3]
 
+    mid_pairs = mid_pairs or []
+    anchors = _window_anchor_candidates(mid_pairs)
+    time_anchor = _anchor_from_window_or_blank(str(payload.get('time_anchor', '') or '').strip(), mid_pairs) or anchors['time_anchor']
+    location_anchor = _anchor_from_window_or_blank(str(payload.get('location_anchor', '') or '').strip(), mid_pairs) or anchors['location_anchor']
     return {
         'window': {
             'pair_count': pair_count,
             'from_turn': from_turn,
             'to_turn': to_turn,
         },
-        'time_anchor': str(payload.get('time_anchor', '') or '').strip(),
-        'location_anchor': str(payload.get('location_anchor', '') or '').strip(),
+        'time_anchor': time_anchor,
+        'location_anchor': location_anchor,
         'stable_entities': _norm_entities(payload.get('stable_entities', [])),
         'ongoing_events': _norm_strings(payload.get('ongoing_events', []), limit=4),
         'tracked_objects': _norm_objects(payload.get('tracked_objects', [])),
-        'open_loops': _norm_strings(payload.get('open_loops', []), limit=5),
+        'open_loops': [item for item in _norm_strings(payload.get('open_loops', []), limit=5) if _is_actionable_open_loop(item)],
         'history_digest': _norm_history(payload.get('history_digest', [])),
     }
 
@@ -342,7 +397,7 @@ def build_mid_window_digest(
     try:
         reply, _usage = call_role_llm('state_keeper_candidate', MID_CONTEXT_SYSTEM, user_prompt)
         payload = json.loads(reply)
-        normalized = _normalize_digest(payload, from_turn, to_turn, len(mid_pairs))
+        normalized = _normalize_digest(payload, from_turn, to_turn, len(mid_pairs), mid_pairs)
         if not normalized.get('stable_entities') and not normalized.get('ongoing_events') and not normalized.get('open_loops'):
             raise ValueError('mid digest is too weak')
         return normalized
