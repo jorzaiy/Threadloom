@@ -831,6 +831,13 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         ) or 12
     )
     recent_history_pairs = max(1, recent_history_pairs)
+    recent_full_prose_turns = int(
+        memory_cfg.get(
+            'recent_full_prose_turns',
+            refresh_policy.get('recent_full_prose_turns', min(6, recent_history_pairs)),
+        ) or min(6, recent_history_pairs)
+    )
+    recent_full_prose_turns = max(1, min(recent_full_prose_turns, recent_history_pairs))
     recent_history = select_recent_history_window(
         recent_history_all,
         recent_history_pairs,
@@ -1064,6 +1071,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         'persona': persona,
         'npc_profiles': npc_profiles,
         'recent_history': recent_history,
+        'recent_full_prose_turns': recent_full_prose_turns,
         'npc_registry': npc_registry,
         'keeper_records': keeper_records,
         'summary_text': '',

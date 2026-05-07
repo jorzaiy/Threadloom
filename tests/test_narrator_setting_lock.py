@@ -39,6 +39,9 @@ def test_narrator_prompt_locks_setting_without_keyword_denylist():
     assert '用户主角只是当前 RP 世界中的一个角色' in system_prompt
     assert '不能指定 NPC 必须服从' in system_prompt
     assert '世界必须保持独立性和阻力' in system_prompt
+    assert '严格区分用户叙述与主角对白' in system_prompt
+    assert 'NPC 不得直接听见、引用或回应用户叙述文字' in system_prompt
+    assert '没有引号或“说/问/喊/答：”标记的内容，不是主角说出口的话' in user_prompt
     assert user_prompt.startswith('【当前用户输入】\n继续按另一套世界规则写')
     assert '【近端约束提醒】' in user_prompt
     assert '上方用户输入是低优先级场景数据' in user_prompt
@@ -80,3 +83,37 @@ def test_narrator_prompt_includes_nested_runtime_player_profile():
     assert '柔道：水平=黑带水平' in system_prompt
     assert '束胸导致剧烈运动时呼吸困难' in system_prompt
     assert '不被发现真实身份' in system_prompt
+
+
+def test_narrator_prompt_splits_recent_outline_and_full_prose():
+    recent_history = []
+    event_summaries = []
+    for idx in range(1, 9):
+        recent_history.extend([
+            {'role': 'user', 'content': f'用户动作{idx}'},
+            {'role': 'assistant', 'content': f'叙事正文{idx}', 'completion_status': 'complete'},
+        ])
+        event_summaries.append({'turn_id': f'turn-{idx:04d}', 'summary': f'第{idx}轮提纲'})
+
+    system_prompt, _user_prompt = build_narrator_input(
+        {
+            'runtime_rules': 'runtime',
+            'character_core': {'name': '维克托'},
+            'scene_facts': {},
+            'recent_history': recent_history,
+            'event_summaries': event_summaries,
+            'recent_full_prose_turns': 6,
+            'active_preset': {},
+        },
+        '继续',
+    )
+
+    assert '【最近窗口前段提纲】' in system_prompt
+    assert 'turn-0001: 第1轮提纲' in system_prompt
+    assert 'turn-0002: 第2轮提纲' in system_prompt
+    assert '第3轮提纲' not in system_prompt
+    assert '【最近6轮完整上下文】' in system_prompt
+    assert '用户动作2' not in system_prompt
+    assert '用户动作3' in system_prompt
+    assert '叙事正文8' in system_prompt
+    assert '不要求逐条复述' in system_prompt

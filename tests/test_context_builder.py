@@ -7,8 +7,8 @@ sys.path.insert(0, str(ROOT / 'backend'))
 
 import json
 
-from context_builder import _slim_character_core, load_lorebook_source_hits, select_lorebook_text_for_turn, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
-from narrator_input import _format_recent_window  # noqa: E402
+from context_builder import _slim_character_core, load_lorebook_source_hits, load_npc_profiles, npc_profile_load_audit, select_lorebook_text_for_turn, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
+from narrator_input import _format_recent_outline, _format_recent_window  # noqa: E402
 
 
 def test_recent_history_keeps_opening_assistant_before_first_pair():
@@ -24,6 +24,28 @@ def test_recent_history_still_keeps_complete_pairs():
     assistant = {'role': 'assistant', 'content': '跑步继续。', 'completion_status': 'complete'}
 
     assert select_recent_history_window([opening, user, assistant], 12) == [opening, user, assistant]
+
+
+def test_recent_outline_bridges_pairs_before_full_prose_window():
+    history = []
+    summaries = []
+    for idx in range(1, 9):
+        history.extend([
+            {'role': 'user', 'content': f'用户动作{idx}'},
+            {'role': 'assistant', 'content': f'叙事正文{idx}', 'completion_status': 'complete'},
+        ])
+        summaries.append({'turn_id': f'turn-{idx:04d}', 'summary': f'第{idx}轮提纲', 'actors': ['维克托'] if idx == 2 else []})
+
+    outline = _format_recent_outline(summaries, history, full_pairs=6)
+    full = _format_recent_window(history, limit_pairs=6)
+
+    assert 'turn-0001: 第1轮提纲' in outline
+    assert 'turn-0002: 第2轮提纲' in outline
+    assert '人物=维克托' in outline
+    assert '第3轮提纲' not in outline
+    assert '用户动作2' not in full
+    assert '用户动作3' in full
+    assert '叙事正文8' in full
 
 
 def test_opening_lorebook_turn_prefers_full_source_summary_over_index():
@@ -128,3 +150,30 @@ def test_slim_character_core_preserves_world_constraint_fields():
     assert 'unused' not in slim['coreDescription']
     assert 'unused' not in slim['hints']
     assert 'unused' not in slim['speakingStyle']
+
+
+def test_npc_profile_load_audit_explains_missing_targets(tmp_path):
+    npc_dir = tmp_path / 'npcs'
+    npc_dir.mkdir()
+    (npc_dir / '维克托.md').write_text('教官档案', encoding='utf-8')
+
+    loaded = load_npc_profiles(npc_dir, ['韩骁'])
+    audit = npc_profile_load_audit(npc_dir, ['韩骁'], loaded)
+
+    assert loaded == []
+    assert audit['reason'] == 'target_profile_missing'
+    assert audit['missing'] == ['韩骁']
+    assert audit['available_profile_names'] == ['维克托']
+
+
+def test_npc_profile_load_audit_reports_loaded_targets(tmp_path):
+    npc_dir = tmp_path / 'npcs'
+    npc_dir.mkdir()
+    (npc_dir / '韩骁.md').write_text('临时搭档档案', encoding='utf-8')
+
+    loaded = load_npc_profiles(npc_dir, ['韩骁'])
+    audit = npc_profile_load_audit(npc_dir, ['韩骁'], loaded)
+
+    assert loaded[0]['name'] == '韩骁'
+    assert audit['reason'] == 'loaded'
+    assert audit['missing'] == []

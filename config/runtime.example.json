@@ -15,6 +15,7 @@
   },
   "memory": {
     "recent_history_turns": 12,
+    "recent_full_prose_turns": 6,
     "consolidate_every_turns": 2,
     "skeleton_keeper_enabled": true
   },
