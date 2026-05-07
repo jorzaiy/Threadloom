@@ -187,7 +187,7 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
             continue
         seen.add(key)
         previously_locked = bool(prev.get('locked'))
-        present_now = bool(entity.get('onstage')) or label in (current.get('relevant_npcs', []) or [])
+        present_now = bool(entity.get('onstage'))
         inactive_turns = 0 if present_now else int(prev.get('inactive_turns', 0) or 0) + 1
         should_lock = service_lock_ok or not _is_service_role(role_label) or reference_candidate
         next_items.append({
@@ -246,8 +246,9 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
                 'newly_locked': False,
             })
 
-    for key, prev in prev_by_key.items():
-        if key in seen:
+    for raw_key, prev in prev_by_key.items():
+        key = str(raw_key or '').strip()
+        if not key or key in seen:
             continue
         label = sanitize_runtime_name(prev.get('primary_label', ''))
         if not label or is_protagonist_name(label):

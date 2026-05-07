@@ -106,7 +106,7 @@ def infer_persona_traits(name: str, role_label: str = '待确认') -> dict:
             speech_rhythm=('快、小声、带点试探', 0.27),
             stress_response=('慌但会立刻找最安全的站位', 0.25),
         )
-    if any(token in combined for token in ('皂衣人', '镇北司', '官差', '官面')):
+    if any(token in combined for token in ('官差', '差役', '捕快', '衙役', '卫兵', '守卫', '军士', '执法者')):
         return _trait_block(
             mbti='ESTJ',
             mbti_conf=0.32,

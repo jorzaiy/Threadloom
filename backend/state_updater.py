@@ -30,9 +30,9 @@ GENERIC_NON_NAME_TOKENS = {
     '今天', '明天', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日',
     '上午', '下午', '中午', '清晨', '黄昏', '入夜', '深夜', '晴', '阴', '小雨', '大雨', '雨天',
     '训练场', '休息区', '集合点', '障碍区', '图书馆', '办公室', '宿舍楼', '走廊', '连廊', '食堂',
-    '任务', '名单', '资料', '档案', '记录板', '学院', '特工学院', '大事记', '压缩饼干',
+    '任务', '名单', '资料', '档案', '记录板', '学院', '大事记', '干粮',
     '无妨', '单纯', '同行', '哗啦', '内力', '笨蛋', '当然', '家具', '好人', '反派', '高手', '公子',
-    '姑娘', '陆姑娘', '路上', '猛地', '忍不住', '不知', '轻功', '自保', '一声',
+    '姑娘', '路上', '猛地', '忍不住', '不知', '轻功', '自保', '一声',
     # Common Chinese words/phrases falsely matched as names
     '地下水', '大哥', '老子', '差点', '突然', '藏品', '书里', '徒劳地', '不过', '而且',
     '于是', '但是', '然后', '已经', '可能', '当时', '一切', '这里', '那边', '如果',
@@ -886,7 +886,7 @@ def _looks_like_core_fragment(text: str) -> bool:
 # ---------------------------------------------------------------------------
 # Main event inference
 # ---------------------------------------------------------------------------
-def _summarize_event(user_text: str, assistant_text: str, onstage_names: list[str] = None) -> str:
+def _summarize_event(user_text: str, assistant_text: str, onstage_names: list[str] | None = None) -> str:
     """Try to build a concise main_event summary from the narrative.
 
     Strategy:
@@ -1340,10 +1340,10 @@ def infer_onstage_npcs(text: str) -> list[str]:
 
 
 OBJECT_MEASURE_PREFIX = re.compile(r'^(那|这|一|几|数)(?:个|件|封|卷|包|把|枚|只|本|张|份|块|柄)?')
-OBJECT_LABEL_HINT_RE = re.compile(r'(帆布包|记录板|信封|纸条|名单|档案|本子|笔记|腰牌|令牌|钥匙|门闩|短刀|药瓶|药包|作训服|束胸带|水壶|水杯|台灯|油灯|铜牌|瓷瓶|热水|药布|布巾|餐盘|筷子|信|包)')
+OBJECT_LABEL_HINT_RE = re.compile(r'(包裹|背包|记录板|信封|纸条|名单|档案|本子|笔记|腰牌|令牌|钥匙|门闩|短刀|药瓶|药包|水壶|水杯|台灯|油灯|铜牌|瓷瓶|热水|药布|布巾|餐盘|筷子|信|包)')
 ENTITY_COUNT_PREFIX_RE = re.compile(r'^(?P<count>一|二|两|三|四|五|六|七|八|九|十|几|数)(?:个|名|位)?(?P<body>.+)$')
 ENTITY_LEADING_VERB_RE = re.compile(r'^(穿着?|戴着?|披着?|背着?|提着?|拎着?|握着?|拿着?|持着?)')
-ENTITY_DESCRIPTOR_SUFFIXES = ('中年人', '年轻人', '老年人', '灰衣人', '白衣人', '黑衣人', '皂衣人', '汉子', '老者', '青年', '女子', '男人', '女人', '人')
+ENTITY_DESCRIPTOR_SUFFIXES = ('中年人', '年轻人', '老年人', '灰衣人', '白衣人', '黑衣人', '制服人', '汉子', '老者', '青年', '女子', '男人', '女人', '人')
 ENTITY_SLOT_MARKERS = ('高个', '矮个', '左侧', '右侧', '前头', '后侧', '靠门', '靠窗', '斗笠', '佩刀', '长衫', '灰衣', '黑衣', '白衣', '皂衣')
 
 
@@ -1406,7 +1406,7 @@ def _infer_object_kind(label: str) -> str:
         return 'document'
     if any(token in text for token in ('腰牌', '令牌', '钥匙')):
         return 'key_item'
-    if any(token in text for token in ('包', '帆布包')):
+    if any(token in text for token in ('包', '背包', '包裹')):
         return 'container'
     if any(token in text for token in ('短刀',)):
         return 'weapon'
@@ -1424,12 +1424,12 @@ def _is_story_relevant_object(label: str, *, status: str = '', holder: str = '',
     discard_by_default = ('热水', '布巾', '药布', '餐盘', '筷子')
     if any(token in text for token in discard_by_default):
         return False
-    always_keep = ('名单', '档案', '记录板', '纸条', '信', '信封', '腰牌', '令牌', '钥匙', '门闩', '帆布包', '包', '短刀')
+    always_keep = ('名单', '档案', '记录板', '纸条', '信', '信封', '腰牌', '令牌', '钥匙', '门闩', '背包', '包裹', '包', '短刀')
     if any(token in text for token in always_keep):
         return True
     if status in {'revealed', 'transferred', 'seized'}:
         return True
-    if any(token in text for token in ('作训服', '束胸带', '台灯', '水壶', '水杯')):
+    if any(token in text for token in ('台灯', '水壶', '水杯')):
         return True
     if clause and any(token in clause for token in ('关键', '证据', '名单', '档案', '记录', '打开', '上锁', '开锁', '交给', '搜出', '摸出', '掏出')):
         return True
@@ -1820,7 +1820,7 @@ def _looks_like_prose_signal_fragment(text: str) -> bool:
 def build_scene_entities(onstage: list[str], text: str = '', focal_entity: dict | None = None) -> list[dict]:
     def _descriptor_signature(name: str) -> str:
         text_value = sanitize_runtime_name(name)
-        for suffix in ('身影', '背影', '影子', '影', '之人', '那人', '此人', '来人', '男人', '女人', '女子', '青年', '少年', '老者', '壮汉', '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人'):
+        for suffix in ('身影', '背影', '影子', '影', '之人', '那人', '此人', '来人', '男人', '女人', '女子', '青年', '少年', '老者', '壮汉', '制服人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人'):
             if text_value.endswith(suffix) and len(text_value) > len(suffix):
                 return text_value[:-len(suffix)].strip()
         return text_value
@@ -1864,7 +1864,7 @@ def build_scene_entities(onstage: list[str], text: str = '', focal_entity: dict 
 def build_scene_entities_generic(onstage: list[str], prev_state: dict, context: dict, history: list[dict], text: str = '', focal_entity: dict | None = None) -> list[dict]:
     def _descriptor_signature(name: str) -> str:
         text_value = sanitize_runtime_name(name)
-        for suffix in ('身影', '背影', '影子', '影', '之人', '那人', '此人', '来人', '男人', '女人', '女子', '青年', '少年', '老者', '壮汉', '皂衣人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人'):
+        for suffix in ('身影', '背影', '影子', '影', '之人', '那人', '此人', '来人', '男人', '女人', '女子', '青年', '少年', '老者', '壮汉', '制服人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人'):
             if text_value.endswith(suffix) and len(text_value) > len(suffix):
                 return text_value[:-len(suffix)].strip()
         return text_value
@@ -2082,13 +2082,13 @@ def update_state(session_id: str) -> dict:
         current_main_event = ''
 
     next_state = {
-        'time': state.get('time') if opening_locked and state.get('time') not in {'', None, '待确认'} else prefer_existing(state.get('time'), inferred_time),
-        'location': state.get('location') if state.get('location') not in {'', None, '待确认'} else prefer_existing(state.get('location'), inferred_location),
+        'time': state.get('time') if opening_locked and state.get('time') not in {'', None, '待确认'} else prefer_existing(str(state.get('time') or ''), inferred_time),
+        'location': state.get('location') if state.get('location') not in {'', None, '待确认'} else prefer_existing(str(state.get('location') or ''), inferred_location),
         'main_event': state.get('main_event') if opening_locked and state.get('main_event') else prefer_existing(current_main_event, inferred_main_event),
         'onstage_npcs': inferred_onstage,
         'scene_entities': scene_entities,
         'relevant_npcs': [sanitize_runtime_name(name) for name in inferred_relevant if sanitize_runtime_name(name)],
-        'immediate_goal': state.get('immediate_goal') if opening_locked and state.get('immediate_goal') else prefer_existing(state.get('immediate_goal'), inferred_goal),
+        'immediate_goal': state.get('immediate_goal') if opening_locked and state.get('immediate_goal') else prefer_existing(str(state.get('immediate_goal') or ''), inferred_goal),
         'immediate_risks': inferred_risks,
         'carryover_clues': inferred_clues,
         'carryover_signals': carryover_signals,
