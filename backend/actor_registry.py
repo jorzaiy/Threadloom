@@ -109,7 +109,7 @@ def _actor_aliases(actor: dict) -> list[str]:
     out: list[str] = []
     for item in actor.get('aliases', []) or []:
         name = sanitize_runtime_name(item)
-        if name and name not in out:
+        if name and _looks_like_person_alias(name) and name not in out:
             out.append(name)
     return out
 
@@ -226,8 +226,87 @@ GENERIC_ACTOR_HINTS = (
 
 NON_NAME_DIALOGUE = {
     '不用', '不要', '到', '嗯', '哦', '医务室', '理论课', '名字', '腿', '看前面', '跟上', '去食堂',
-    '迟到', '作业', '地图', '目标', '漏洞', '卫星图', '我也不想', '你叫什么',
+    '迟到', '作业', '地图', '目标', '漏洞', '卫星图', '我也不想', '你叫什么', '不能', '没有',
+    '下一个', '终端', '别迟到', '时间到', '谁先说', '你们两个', '他说的',
 }
+
+COMMON_SURNAME_PREFIXES = set(
+    '赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕张孔曹严华金魏陶姜'
+    '戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐'
+    '费廉岑薛雷贺倪汤滕殷罗毕郝安常乐于时傅皮卞齐康伍余元卜顾孟平黄'
+    '和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董'
+    '梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡'
+    '凌霍虞万支柯管卢莫房裴陆沙风漠月血刑关白柳顾韩沈秦谢宋苏萧裴'
+)
+
+PERSON_ALIAS_SUFFIXES = (
+    '人', '男人', '女人', '女子', '青年', '少年', '老者', '壮汉', '男生', '女生', '学员', '新生',
+    '教官', '助教', '老师', '教员', '先生', '小姐', '女士', '夫人', '长官', '队长', '主管',
+)
+
+NON_ALIAS_SUFFIXES = (
+    '馆', '柜台', '窗口', '日志', '编号', '代码', '排序', '机位', '模块', '组件', '系统', '终端',
+    '文件', '文件夹', '文件袋', '地图', '档案', '名单', '公司', '区域', '教室', '楼层', '走廊',
+)
+
+NON_ALIAS_CONTAINS = (
+    '代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '上午', '下午', '两点', '三十五秒',
+    '第一组', '第三波', '一组', '两人一组', '本机', '窗口', '银行', '咖啡馆', '鹰巢',
+)
+
+NON_ALIAS_PREFIXES = ('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着', '低声', '继续')
+
+
+def _looks_like_person_alias(value: str) -> bool:
+    name = sanitize_runtime_name(value)
+    if not name or name in NON_NAME_DIALOGUE or is_protagonist_name(name) or looks_like_bad_entity_fragment(name):
+        return False
+    if any(ch.isdigit() for ch in name):
+        return False
+    if any(mark in name for mark in ('，', '。', '！', '？', ',', '.', '!', '?', '：', ':', '“', '”', '"')):
+        return False
+    if any(name.startswith(prefix) for prefix in NON_ALIAS_PREFIXES):
+        return False
+    if any(token in name for token in NON_ALIAS_CONTAINS):
+        return False
+    if name.endswith(NON_ALIAS_SUFFIXES):
+        return False
+    if re.fullmatch(r'[A-Za-z0-9_-]+', name):
+        return False
+    if '·' in name and all(re.fullmatch(r'[\u4e00-\u9fff]{1,8}', part or '') for part in name.split('·')):
+        return True
+    if name.startswith('阿') and 2 <= len(name) <= 4:
+        return True
+    if name[:1] in COMMON_SURNAME_PREFIXES and 2 <= len(name) <= 4:
+        return True
+    if any(suffix in name for suffix in PERSON_ALIAS_SUFFIXES):
+        return True
+    return False
+
+
+def _looks_like_proper_person_name(value: str) -> bool:
+    name = sanitize_runtime_name(value)
+    return bool(_looks_like_person_alias(name) and ((name.startswith('阿') and 2 <= len(name) <= 4) or (name[:1] in COMMON_SURNAME_PREFIXES and 2 <= len(name) <= 4)))
+
+
+def _is_descriptive_actor_name(value: str) -> bool:
+    name = sanitize_runtime_name(value)
+    if not name:
+        return False
+    return any(hint in name for hint in GENERIC_ACTOR_HINTS) or any(name.endswith(suffix) for suffix in PERSON_ALIAS_SUFFIXES)
+
+
+def _clean_actor_aliases(aliases: list[str], actor_name: str = '') -> list[str]:
+    out: list[str] = []
+    primary = sanitize_runtime_name(actor_name)
+    for alias in aliases or []:
+        text = sanitize_runtime_name(alias)
+        if not text or text == primary or text in out:
+            continue
+        if not _looks_like_person_alias(text):
+            continue
+        out.append(text)
+    return out[:6]
 
 
 def _protagonist_labels(actors: dict) -> set[str]:
@@ -262,7 +341,7 @@ def _frame_npc_protagonist_knowledge(text: str, *, holder_name: str, actors: dic
 
 def _looks_like_revealed_name(value: str) -> bool:
     name = sanitize_runtime_name(re.sub(r'[—\-－~～…\s]+', '', str(value or '')))
-    if not name or name in NON_NAME_DIALOGUE or '什么' in name or is_protagonist_name(name) or looks_like_bad_entity_fragment(name):
+    if not _looks_like_person_alias(name) or '什么' in name:
         return False
     if not re.fullmatch(r'[\u4e00-\u9fff]{2,4}', name):
         return False
@@ -367,11 +446,18 @@ def _upsert_revealed_actor_aliases(actors: dict, narrator_reply: str) -> list[di
         score, actor_id, actor = scored[0]
         if score < 4:
             continue
-        aliases = _actor_aliases(actor)
-        if name not in aliases and name != _actor_name(actor):
+        actor_name = _actor_name(actor)
+        aliases = _clean_actor_aliases(_actor_aliases(actor), actor_name)
+        promoted = False
+        if _looks_like_proper_person_name(name) and _is_descriptive_actor_name(actor_name):
+            if actor_name and actor_name not in aliases and _looks_like_person_alias(actor_name):
+                aliases.insert(0, actor_name)
+            actor['name'] = name
+            promoted = True
+        elif name not in aliases and name != actor_name:
             aliases.append(name)
-            actor['aliases'] = aliases[:6]
-            updates.append({'actor_id': actor_id, 'alias': name, 'score': score})
+        actor['aliases'] = _clean_actor_aliases(aliases, actor.get('name', actor_name))
+        updates.append({'actor_id': actor_id, 'alias': name, 'score': score, 'promoted_to_name': promoted})
     return updates
 
 
@@ -384,7 +470,7 @@ def _valid_actor_candidate(item: dict) -> dict | None:
     aliases = []
     for alias in item.get('aliases', []) or []:
         alias_name = sanitize_runtime_name(alias)
-        if alias_name and alias_name != name and not is_protagonist_name(alias_name) and alias_name not in aliases:
+        if alias_name and alias_name != name and _looks_like_person_alias(alias_name) and alias_name not in aliases:
             aliases.append(alias_name)
     return {
         'name': name,
@@ -565,6 +651,9 @@ def update_actor_registry(state: dict, *, narrator_reply: str, turn_number: int,
     actors = current.get('actors', {}) if isinstance(current.get('actors', {}), dict) else {}
     actors = {str(actor_id): dict(actor) for actor_id, actor in actors.items() if isinstance(actor, dict)}
     _ensure_protagonist(actors, player_name=player_name)
+    for actor in actors.values():
+        if isinstance(actor, dict) and actor.get('kind') != 'protagonist':
+            actor['aliases'] = _clean_actor_aliases(list(actor.get('aliases', []) or []), _actor_name(actor))
 
     diagnostics = {'provider_requested': 'llm' if use_llm else 'fallback', 'created_actor_ids': [], 'fallback_used': False}
     candidates: list[dict] = []

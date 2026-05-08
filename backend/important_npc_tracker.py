@@ -67,6 +67,23 @@ def _is_generic_anchor(label: str, aliases: list[str], role_label: str) -> bool:
     return True
 
 
+def _looks_like_npc_alias(value: str) -> bool:
+    text = sanitize_runtime_name(value)
+    if not text or is_protagonist_name(text) or looks_like_modifier_fragment(text):
+        return False
+    if text in {'不能', '没有', '下一个', '终端', '别迟到', '时间到', '谁先说', '你们两个', '他说的'}:
+        return False
+    if any(ch.isdigit() for ch in text):
+        return False
+    if any(text.startswith(prefix) for prefix in ('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着', '低声', '继续')):
+        return False
+    if any(token in text for token in ('代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '上午', '下午', '两点', '三十五秒', '第一组', '第三波', '一组', '两人一组', '本机', '窗口', '银行', '咖啡馆', '鹰巢')):
+        return False
+    if text.endswith(('馆', '柜台', '窗口', '日志', '编号', '代码', '排序', '机位', '模块', '组件', '系统', '终端', '文件', '文件夹', '文件袋', '地图', '档案', '名单', '公司', '区域', '教室', '楼层', '走廊')):
+        return False
+    return True
+
+
 def _service_lock_allowed(*, label: str, role_label: str, reference_candidate: bool, user_mentions: int, total_mentions: int, thread_weight: int, retained_entity: bool, latest_change: str) -> bool:
     if reference_candidate:
         return True
@@ -195,7 +212,7 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
             'primary_label': label,
             'aliases': sorted({
                 alias for alias in aliases + [sanitize_runtime_name(alias) for alias in prev.get('aliases', [])]
-                if alias and not is_protagonist_name(alias) and (alias == label or alias not in protected_names)
+                if alias and _looks_like_npc_alias(alias) and (alias == label or alias not in protected_names)
             }),
             'role_label': role_label or prev.get('role_label', '待确认'),
             'anchor_type': 'continuous',
@@ -261,7 +278,7 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
         generic_anchor = _is_generic_anchor(label, prev_aliases, prev_role)
         if generic_anchor and int(prev.get('inactive_turns', 0) or 0) >= 1:
             continue
-        carried['aliases'] = [alias for alias in (carried.get('aliases') or []) if sanitize_runtime_name(alias) and not is_protagonist_name(alias)]
+        carried['aliases'] = [alias for alias in (carried.get('aliases') or []) if _looks_like_npc_alias(alias)]
         carried['retained'] = True
         carried['present_now'] = False
         carried['inactive_turns'] = int(prev.get('inactive_turns', 0) or 0) + 1
