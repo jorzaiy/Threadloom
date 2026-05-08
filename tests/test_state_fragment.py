@@ -453,8 +453,8 @@ class StateFragmentTest(unittest.TestCase):
         updated = update_actor_registry(state, narrator_reply=reply, turn_number=8, use_llm=False)
 
         actor = updated['actors']['npc_001']
-        self.assertEqual(actor['name'], '剃寸头的高个子学员')
-        self.assertIn('秦野', actor['aliases'])
+        self.assertEqual(actor['name'], '秦野')
+        self.assertIn('剃寸头的高个子学员', actor['aliases'])
         self.assertEqual(updated['actor_context_index']['last_mentioned_turn']['npc_001'], 8)
         self.assertEqual(updated['actor_registry_diagnostics']['alias_updates'][0]['alias'], '秦野')
         self.assertTrue(any(item['holder_actor_id'] == 'npc_001' and '陆小环' in item['text'] for item in updated['knowledge_records']))
@@ -477,8 +477,30 @@ class StateFragmentTest(unittest.TestCase):
 
         updated = update_actor_registry(state, narrator_reply=reply, turn_number=10, use_llm=False)
 
-        self.assertIn('赵明', updated['actors']['npc_001']['aliases'])
+        self.assertEqual(updated['actors']['npc_001']['name'], '赵明')
+        self.assertIn('迟到新生', updated['actors']['npc_001']['aliases'])
         self.assertEqual(updated['actor_context_index']['last_mentioned_turn']['npc_001'], 10)
+
+    def test_actor_registry_rejects_phrase_fragments_as_aliases(self):
+        state = {
+            'actors': {
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '剃寸头的高个子学员',
+                    'aliases': ['不能', '抱着电脑', '在跑代码', '本机日志', '终端编号'],
+                    'appearance': '剃寸头，高个子',
+                    'identity': '新生学员',
+                    'created_turn': 3,
+                },
+            },
+        }
+        reply = '剃寸头的高个子学员说：“不能。”随后又提到“本机日志”和“终端编号”。'
+
+        updated = update_actor_registry(state, narrator_reply=reply, turn_number=21, use_llm=False)
+
+        self.assertEqual(updated['actors']['npc_001']['aliases'], [])
+        self.assertEqual(updated['actor_registry_diagnostics']['alias_updates'], [])
 
     def test_normalize_state_keeps_archived_actor_possession_holder(self):
         state = {
@@ -787,6 +809,20 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['knowledge_scope'], {})
         self.assertEqual(normalized['knowledge_records'], prev['knowledge_records'])
 
+    def test_persona_observed_context_keeps_npc_specific_sentences(self):
+        from backend.persona_updater import _observed_context
+
+        history = [
+            {'role': 'user', 'content': '继续等'},
+            {'role': 'assistant', 'content': '陆小环贴着墙站着，鞋底蹭过水泥地。秦野在门外低声问技术部什么时候放人。'},
+        ]
+
+        observed = _observed_context(history, '秦野', ['终端编号'])
+
+        self.assertIn('秦野', observed['recent_behavior'])
+        self.assertNotIn('陆小环贴着墙站着', observed['recent_behavior'])
+        self.assertNotIn('终端编号', observed['recent_behavior'])
+
     def test_actor_registry_dedupes_similar_knowledge_records(self):
         state = {
             'knowledge_records': [{'holder_actor_id': 'protagonist', 'text': '主角知道村长是卧底', 'source_turn': 1}],
@@ -846,6 +882,31 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['scene_entities'][0]['primary_label'], '维克托·奥古斯特')
         self.assertIn('维克托', normalized['scene_entities'][0]['aliases'])
         self.assertEqual(normalized['scene_entities'][0]['possible_link'], 'npc_001')
+
+    def test_scene_entities_do_not_import_dirty_actor_aliases(self):
+        state: dict[str, Any] = {
+            'actors': {
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '秦野',
+                    'aliases': ['剃寸头的高个子学员', '不能', '本机日志', '终端编号'],
+                },
+            },
+            'onstage_npcs': ['剃寸头的高个子学员'],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_01', 'primary_label': '剃寸头的高个子学员', 'aliases': ['不能'], 'role_label': '新生学员', 'onstage': True}
+            ],
+        }
+
+        normalized = normalize_state_dict(state)
+
+        entity = normalized['scene_entities'][0]
+        self.assertEqual(entity['primary_label'], '秦野')
+        self.assertIn('剃寸头的高个子学员', entity['aliases'])
+        self.assertNotIn('不能', entity['aliases'])
+        self.assertNotIn('本机日志', entity['aliases'])
+        self.assertNotIn('终端编号', entity['aliases'])
 
     def test_scene_entities_canonicalize_card_name_part_with_title(self):
         state: dict[str, Any] = {
@@ -1079,6 +1140,73 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertNotIn('维克托要求陆小环伸出双手检查。', normalized['immediate_risks'])
         self.assertFalse(any('伸出双手检查' in item.get('label', '') for item in threaded['active_threads']))
+
+    def test_normalize_state_canonicalizes_and_prunes_thread_actors(self):
+        state = {
+            'main_event': '赵明被点名后低头挪到窗口旁。',
+            'immediate_goal': '继续观察赵明的反应。',
+            'onstage_npcs': ['赵明'],
+            'relevant_npcs': ['金发男生', '迟到新生'],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_01', 'primary_label': '赵明', 'aliases': ['迟到新生'], 'role_label': '新生', 'onstage': True},
+            ],
+            'actors': {
+                'npc_002': {'kind': 'npc', 'name': '金发男生', 'aliases': []},
+                'npc_007': {'kind': 'npc', 'name': '赵明', 'aliases': ['迟到新生']},
+            },
+            'active_threads': [
+                {
+                    'thread_id': 'thread_01',
+                    'key': 'main:迟到新生被点名',
+                    'label': '迟到新生被点名',
+                    'kind': 'main',
+                    'goal': '看清赵明是否会继续拖慢分组',
+                    'obstacle': '赵明仍紧张',
+                    'latest_change': '赵明被点名',
+                    'actors': ['金发男生', '迟到新生'],
+                },
+            ],
+        }
+
+        normalized = normalize_state_dict(state)
+
+        self.assertEqual(normalized['active_threads'][0]['actors'], ['赵明'])
+
+    def test_normalize_state_converges_relevant_npcs_to_current_mentions(self):
+        state = {
+            'main_event': '赵明被点名后站到窗口旁。',
+            'immediate_goal': '完成当前分组。',
+            'onstage_npcs': ['赵明'],
+            'relevant_npcs': ['助教', '战术基础助教', '高年级学员', '秦野'],
+            'immediate_risks': ['秦野留下的第三波小代码仍可能影响后续排序。'],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_01', 'primary_label': '赵明', 'aliases': ['迟到新生'], 'role_label': '新生', 'onstage': True},
+                {'entity_id': 'scene_npc_02', 'primary_label': '秦野', 'aliases': ['剃寸头的高个子学员'], 'role_label': '学员', 'onstage': False},
+            ],
+            'actors': {
+                'npc_003': {'kind': 'npc', 'name': '助教', 'aliases': []},
+                'npc_004': {'kind': 'npc', 'name': '战术基础助教', 'aliases': []},
+                'npc_005': {'kind': 'npc', 'name': '秦野', 'aliases': ['剃寸头的高个子学员']},
+                'npc_006': {'kind': 'npc', 'name': '高年级学员', 'aliases': []},
+                'npc_007': {'kind': 'npc', 'name': '赵明', 'aliases': ['迟到新生']},
+            },
+            'active_threads': [
+                {
+                    'thread_id': 'thread_02',
+                    'label': '秦野留下的小代码风险',
+                    'kind': 'risk',
+                    'goal': '避免秦野留下的小代码误导排序',
+                    'obstacle': '第三波小代码仍未确认',
+                    'latest_change': '风险仍挂起',
+                    'actors': ['秦野', '助教'],
+                },
+            ],
+        }
+
+        normalized = normalize_state_dict(state)
+
+        self.assertEqual(normalized['relevant_npcs'], ['秦野'])
+        self.assertEqual(normalized['active_threads'][0]['actors'], ['秦野'])
 
     def test_keeper_prompts_keep_core_fields_scene_focused(self):
         self.assertIn('下一轮可能直接改变行动', state_keeper.STATE_KEEPER_FILL_SYSTEM)

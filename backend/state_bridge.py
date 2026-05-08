@@ -412,7 +412,12 @@ def _filter_scene_entities_with_person_evidence(entities: list[dict[str, Any]], 
         aliases = []
         for alias in item.get('aliases', []) or []:
             alias_text = sanitize_runtime_name(alias)
-            if alias_text and (alias_text == primary or _has_positive_person_evidence(alias_text, item, current, prev)):
+            if alias_text and _looks_like_actor_alias(alias_text) and (
+                alias_text == primary
+                or _labels_compatible(alias_text, primary)
+                or (item.get('possible_link') and alias_text != primary)
+                or _has_positive_person_evidence(alias_text, item, current, prev)
+            ):
                 aliases.append(alias_text)
         next_item['primary_label'] = primary
         next_item['aliases'] = dedupe_names(aliases + [primary])
@@ -524,6 +529,8 @@ def _filter_entity_aliases(primary: str, aliases: list[str], protected_names: se
     for alias in aliases or []:
         text = sanitize_runtime_name(alias)
         if not text or text == primary:
+            continue
+        if not _looks_like_actor_alias(text):
             continue
         if text in protected_names and not _labels_compatible(primary, text):
             continue
@@ -1189,7 +1196,7 @@ def _actor_canonical_lookup(actors: dict) -> dict[str, dict[str, Any]]:
         canonical = sanitize_runtime_name(actor.get('name', ''))
         if not canonical:
             continue
-        aliases = dedupe_names([canonical] + list(actor.get('aliases', []) or []), limit=12)
+        aliases = dedupe_names([canonical] + [alias for alias in (actor.get('aliases', []) or []) if _looks_like_actor_alias(alias)], limit=12)
         record = {
             'actor_id': str(actor_id or actor.get('actor_id', '') or '').strip(),
             'name': canonical,
@@ -1204,6 +1211,23 @@ def _actor_canonical_lookup(actors: dict) -> dict[str, dict[str, Any]]:
                 if surface and surface not in lookup:
                     lookup[surface] = record
     return lookup
+
+
+def _looks_like_actor_alias(value: str) -> bool:
+    name = sanitize_runtime_name(value)
+    if not name or is_protagonist_name(name) or looks_like_bad_entity_fragment(name):
+        return False
+    if any(ch.isdigit() for ch in name):
+        return False
+    if any(name.startswith(prefix) for prefix in ('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着', '低声', '继续')):
+        return False
+    if any(token in name for token in ('代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '上午', '下午', '两点', '三十五秒', '第一组', '第三波', '一组', '两人一组', '本机', '窗口', '银行', '咖啡馆', '鹰巢')):
+        return False
+    if name in {'不能', '没有', '下一个', '终端', '别迟到', '时间到', '谁先说', '你们两个', '他说的'}:
+        return False
+    if name.endswith(('馆', '柜台', '窗口', '日志', '编号', '代码', '排序', '机位', '模块', '组件', '系统', '终端', '文件', '文件夹', '文件袋', '地图', '档案', '名单', '公司', '区域', '教室', '楼层', '走廊')):
+        return False
+    return True
 
 
 def _actor_surface_variants(name: str) -> set[str]:
@@ -1256,6 +1280,91 @@ def _canonicalize_actor_names(names: list[str], actor_lookup: dict[str, dict[str
     return out
 
 
+def _actor_match_names(name: str, actor_lookup: dict[str, dict[str, Any]]) -> list[str]:
+    canonical = _canonicalize_actor_name(name, actor_lookup)
+    if not canonical:
+        return []
+    record = actor_lookup.get(sanitize_runtime_name(name)) or actor_lookup.get(canonical)
+    names = [canonical]
+    if record:
+        names.extend(str(alias or '') for alias in (record.get('aliases', []) or []))
+    out: list[str] = []
+    for item in names:
+        clean = sanitize_runtime_name(item)
+        if clean and clean not in out:
+            out.append(clean)
+        for surface in _actor_surface_variants(clean):
+            if surface and surface not in out:
+                out.append(surface)
+    return out
+
+
+def _actor_mentioned_in_text(name: str, text: str, actor_lookup: dict[str, dict[str, Any]]) -> bool:
+    haystack = str(text or '')
+    if not haystack:
+        return False
+    return any(alias and alias in haystack for alias in _actor_match_names(name, actor_lookup))
+
+
+def _active_thread_actor_support_text(current: dict) -> str:
+    parts = [
+        str(current.get('main_event', '') or ''),
+        str(current.get('immediate_goal', '') or ''),
+    ]
+    parts.extend(str(item or '') for item in (current.get('immediate_risks', []) or []))
+    parts.extend(str(item or '') for item in (current.get('carryover_clues', []) or []))
+    for item in current.get('carryover_signals', []) or []:
+        if isinstance(item, dict):
+            parts.append(str(item.get('text', '') or ''))
+    return ' '.join(part for part in parts if part)
+
+
+def _canonicalize_active_threads(current: dict, actor_lookup: dict[str, dict[str, Any]]) -> list[dict]:
+    threads = current.get('active_threads', [])
+    if not isinstance(threads, list):
+        return []
+    global_support = _active_thread_actor_support_text(current)
+    out: list[dict] = []
+    for item in threads:
+        if not isinstance(item, dict):
+            continue
+        next_item = dict(item)
+        thread_text = ' '.join(
+            str(next_item.get(field, '') or '')
+            for field in ('label', 'goal', 'obstacle', 'latest_change')
+        )
+        actors: list[str] = []
+        for actor in next_item.get('actors', []) or []:
+            canonical = _canonicalize_actor_name(str(actor or ''), actor_lookup)
+            if not canonical or canonical in actors:
+                continue
+            if _actor_mentioned_in_text(canonical, thread_text, actor_lookup) or _actor_mentioned_in_text(canonical, global_support, actor_lookup):
+                actors.append(canonical)
+        next_item['actors'] = actors[:4]
+        out.append(next_item)
+    return out
+
+
+def _converge_relevant_npcs(current: dict, actor_lookup: dict[str, dict[str, Any]], *, limit: int = 6) -> list[str]:
+    support = _active_thread_actor_support_text(current)
+    candidates: list[str] = []
+    candidates.extend(current.get('relevant_npcs', []) or [])
+    for item in current.get('scene_entities', []) or []:
+        if isinstance(item, dict) and not bool(item.get('onstage')):
+            candidates.append(str(item.get('primary_label', '') or ''))
+    out: list[str] = []
+    onstage = set(current.get('onstage_npcs', []) or [])
+    for raw in candidates:
+        canonical = _canonicalize_actor_name(str(raw or ''), actor_lookup)
+        if not canonical or canonical in onstage or canonical in out:
+            continue
+        if _actor_mentioned_in_text(canonical, support, actor_lookup):
+            out.append(canonical)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _canonicalize_scene_entities_with_actors(entities: list[dict], actor_lookup: dict[str, dict[str, Any]]) -> list[dict]:
     if not actor_lookup:
         return entities
@@ -1269,7 +1378,7 @@ def _canonicalize_scene_entities_with_actors(entities: list[dict], actor_lookup:
         if matched:
             previous_primary = sanitize_runtime_name(current.get('primary_label', ''))
             canonical = str(matched.get('name', '') or previous_primary).strip()
-            aliases = dedupe_names(list(current.get('aliases', []) or []) + list(matched.get('aliases', []) or []) + [previous_primary, canonical], limit=12)
+            aliases = dedupe_names([alias for alias in list(current.get('aliases', []) or []) + list(matched.get('aliases', []) or []) + [previous_primary, canonical] if _looks_like_actor_alias(alias)], limit=12)
             current['primary_label'] = canonical
             current['aliases'] = [alias for alias in aliases if alias != canonical]
             if not str(current.get('possible_link', '') or '').strip() and matched.get('actor_id'):
@@ -1970,10 +2079,12 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     if not isinstance(active_threads, list):
         active_threads = prev.get('active_threads', []) if isinstance(prev.get('active_threads', []), list) else []
     current['active_threads'] = active_threads
+    current['active_threads'] = _canonicalize_active_threads(current, actor_canonical_lookup)
     current['relevant_npcs'] = dedupe_names(
         [name for name in current.get('relevant_npcs', []) if name not in current['onstage_npcs']],
         limit=6,
     )
+    current['relevant_npcs'] = _converge_relevant_npcs(current, actor_canonical_lookup, limit=6)
     for item in current.get('scene_entities', []) or []:
         if not isinstance(item, dict):
             continue
@@ -2012,6 +2123,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         if not current.get('scene_entities'):
             current['scene_entities'] = fallback_scene_entities(recovered_names)
             current['scene_entities'] = _filter_scene_entities_with_person_evidence(current.get('scene_entities', []), current, prev)
+    current['relevant_npcs'] = _converge_relevant_npcs(current, actor_canonical_lookup, limit=6)
     current_main_event = str(current.get('main_event', '') or '').strip()
     current_location = str(current.get('location', '') or '').strip()
     onstage_names = set(current.get('onstage_npcs', []) or [])
