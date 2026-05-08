@@ -104,6 +104,24 @@ class KeeperArchiveWindowTests(unittest.TestCase):
         self.assertFalse(any('"怎么"' in item for item in loops))
         self.assertTrue(any('身份' in item for item in loops))
 
+    def test_mid_digest_rejects_modal_and_location_fragments(self):
+        pairs = [
+            ({'content': '继续'}, {'content': '他似乎还想说什么，307栋三楼的灯还亮着。'}),
+            ({'content': '继续'}, {'content': '她可能还在犹豫，307栋三楼仍有人走动。'}),
+            ({'content': '继续'}, {'content': '似乎只是错觉，栋三楼的门又关上。'}),
+        ]
+
+        digest = build_mid_window_digest(
+            history=[item for pair in pairs for item in ({'role': 'user', 'content': pair[0]['content']}, {'role': 'assistant', 'content': pair[1]['content']})],
+            hard_anchors={},
+            max_pairs=3,
+            use_llm=False,
+            exclude_recent_pairs=0,
+        )
+
+        self.assertFalse(any('似乎' in item or '可能' in item for item in digest['open_loops']))
+        self.assertFalse(any('栋三楼' in item for item in digest['ongoing_events']))
+
     def test_mid_digest_object_filter_is_salience_based_not_label_based(self):
         self.assertTrue(_is_mid_context_object_relevant({'label': '包', 'kind': 'container', 'story_relevant': True}))
         self.assertTrue(_is_mid_context_object_relevant({'label': '铜板', 'kind': 'currency', 'story_relevant': True}))

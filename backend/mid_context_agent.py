@@ -76,6 +76,47 @@ def _dedupe(items, limit: int = 6) -> list[str]:
     return out
 
 
+BAD_EVENT_ANCHORS = {
+    '他说的', '她说的', '可能', '似乎', '好像', '或许', '应该', '不能', '没有', '下一个', '栋三楼',
+}
+
+
+def _bad_archive_anchor(text: str) -> bool:
+    value = str(text or '').strip().strip('"“”')
+    if not value:
+        return True
+    if value in {'身份', '来历', '目的', '真相', '秘密', '阴谋'}:
+        return False
+    if value in BAD_EVENT_ANCHORS:
+        return True
+    if len(value) < 3:
+        return True
+    if value.startswith(('他', '她', '它', '这', '那')) and len(value) <= 4:
+        return True
+    if value.endswith(('的', '了', '着', '呢', '吧', '吗')) and len(value) <= 6:
+        return True
+    if any(token in value for token in ('似乎', '可能', '好像', '或许')) and len(value) <= 8:
+        return True
+    if value in {'特工学院', '鹰巢'}:
+        return False
+    if value.endswith(('楼', '层', '教室')) and not any(token in value for token in ('搜查', '盘问', '调查', '等待', '封存', '追踪')):
+        return True
+    return False
+
+
+def _good_archive_sentence(text: str) -> bool:
+    value = str(text or '').strip()
+    if not value or len(value) < 8:
+        return False
+    quoted = re.findall(r'"([^"]+)"', value)
+    if quoted and any(_bad_archive_anchor(item) for item in quoted):
+        return False
+    bad_templates = ('围绕', '局势仍在持续演化', '存在暗示但尚未证实的信息')
+    if any(token in value for token in bad_templates) and not any(token in value for token in ('搜查', '盘问', '追踪', '调查', '审查', '等待', '封存', '约定', '承诺', '身份', '来历', '真相')):
+        return False
+    return True
+
+
 def _window_anchor_candidates(mid_pairs: list[tuple[dict, dict]]) -> dict:
     headers: list[str] = []
     for _user_item, assistant_item in mid_pairs:
@@ -216,14 +257,16 @@ def _score_events(mid_pairs: list[tuple[dict, dict]]) -> list[str]:
             break
 
     if not events and persistent:
-        top = [p for _, p in persistent[:3]]
+        top = [p for _, p in persistent[:8] if not _bad_archive_anchor(p)][:3]
+        if not top:
+            return events
         events.append(f'围绕{"、".join(top)}的局势仍在持续演化')
 
     if not events:
         action_patterns = re.findall(r'([\u4e00-\u9fff]{2,12}(?:搜查|盘问|追踪|调查|审查|逃离|守卫|战斗|谈判|试探|隐瞒|威胁|观察|等待|对峙|商议|密谈|交易|潜入|暴露|争吵|合作)[^。！？\n]{0,18})', '\n'.join(str(assistant_item.get('content', '') or '') for _, assistant_item in mid_pairs))
         for item in action_patterns:
             text = _short(item, limit=48)
-            if text and text not in events:
+            if text and _good_archive_sentence(text) and text not in events:
                 events.append(text)
             if len(events) >= 4:
                 break
@@ -248,6 +291,8 @@ def _score_open_loops(mid_pairs: list[tuple[dict, dict]]) -> list[str]:
         matches = re.findall(pattern, all_text)
         if len(matches) >= 2:
             keyword = matches[0] if isinstance(matches[0], str) else matches[0]
+            if _bad_archive_anchor(keyword):
+                continue
             loop = f'与"{keyword}"{description}'
             if _is_actionable_open_loop(loop):
                 loops.append(loop)
@@ -265,6 +310,10 @@ def _is_actionable_open_loop(text: str) -> bool:
             return False
         if core in {'谁', '什么', '为什么', '怎么', '哪里', '何时'}:
             return False
+        if _bad_archive_anchor(core):
+            return False
+    if not _good_archive_sentence(value):
+        return False
     return True
 
 
@@ -323,6 +372,8 @@ def _normalize_digest(payload: dict, from_turn: str, to_turn: str, pair_count: i
             if not text:
                 continue
             if _looks_like_prose(text):
+                continue
+            if not _good_archive_sentence(text):
                 continue
             if text not in cleaned:
                 cleaned.append(text)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 try:
     from .persona_runtime import build_persona_seed
@@ -181,12 +182,37 @@ def _short_observation(text: str, limit: int = 120) -> str:
     return value[: max(0, limit - 3)] + '...'
 
 
+def _valid_persona_token(token: str) -> bool:
+    value = str(token or '').strip()
+    if not value:
+        return False
+    if value in {'不能', '没有', '下一个', '终端', '别迟到', '时间到', '谁先说', '你们两个', '他说的'}:
+        return False
+    if any(part in value for part in ('代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '上午', '下午', '两点', '三十五秒', '第一组', '第三波', '一组', '两人一组', '本机', '窗口', '银行', '咖啡馆', '鹰巢')):
+        return False
+    if value.startswith(('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着')):
+        return False
+    return True
+
+
+def _sentences_with_token(text: str, tokens: list[str]) -> list[str]:
+    raw_sentences = [item.strip() for item in re.split(r'(?<=[。！？!?])\s*|\n+', str(text or '')) if item.strip()]
+    matched = []
+    for sentence in raw_sentences:
+        if any(token and token in sentence for token in tokens):
+            matched.append(sentence)
+    return matched
+
+
 def _observed_context(history: list[dict], name: str, aliases: list[str] | None = None, limit_turns: int = 4) -> dict:
-    tokens = [token for token in [name] + list(aliases or []) if token]
+    tokens = [token for token in [name] + list(aliases or []) if _valid_persona_token(token)]
+    if not tokens:
+        return {}
     snippets: list[str] = []
     for _user_text, assistant_text in _turn_pairs(history)[-limit_turns:]:
-        if any(token in assistant_text for token in tokens):
-            snippets.append(_short_observation(assistant_text))
+        sentences = _sentences_with_token(assistant_text, tokens)
+        if sentences:
+            snippets.append(_short_observation(' '.join(sentences[:2])))
     if not snippets:
         return {}
     latest = snippets[-1]
