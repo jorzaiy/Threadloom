@@ -307,6 +307,8 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
 
 - keeper/thread：risk / clue thread 去重时，若更具体的 `label` 覆盖旧标签，必须同步重算 `key`，避免出现 `key` 仍指向旧风险、`label` 已变成新风险的状态污染。
 - keeper/signals：fill keeper 可输出 `resolved_signals`，用于显式关闭本轮已经完成检查、解除风险或落地的旧信号。`normalize_state_dict` 会在 thread tracker 前过滤对应的 `carryover_signals / immediate_risks / carryover_clues`，避免 stale risk 每轮复活。
+- keeper/state：active thread 的 `actors` 会对齐 actor canonical name，并按 thread 文本与当前 `main_event / risks / clues / signals` 剪枝；旧场景 NPC 不再因为 thread 冷却而继续粘在当前 thread actor 索引上。
+- keeper/state：`relevant_npcs` 只从当前信号层保留明确命中的 offstage 稳定人物；active thread 文本本身不再反向回填 relevant，避免旧 thread 把已离场 NPC 重新推回 selector 视野。
 - keeper/knowledge：非 full keeper turn 也会补一层轻量可见知识 delta。当前先覆盖本轮 narrator 明确写到的可见物件持有状态，再交给 actor registry 折叠进 `knowledge_records`。
 - selector/event：event recall 不再只按 topic overlap + NPC 名加分；现在更偏向当前 `user_text / location / main_event` 命中的事件，并用 recency bonus 与同分新 turn 优先减少旧事件机械回流。
 - selector/event：高频反复出现的 carryover clue 会降权，避免同一个旧 clue 让 `evt_0002/0003/0004` 之类早期事件长期占据召回位。
