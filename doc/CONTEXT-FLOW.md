@@ -42,14 +42,19 @@ web input
 - `knowledge_scope` 是本轮 delta，长期知识落到 `knowledge_records`；物件退出 active 状态通过 `lifecycle_status` 和 `graveyard_objects` 表达。
 - keeper archive 是派生缓存，刷新时会清理超过当前有效 pair index 的未来 records，避免撤回/重试后的旧分支污染召回。
 - keeper archive 的读路径默认允许维护派生缓存；需要只读检查时，调用方可通过 `allow_archive_write=False` 禁止 prune/rebuild 落盘，默认运行行为不变。
+- memory maintenance 是每轮提交后的确定性维护层，不是新的事实来源。它只根据 `actor_registry`、当前 `onstage_npcs` 和 keeper archive 结构做收敛：实名 alias 已知时迁移旧称呼；人物已在场时关闭明确过时的“门外等待”风险；archive 只过滤结构坏记录或已知摘要碎片。
 - narrator 输入会注入“世界设定锁”：本轮用户输入只表达主角当前行动/对白/意图，不能切换主世界题材；召回历史、世界书候选或用户输入若与当前角色卡世界不兼容，只能在当前世界观内转译或收束。
 - 防污染判断不靠固定关键词表。不同角色卡的题材边界差异很大，运行时提示要求按整体语境、因果规则、时代感、社会制度、技术/超自然边界和人物身份兼容性来判断是否承接候选内容。
 - runtime fallback / bootstrap 的词表只允许使用通用职能词、通用地点后缀和通用物件类别；不应把某张角色卡的固定人名、组织名、session id 或剧情专属物件写进生产逻辑来强化表现。
 - 同一层还负责用户控制权边界：用户主角只是世界内角色，不是作者、导演、GM 或世界主宰。用户输入只能提出尝试，不能直接决定 NPC 服从、行动成功、关系成立、物品归属、场景改写或客观结论；这些必须由当前世界的因果、资源、制度和 NPC 反应结算。
 - NPC profile 注入分两级：source markdown profile 是强档案；当前 session 的 persona seed 是兜底档案。兜底内容只包含身份、persona hooks 和 assistant 叙事中观察到的短片段，不能从用户 prompt 原文生成 NPC 事实。
 - 角色注册表的基础字段默认不可变；实名揭示只在窄口径下允许把稳定 generic actor 提升为实名主称呼，并把原描述称呼保留为 alias。当“剃寸头的高个子学员”这类 actor 后续明确自报姓名或被点名时，runtime 会用实名绑定后续 knowledge/profile/selector，避免同一人物长期分裂成描述称呼与实名两条线。
+- 实名迁移只允许 exact alias map。若两个 actor 都声明了同一个 alias，或某个 alias 与另一个 actor 的 canonical name 冲突，该 alias 不参与迁移，宁可保留重复称呼，也不做高风险自动合并。
 - `active_threads[].actors` 是 thread 自身的辅助索引，不是长期人物事实源。归一化时会把 alias 对齐到 actor canonical name，并只保留 thread 文本或当前 `main_event / immediate_risks / carryover_clues / carryover_signals` 明确支持的人物，避免旧场景 NPC 在 watch/cooling thread 中继续粘住。
 - `relevant_npcs` 只保留有正向人物证据、且当前信号层仍明确提到的非 onstage 人物；当前风险/线索点名的 offstage actor 可继续保留给 selector，但不能再从地点、标题残片或 active thread 文本反推虚假 NPC。
+- `state.time` 只表示当前场景的粗时段，如清晨、上午、中午、下午、傍晚、晚上、夜里；精确钟点属于预约、截止、倒计时或课程安排，应留在 `immediate_goal / carryover_signals / active_threads` 等剧情约束层，不作为每轮滚动的当前时间戳。
+- NPC 抽取现在有跨层人物性校验：抽象概念、时间/空间/答案等连续性话题、栏目/盲区/标题等结构标签，即使 LLM 给出外貌或身份，也不能进入 actor registry、scene entity、persona seed、selector profile target 或 summary chunk actor metadata。
+- 低压用户动作不会自动把旧压力召回成当前主轴。selector 会降低 pressure-only / actor-only 旧 chunk 的权重，arbiter 的弱 stealth 信号写入 clue 而不是 immediate risk，narrator 也不能为了制造戏剧性给休息/看书场景硬塞新威胁。
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。
@@ -69,6 +74,8 @@ web input
   - `event` 负责“前几轮到底发生了什么值得检索”；
   - `summary` 负责“更长阶段该如何压缩”；
   - `thread` 若保留，也更偏 debug/state 辅助，而不是 steering 层。
+- maintenance 负责“已知结构之间保持一致”：把 actor canonical name 传播到 derived memory、剪掉明确过期的 signal/thread、过滤 keeper archive 派生缓存里的坏 digest。它不生成新剧情事实，也不替代 keeper / selector / narrator 的判断。
+- onstage 是当前镜头事实，不是人物重要度。重要 NPC、actor registry 或旧 thread 只能证明人物存在过，不能单独证明仍在场；归一化必须看到本轮 hard anchor / signal 的人物证据才保留 onstage。
 - keeper archive 的中程 digest 应优先从窗口正文自身提取时间、地点、持续人物、持续事件和物件，而不是复用当前 state 的硬锚点。窗口中可用的 NPC registry 名字会参与稳定人物识别，避免 archive 只留下“围绕某地持续演化”这类低密度事件句。
 - 当前 event 链已开始按这个方向实现：事件总结默认读取最近 `1~3` 对 turn 窗口，并在 narrator recent window 中作为“前段提纲”承接完整正文之外的较早回合；selector 仍可把它作为 recall / summary 的前置材料使用。
 - 当前 selector 的 event recall 会优先 current-scene 命中和较新事件；同 NPC、同旧 clue 只能作为弱辅助信号，不能长期压过当前地点/动作/主事件。

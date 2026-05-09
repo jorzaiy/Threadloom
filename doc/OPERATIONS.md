@@ -15,11 +15,37 @@
 - `backend/import_sillytavern_chat.py`：导入 SillyTavern JSONL 聊天
 - `backend/tools/replay_turn_trace.py`：单回合精确回放
 - `backend/tools/rebuild_session_from_history.py`：从历史重建副本 session
+- `backend/tools/repair_session_memory.py`：对既有 session 运行 deterministic 记忆维护；默认 dry-run，只在加 `--apply` 时写回
 
 已清理脚本：
 - 旧历史迁移、审计与实验脚本已从仓库移除；当前不再保留 `backend/legacy_tools/`。
 
 ## 当前建议工作流
+
+既有长 session 若出现人物实名/描述称呼分裂、旧风险长期残留或 keeper archive 摘要碎片，可先 dry-run 检查：
+
+```bash
+cd /root/Threadloom
+python3 backend/tools/repair_session_memory.py --session "<session_id>" --character-id "<character_id>"
+```
+
+确认报告后再显式写回：
+
+```bash
+python3 backend/tools/repair_session_memory.py --session "<session_id>" --character-id "<character_id>" --apply
+```
+
+`--rebuild-derived` 会重建 summary chunks / keeper archive 等派生层；`--no-archive-write` 可禁止 archive 写回。不要把 `runtime-data/` 下的真实 session 数据提交到 git。
+
+repair 报告里的常见 `changes[].action`：
+
+- `canonicalize`：把已知 alias 改成 actor canonical name，例如 `剃寸头的高个子学员 -> 秦野`。
+- `prune_stale_signal`：删除已经被当前场景事实推翻的旧风险/线索，例如人物已在场但风险仍写“仍在门外等待”。
+- `resolve_stale_thread`：把纯 stale risk thread 移入 `resolved_events`。
+- `clear_stale_thread_obstacle`：只清空主线 thread 的过时 obstacle，不删除 thread 本身。
+- `drop_invalid_record` / `sanitize_record`：清理 keeper archive 里的坏窗口、空记录或摘要碎片。
+
+建议流程：先 dry-run 看报告；确认只命中上述可解释维护项后，再加 `--apply`。如果只想修 state/event/chunk，不想碰 keeper archive，可加 `--no-archive-write`；如果 archive 或 summary chunk 本身已经长期漂移，再考虑 `--rebuild-derived`。
 
 继续复用现有 `rp-agent` 资产：
 - runtime 规则底板：`prompts/runtime-rules.md`
@@ -60,6 +86,8 @@
 - narrator 目标是维持一个会自己流转的 RP 世界：主角是参与者与观察者，不是唯一驱动器。
 - 对回屋、关门、烧水、换位、短暂观察这类过渡段，narrator 仍应写出具体环境变化、人物反应、动作后的余波或正在累积的细节变化，不要塌成一句过短摘要。
 - 只有当当前局势本来就存在追索、怀疑、风险、未决冲突或逼近感时，才继续强化压力；不要为了“有戏”而每轮硬塞危险感。
+- 调试低压 turn 时，优先看 narrator prompt 是否仍在旧风险背景上过度召回，以及 selector 的 summary/event hit 是否只是 pressure-only 或 actor-only 命中；当前目标是低压动作保持低压，旧风险只在当前文本确实点名或仍有硬约束时回流。
+- 如果状态面板里出现 `时间 / 时间栏 / 时间盲区 / 答案 / 规则` 这类非人物 NPC，先检查 actor registry、scene entities、persona seed 和 selector profile target。当前代码应在这些边界过滤抽象名；既有 session 数据可用 repair/dry-run 或手动清理，但不要把 runtime-data 修复结果提交进 git。
 - `immediate_goal` 已从 narrator 主链降级，不再每轮常驻塞给 narrator。
 - `main_event` 当前改为低频维护：默认只在早期 turn、周期点或明显场景切段时允许高频链重写。
 - `location` 也已从高频自由抽取中降级，当前默认依赖首轮定底与 12 轮整理，不再每轮尝试从正文里扫地点短语。

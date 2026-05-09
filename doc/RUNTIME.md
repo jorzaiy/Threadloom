@@ -309,10 +309,32 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
 - keeper/signals：fill keeper 可输出 `resolved_signals`，用于显式关闭本轮已经完成检查、解除风险或落地的旧信号。`normalize_state_dict` 会在 thread tracker 前过滤对应的 `carryover_signals / immediate_risks / carryover_clues`，避免 stale risk 每轮复活。
 - keeper/state：active thread 的 `actors` 会对齐 actor canonical name，并按 thread 文本与当前 `main_event / risks / clues / signals` 剪枝；旧场景 NPC 不再因为 thread 冷却而继续粘在当前 thread actor 索引上。
 - keeper/state：`relevant_npcs` 只从当前信号层保留明确命中的 offstage 稳定人物；active thread 文本本身不再反向回填 relevant，避免旧 thread 把已离场 NPC 重新推回 selector 视野。
+- keeper/state：当前 `time` 只保存粗时段；narrator header、skeleton keeper 和 state normalization 都会把具体钟点收敛到清晨/上午/中午/下午/傍晚/晚上/夜里。精确钟点只作为预约、截止或倒计时保留在目标、信号和 thread 文本中。
 - keeper/knowledge：非 full keeper turn 也会补一层轻量可见知识 delta。当前先覆盖本轮 narrator 明确写到的可见物件持有状态，再交给 actor registry 折叠进 `knowledge_records`。
 - selector/event：event recall 不再只按 topic overlap + NPC 名加分；现在更偏向当前 `user_text / location / main_event` 命中的事件，并用 recency bonus 与同分新 turn 优先减少旧事件机械回流。
 - selector/event：高频反复出现的 carryover clue 会降权，避免同一个旧 clue 让 `evt_0002/0003/0004` 之类早期事件长期占据召回位。
 - lorebook audit：`lorebook_injection.total_chars` 只代表候选 summary 体量，不再被当作有效注入总量。turn audit 额外记录 `selected_summary_chars / source_hit_chars / index_hit_chars / foundation_chars / effective_total_chars`，用于区分“没有 selected summary”与“仍有 foundation/source/index 实际入 prompt”。
+
+## 2026-05-08 Long-session Memory Maintenance
+
+长 session 的问题不只在“记录不够”，还在于既有记录需要持续维护。当前 runtime 已加入一层 deterministic memory maintenance，目标是让实名揭示、旧风险关闭和 archive 清洗在每轮提交与离线修复中都能发生：
+
+- actor canonicalization migration：`actor_registry` 一旦通过窄口径实名揭示把 generic actor 绑定到主名，`memory_maintenance.py` 会把 state 中的 `onstage_npcs / relevant_npcs / scene_entities / active_threads / important_npcs / possession_state / object_visibility / knowledge_scope.npc_local` 对齐到 canonical name；离线 repair 还会同步 `event_summaries / summary_chunks / keeper_record_archive`。该迁移只使用 registry 里已经存在的精确 alias，不从正文推断新等价关系；如果多个 actor 共享同一 alias，该 alias 会被跳过，避免误合并人物。
+- stale risk/thread resolver：当某个 actor 已经在 `onstage_npcs`，而旧 signal/thread 仍写着“仍在门外等待 / 还在门外等待 / 在走廊等待”等明确等待模式时，runtime 会剪掉对应 `immediate_risks / carryover_clues / carryover_signals`，并把纯 stale risk thread 归档为 resolved；如果只是主线程的 `obstacle` 过时，则只清空 obstacle，不删除主线。
+- keeper archive validation / recall filtering：keeper archive 是派生缓存，构建和读取时都会经过 `validate_keeper_archive()`。验证会删除非 object、窗口越界、空内容和已知 fragment digest；`provider == "manual-cleanup"` 的人工记录受保护。过滤只针对短碎片和明确坏 digest 模式，避免把有意义的“不确定/否定”事实误删。
+- archive / summary repair command：`backend/tools/repair_session_memory.py` 可对既有 session dry-run 检查或显式 `--apply` 写回。默认不写 state / summary chunks / event summaries / keeper archive；`--rebuild-derived` 才会重建派生层，`--no-archive-write` 可禁止 archive 写回。
+
+完整 turn 提交流程中，maintenance 在 `update_actor_registry()` 之后、最终 `save_state()` 之前运行，并把本轮维护结果写入 turn trace 的 `post_turn.memory_maintenance`，便于确认哪些字段被 canonicalize 或 stale-pruned。
+
+## 2026-05-09 Low-pressure Turns and False NPC Filtering
+
+针对长跑 session 中“低压动作被强行写成悬疑压力”和“时间/栏目/盲区等抽象概念被注册成 NPC”的问题，runtime 进一步收紧以下边界：
+
+- 低压动作保持低压：看书、休息、坐下、发呆、晒太阳等普通动作不会轻易触发 stealth arbiter；即使存在弱观察，也默认落到 clue 层，不再自动写成 immediate risk。
+- narrator 输入在低压休整/看书场景中明确禁止擅自引入新的可疑脚步、暗门、钥匙声、窥视者、反光物或追踪者；旧风险只能轻触背景，不能覆盖当前低压动作。
+- `actor_registry / state_bridge / persona_updater / selector / summary_chunks` 共用更严格的人物名质量门槛，抽象话题、栏目名、时间概念、标题残片和地点/物件碎片不能创建 actor、scene entity、persona seed、NPC profile target 或 summary chunk actor metadata。
+- `onstage_npcs` 不再因为 actor registry、important NPC 或旧 thread 存在就自动保留。场景已切换或当前 hard anchor 没有本轮人物证据时，旧核心 NPC 会从 onstage 清掉；keeper validation 允许有新 location/main_event 信号的空 onstage 结果。
+- event actor attribution 只在 summary/clue 文本当前确实提到该人物时写入，不再无条件把 state 里的 onstage NPC 贴到每个事件摘要上。
 
 ## 当前 persona 门槛
 

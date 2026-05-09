@@ -16,17 +16,18 @@
 - `server.py` 当前默认绑定 `127.0.0.1:8765`，可通过 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）；调用方必须显式提供 `base_url` 与 `model`，不再内置旧本地模型默认值
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
-- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
+- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、当前时间粗时段归一化、抽象/非人物 entity 过滤、onstage 当前证据校验、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
 - `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前只维护物品、持有关系、情报与信号，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
-- `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流
+- `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；`actors_mentioned` 会过滤非人物/抽象话题，避免 selector 以后按伪 actor 召回
 - `lorebook_distiller.py`：角色卡导入 / 手动重建时把 `lorebook.json` 固化为 `lorebook-foundation.json` 与 `lorebook-index.json`
-- `persona_updater.py` / `persona_runtime.py`：session-local persona 流转、重要度计数、近期观察沉淀与展示骨架；observation 只来自 assistant 叙事中与 NPC 相关的短片段，不把用户 prompt 原文固化为 NPC 事实
+- `persona_updater.py` / `persona_runtime.py`：session-local persona 流转、重要度计数、近期观察沉淀与展示骨架；observation 只来自 assistant 叙事中与 NPC 相关的短片段，不把用户 prompt 原文固化为 NPC 事实；抽象话题和结构标签不会生成 persona seed
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档；最终 actor 索引由 state normalization 对齐和剪枝
-- `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重
+- `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重；LLM candidate 在创建前会再过人物性/抽象名校验
+- `memory_maintenance.py`：长期记忆维护层；按 actor registry 的精确 alias 做跨 state / event / summary chunk / keeper archive canonicalization，并清理“人物已在场但旧风险仍称其在门外等待”的 stale signal/thread。该层只做确定性维护，不通过正文推断新人物等价关系
 - `event_ledger.py`：事件账本；产出阶段事件摘要，不再负责人物短期状态写回
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
 - `opening.py`：opening 菜单与开局状态机；其 state 写入是阶段 checkpoint，最终 turn state 仍由 `handler_message.py` 统一提交
@@ -34,7 +35,7 @@
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
 - `session_lifecycle.py`：new game / delete / session list
 - `regenerate_turn.py`：partial 回复回滚与重试
-- `tools/replay_turn_trace.py` / `tools/rebuild_session_from_history.py`：当前调试工具，用于单回合精确回放与从历史重建副本 session
+- `tools/replay_turn_trace.py` / `tools/rebuild_session_from_history.py` / `tools/repair_session_memory.py`：当前调试工具，用于单回合精确回放、从历史重建副本 session，以及对既有 session 运行 deterministic memory repair。`repair_session_memory.py` 默认 dry-run，只有显式 `--apply` 才写回
 - `user_manager.py`：多用户管理模块（bcrypt 密码认证、session token 管理、登录失败锁定、用户禁用/启用/归档删除、孤儿目录审计、用户生命周期）
 - `object_bootstrap_agent.py`：物品抽取 bootstrap（四策略启发式→LLM判定→merge）
 - `clue_bootstrap_agent.py`：情报抽取 bootstrap（模式匹配→LLM分类→merge）
@@ -70,6 +71,8 @@
 - 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补物品、情报与信号；默认每 2 轮运行一次，不再接管 `time / location / main_event / onstage_npcs / immediate_goal` 这类当前硬锚点
 - actor registry 当前在每个完整 narrator 回复后运行：narrator 后处理只允许创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份视为锁定，不允许后续覆盖；持续承担行动链、关系压力或信息承载功能的匿名个体也可用正文稳定称呼建 actor；LLM 失败时不从旧 `scene_entities` fallback 建 actor，避免把旧污染写成不可变设定
 - actor registry 对“实名揭示”有窄口径例外：若已有 generic actor 后续在 narrator 正文中明确自报姓名或被点名，且上下文能唯一绑定到该 generic actor，则只追加实名到 `aliases` 并更新 mention turn，不改写原 `name / personality / appearance / identity`
+- memory maintenance 会在 actor registry 后运行，把已知 exact alias 迁移到 canonical actor name；冲突 alias 会被跳过，避免两个不同 actor 因同一称呼被自动合并
+- actor / persona / selector / summary chunk 共享非人物名防线：时间、空间、规则、栏目、盲区、题目等抽象或结构标签不能因 LLM 附带“外貌/身份”字段就被固化为 NPC。
 - actor registry 创建新 actor 时会读取最近 1~3 对 turn，因此上一轮 actor registry LLM 失败后，下一轮仍可从 recent window 补建，不需要依赖脏 fallback
 - actor registry 已内置 `protagonist`，物品持有和情报记录可统一绑定到 `actor_id`；`possession_state` 会补 `holder_actor_id`，`object_visibility` 会补 `known_to_actor_ids`，本轮 `knowledge_scope` 会派生长期 `knowledge_records`
 - 12 轮未被正文提及的 actor 会进入 `actor_context_index.archived_actor_ids`，只影响后续上下文注入，不修改 actor 基础设定；再次被正文提及时会回到 active
@@ -81,10 +84,13 @@
 - 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里存在；`thread_tracker / context_builder / state_snapshot` 等核心消费点已开始优先使用统一信号层，再兼容旧字段
 - `onstage_npcs` 当前只作为 state/UI 快照存在，不进入 narrator 主 prompt，也不承载长期人物基础设定；长期人物基础设定进入不可变 `actors`
 - `onstage_npcs / relevant_npcs / scene_entities` 当前必须有正向人物证据：稳定 actor、important NPC、continuity hint、明确人物 role，或正文/事件中“人物称谓 + 行动锚点”。地点、标题残片、事件短语不能从 `main_event/location` 反推出 NPC
+- `onstage_npcs` 还必须有当前回合证据；场景切换后，即使 actor registry 中存在核心 NPC，也不能仅凭历史重要性继续保留在场。state keeper validation 允许有新 location/main_event 的空 onstage payload。
 - source NPC profile 缺失时，当前 session persona seed 可作为 narrator NPC profile 兜底；该 profile 只包含身份、hooks 与近期 observation，不覆盖 actor registry 的不可变人物基础设定
 - session persona observation 只从 assistant 叙事中提取，不从用户 prompt 原文生成 NPC 事实；输出到 narrator profile 前会去重，避免同一观察片段在 behavior/detail/snippet 中重复放大
 - keeper archive 的 heuristic digest 当前会消费 NPC registry，以提升中程窗口的 stable_entities / ongoing_events 密度；archive 仍是派生缓存，不是权威事实源
+- keeper archive 构建/读取时会运行 deterministic validation：删除坏窗口、空记录和已知摘要碎片，保护 `manual-cleanup` 人工记录；离线 repair 可在 dry-run 中报告并在 `--apply` 时写回这些派生缓存清理
 - narrator prompt 当前不靠列举“翻墙/离场”等剧情关键词维持连续性，而是通过 recent window（前段提纲 + 近端完整正文）和通用原则约束空间关系、视线范围、人物控制权与行动链的承接
+- narrator / arbiter / selector 对低压 turn 有共同降压规则：普通阅读、坐下、休息和无明确潜行收益的隐蔽位置不会自动升级为 stealth risk；旧高压 chunk 若只靠人物名或压力词命中，会被降权。
 - runtime heuristic / prompt examples 当前避免绑定具体角色卡或 session：summary keyword 示例、clue 组织触发词、persona archetype 兜底和 state fallback 物件提示均应使用通用职能/物件词，不使用某张卡的固定角色名、组织名或剧情专属物件来强化表现
 - 当前目标分工草案：
 - `event`：中程检索层，服务于 recall / summary，不默认主导 narrator
