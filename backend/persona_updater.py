@@ -8,12 +8,12 @@ try:
     from .persona_runtime import build_persona_seed
     from .runtime_store import load_history, load_persona_index, load_state, save_persona_seed, session_paths
     from .card_hints import get_service_role_tokens
-    from .name_sanitizer import looks_like_bad_entity_fragment
+    from .name_sanitizer import looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
 except ImportError:
     from persona_runtime import build_persona_seed
     from runtime_store import load_history, load_persona_index, load_state, save_persona_seed, session_paths
     from card_hints import get_service_role_tokens
-    from name_sanitizer import looks_like_bad_entity_fragment
+    from name_sanitizer import looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
 
 SCENE_SEED_MIN_STREAK = 5
 LONGTERM_SEED_MIN_STREAK = 7
@@ -215,7 +215,7 @@ def _valid_persona_token(token: str) -> bool:
         return False
     if looks_like_bad_entity_fragment(value) or _looks_like_abstract_persona_name(value):
         return False
-    if any(part in value for part in ('代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '上午', '下午', '两点', '三十五秒', '第一组', '第三波', '一组', '两人一组', '本机', '窗口', '银行', '咖啡馆', '鹰巢')):
+    if looks_like_non_person_alias_fragment(value):
         return False
     if value.startswith(('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着')):
         return False
