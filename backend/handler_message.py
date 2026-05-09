@@ -28,6 +28,7 @@ try:
     from .persona_updater import update_persona
     from .state_fragment import merge_state_skeleton
     from .event_ledger import build_event_ledger_with_llm, build_event_summary_item
+    from .memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
 except ImportError:
     from arbiter_runtime import run_arbiter
     from arbiter_state import merge_arbiter_state
@@ -52,6 +53,7 @@ except ImportError:
     from persona_updater import update_persona
     from state_fragment import merge_state_skeleton
     from event_ledger import build_event_ledger_with_llm, build_event_summary_item
+    from memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
 
 
 TRACE_PROMPT_LIMIT = 4000
@@ -1064,6 +1066,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         recent_pairs=recent_pairs,
         player_name=context.get('player_profile_json', {}).get('name', '') or context.get('player_profile_json', {}).get('courtesyName', ''),
     )
+    state, memory_canonicalization_changes = canonicalize_state_memory(state)
+    state, stale_memory_changes = resolve_stale_state_threads(state)
     # Single authoritative turn commit after keeper, arbiter, thread/npc trackers,
     # and actor registry have all merged their bindings. update_actor_registry
     # contains its own LLM-failure fallback so it does not raise out, which lets
@@ -1162,6 +1166,10 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     turn_trace['post_turn'] = {
         'state': copy.deepcopy(state),
         'state_snapshot': build_state_snapshot(state),
+        'memory_maintenance': {
+            'canonicalization_changes': copy.deepcopy(memory_canonicalization_changes),
+            'stale_memory_changes': copy.deepcopy(stale_memory_changes),
+        },
         'summary_updated': True,
         'summary_text': summary_text,
         'summary_chunks': copy.deepcopy(summary_chunk_result),
