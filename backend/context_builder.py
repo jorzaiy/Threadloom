@@ -672,7 +672,7 @@ def _format_persona_profile_content(seed: dict) -> str:
         if text:
             lines.append(f"{key}: {text}")
     seen_observations = set()
-    for key in ('recent_behavior', 'recent_detail', 'recent_relationship'):
+    for key in ('recent_behavior', 'recent_detail', 'recent_relationship', 'appearance_note', 'voice_note', 'mannerism_note', 'personality_note'):
         value = str(observations.get(key, '') or '').strip()
         if value and value not in seen_observations:
             lines.append(f"{key}: {value}")

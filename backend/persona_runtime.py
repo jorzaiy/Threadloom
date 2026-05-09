@@ -189,7 +189,7 @@ def build_persona_seed(
     observations = previous.get('observations', {}) if isinstance(previous.get('observations', {}), dict) else {}
     if isinstance(observed_context, dict):
         observations = dict(observations)
-        for key in ('recent_behavior', 'recent_detail', 'recent_relationship'):
+        for key in ('recent_behavior', 'recent_detail', 'recent_relationship', 'appearance_note', 'voice_note', 'mannerism_note', 'personality_note'):
             value = str(observed_context.get(key, '') or '').strip()
             if value:
                 observations[key] = value

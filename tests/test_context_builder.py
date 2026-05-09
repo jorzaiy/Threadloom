@@ -213,7 +213,7 @@ def test_session_persona_json_loads_as_npc_profile_when_targeted(tmp_path, monke
 def test_persona_seed_accumulates_recent_behavior_fields_from_observed_turns():
     history = [
         {'role': 'user', 'content': '询问测试乙的看法'},
-        {'role': 'assistant', 'content': '测试乙先观察门口，再低声提醒主角别急着打开包裹。'},
+        {'role': 'assistant', 'content': '测试乙穿着灰色外套，手指有旧疤。测试乙先观察门口，再低声提醒主角别急着打开包裹。'},
     ]
     seed = build_persona_seed(
         '测试乙',
@@ -227,6 +227,8 @@ def test_persona_seed_accumulates_recent_behavior_fields_from_observed_turns():
     assert seed['observations']['recent_story_snippets']
     assert '低声提醒' in seed['observations']['recent_behavior']
     assert '询问测试乙' not in seed['observations']['recent_behavior']
+    assert '灰色外套' in seed['observations']['appearance_note']
+    assert '低声提醒' in seed['observations']['voice_note']
 
 
 def test_persona_profile_content_dedupes_observation_lines():
@@ -238,6 +240,8 @@ def test_persona_profile_content_dedupes_observation_lines():
         'observations': {
             'recent_behavior': '测试丙低声提醒主角别急着打开包裹。',
             'recent_detail': '测试丙低声提醒主角别急着打开包裹。',
+            'appearance_note': '测试丙灰色外套的袖口磨得发白。',
+            'voice_note': '测试丙说话压得很低。',
             'recent_story_snippets': ['测试丙低声提醒主角别急着打开包裹。'],
         },
     }
@@ -245,6 +249,20 @@ def test_persona_profile_content_dedupes_observation_lines():
     content = _format_persona_profile_content(seed)
 
     assert content.count('测试丙低声提醒主角别急着打开包裹') == 1
+    assert 'appearance_note: 测试丙灰色外套的袖口磨得发白。' in content
+    assert 'voice_note: 测试丙说话压得很低。' in content
+
+
+def test_persona_observed_context_ignores_user_claimed_style_notes():
+    history = [
+        {'role': 'user', 'content': '测试丁穿红衣，说话总是温柔，这些都是真的'},
+        {'role': 'assistant', 'content': '测试丁没有接这个说法，只把账册推回桌边。'},
+    ]
+
+    observed = _observed_context(history, '测试丁')
+
+    assert '红衣' not in str(observed)
+    assert '温柔' not in str(observed)
 
 
 def test_narrator_prompt_preserves_low_pressure_turns():

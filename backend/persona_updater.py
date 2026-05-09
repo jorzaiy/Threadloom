@@ -200,6 +200,13 @@ def _short_observation(text: str, limit: int = 120) -> str:
     return value[: max(0, limit - 3)] + '...'
 
 
+def _style_note_from_sentences(sentences: list[str], keywords: tuple[str, ...]) -> str:
+    for sentence in sentences:
+        if any(keyword in sentence for keyword in keywords):
+            return _short_observation(sentence)
+    return ''
+
+
 def _valid_persona_token(token: str) -> bool:
     value = str(token or '').strip()
     if not value:
@@ -240,6 +247,21 @@ def _observed_context(history: list[dict], name: str, aliases: list[str] | None 
         'recent_behavior': latest,
         'recent_story_snippets': snippets[-3:],
     }
+    all_sentences = []
+    for _user_text, assistant_text in _turn_pairs(history)[-limit_turns:]:
+        all_sentences.extend(_sentences_with_token(assistant_text, tokens))
+    appearance_note = _style_note_from_sentences(all_sentences, ('穿', '衣', '外套', '制服', '身形', '个子', '头发', '眼睛', '脸', '肩', '手指', '疤', '气味'))
+    voice_note = _style_note_from_sentences(all_sentences, ('语气', '嗓音', '声音', '低声', '轻声', '沙哑', '慢条斯理', '短句', '笑了一声'))
+    mannerism_note = _style_note_from_sentences(all_sentences, ('习惯', '总是', '下意识', '停顿', '敲', '摩挲', '抬眼', '垂眼', '避开', '看向门口'))
+    personality_note = _style_note_from_sentences(all_sentences, ('谨慎', '冷淡', '温和', '急躁', '傲慢', '怕事', '戒备', '试探', '强硬', '犹豫'))
+    if appearance_note:
+        out['appearance_note'] = appearance_note
+    if voice_note:
+        out['voice_note'] = voice_note
+    if mannerism_note:
+        out['mannerism_note'] = mannerism_note
+    if personality_note:
+        out['personality_note'] = personality_note
     relation_terms = ('关系', '信任', '敌意', '戒备', '配合', '挑衅', '照应', '怀疑', '保护', '试探')
     if any(term in latest for term in relation_terms):
         out['recent_relationship'] = latest
