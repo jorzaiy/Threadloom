@@ -192,7 +192,7 @@ def active_user_label() -> str:
 
 
 def set_active_character_override(character_id: str | None) -> Token[str | None]:
-    value = str(character_id or '').strip()
+    value = slugify(str(character_id or '').strip(), '')
     return _ACTIVE_CHARACTER_ID_OVERRIDE.set(value or None)
 
 
@@ -259,7 +259,8 @@ def user_config_root(user_id: str | None = None) -> Path:
 
 
 def character_root(character_id: str | None = None, user_id: str | None = None) -> Path:
-    return user_root(user_id) / 'characters' / (character_id or active_character_id())
+    safe_character_id = slugify(character_id, 'character') if character_id is not None else active_character_id()
+    return confine_to_user_root(user_root(user_id) / 'characters' / safe_character_id, user_id, label='character_id')
 
 
 def character_source_root(character_id: str | None = None, user_id: str | None = None) -> Path:
