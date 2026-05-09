@@ -23,7 +23,7 @@ CONTINUITY_INFO_PHRASE_RE = re.compile(r'^[一二三四五六七八九十百千�
 NON_PERSON_SUFFIXES = ('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '院', '厅', '阁', '府', '宫', '殿', '街', '巷', '亭', '轩', '井', '墙', '山')
 NON_PERSON_TOKENS = {
     '轻功', '自保', '一声', '规则', '结论', '现象', '世界', '逻辑', '认知', '交互', '概念', '目标', '问题', '决定',
-    '对话', '关系', '后续', '物理', '错误', '能力', '剧情', '局势', '线索', '风险', '客厅',
+    '对话', '关系', '后续', '物理', '错误', '能力', '剧情', '局势', '线索', '风险', '客厅', '时间', '空间', '答案',
 }
 LOW_QUALITY_SIGNAL_FRAGMENTS = (
     '惹了涂',
@@ -32,7 +32,7 @@ ABSTRACT_CONTINUITY_TOKENS = {
     '物理接触', '肢体接触', '身体接触', '接触', '互动', '机制', '系统', '面板', '提示', '规则', '判定', '反馈',
     '设定', '限制', '条件', '代价', '状态', '异常', '效果', '能力', '技能', '天赋', '特性', '权限', '接口',
     '流程', '步骤', '进度', '事件', '剧情', '关系', '概念', '逻辑', '认知', '现象', '目标', '问题', '风险',
-    '线索', '情报', '消息', '痕迹', '记忆', '意识', '情绪', '欲望', '冲动', '杀意', '敌意', '压力',
+    '线索', '情报', '消息', '痕迹', '记忆', '意识', '情绪', '欲望', '冲动', '杀意', '敌意', '压力', '时间', '空间', '答案',
 }
 ABSTRACT_CONTINUITY_PARTS = (
     '接触', '互动', '机制', '系统', '规则', '判定', '反馈', '设定', '限制', '条件', '状态', '效果', '能力',
@@ -276,6 +276,8 @@ def _looks_like_person_label(name: str) -> bool:
     text = sanitize_runtime_name(name)
     if not text or is_protagonist_name(text) or looks_like_bad_entity_fragment(text):
         return False
+    if text in NON_PERSON_TOKENS or _looks_like_abstract_continuity_name(text):
+        return False
     if len(text) > 16:
         return False
     if any(ch in text for ch in '，。！？：；、“”‘’【】[]（）()'):
@@ -302,6 +304,40 @@ def _person_action_evidence(name: str, text: str) -> bool:
         rf'{re.escape(label)}[^。！？\n]{{0,12}}(?:低声|沉声|扬声|拱手|皱眉|点头|摇头)',
     ]
     return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _current_turn_person_evidence_text(current: dict[str, Any]) -> str:
+    parts = []
+    for field in ('main_event', 'immediate_goal'):
+        value = str(current.get(field, '') or '').strip()
+        if value and value != '待确认':
+            parts.append(value)
+    for item in current.get('carryover_signals', []) or []:
+        if isinstance(item, dict):
+            parts.append(str(item.get('text', '') or ''))
+    parts.extend(str(item or '') for item in (current.get('immediate_risks', []) or []))
+    parts.extend(str(item or '') for item in (current.get('carryover_clues', []) or []))
+    return ' '.join(part for part in parts if part)
+
+
+def _has_current_turn_person_evidence(name: str, current: dict[str, Any]) -> bool:
+    label = sanitize_runtime_name(name)
+    if not label:
+        return False
+    text = _current_turn_person_evidence_text(current)
+    return bool(label in text or _person_action_evidence(label, text))
+
+
+def _needs_current_turn_person_evidence(name: str, current: dict[str, Any], prev: dict[str, Any]) -> bool:
+    if not _current_turn_person_evidence_text(current).strip():
+        return False
+    label = sanitize_runtime_name(name)
+    if not label:
+        return False
+    actor_names = _actor_name_pool(current, prev)
+    important_names = _important_name_pool(current.get('important_npcs', prev.get('important_npcs', []))) | _important_name_pool(prev.get('important_npcs', []))
+    hint_names = _continuity_hint_name_pool(current.get('continuity_hints', prev.get('continuity_hints', []))) | _continuity_hint_name_pool(prev.get('continuity_hints', []))
+    return label in actor_names or label in important_names or label in hint_names
 
 
 def _role_has_person_evidence(role_label: str) -> bool:
@@ -400,6 +436,22 @@ def _filter_person_names_with_evidence(names: Iterable[str], current: dict[str, 
     return out
 
 
+def _filter_onstage_names_with_current_evidence(names: Iterable[str], current: dict[str, Any], prev: dict[str, Any], *, limit: int = 6) -> list[str]:
+    out: list[str] = []
+    for raw in names or []:
+        name = sanitize_runtime_name(raw)
+        if not name or name in out:
+            continue
+        if not _has_positive_person_evidence(name, None, current, prev):
+            continue
+        if _needs_current_turn_person_evidence(name, current, prev) and not _has_current_turn_person_evidence(name, current):
+            continue
+        out.append(name)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _filter_scene_entities_with_person_evidence(entities: list[dict[str, Any]], current: dict[str, Any], prev: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for item in entities or []:
@@ -407,6 +459,8 @@ def _filter_scene_entities_with_person_evidence(entities: list[dict[str, Any]], 
             continue
         primary = sanitize_runtime_name(item.get('primary_label', ''))
         if not _has_positive_person_evidence(primary, item, current, prev):
+            continue
+        if bool(item.get('onstage')) and _needs_current_turn_person_evidence(primary, current, prev) and not _has_current_turn_person_evidence(primary, current):
             continue
         next_item = dict(item)
         aliases = []
@@ -472,6 +526,7 @@ def normalize_carryover_signals(items) -> list[dict]:
         text = _clean_signal_text(text)
         if _looks_like_bad_signal_text(text):
             continue
+        signal_type = _normalize_signal_type(signal_type, text)
         key = (signal_type, text)
         if key in seen:
             continue
@@ -480,6 +535,29 @@ def normalize_carryover_signals(items) -> list[dict]:
         if len(out) >= 6:
             break
     return out
+
+
+HARD_RISK_TOKENS = (
+    '暴露', '危险', '威胁', '攻击', '追击', '追捕', '抓捕', '逮捕', '拦截', '围堵', '围攻', '封锁',
+    '受伤', '重伤', '死亡', '杀', '灭口', '失控', '失败', '惩罚', '超时', '倒计时', '被发现', '被抓',
+)
+
+WEAK_SIGNAL_TOKENS = (
+    '注意到', '看见', '看到', '听见', '发现', '开启', '进入', '离开', '停留', '扫视', '注视', '握拳',
+    '松开', '异常', '痕迹', '查过', '翻动', '移动', '方向改变', '名单', '资料', '档案',
+)
+
+
+def _normalize_signal_type(signal_type: str, text: str) -> str:
+    kind = signal_type if signal_type in {'risk', 'clue', 'mixed'} else 'mixed'
+    value = str(text or '')
+    if kind != 'risk':
+        return kind
+    if any(token in value for token in HARD_RISK_TOKENS):
+        return 'risk'
+    if any(token in value for token in WEAK_SIGNAL_TOKENS):
+        return 'clue'
+    return 'risk'
 
 
 def derive_risks_clues_from_signals(items: list[dict]) -> tuple[list[str], list[str]]:
@@ -1729,6 +1807,65 @@ def _normalize_resolved_signals(value) -> list[str]:
     return out
 
 
+def coarsen_current_time(value: str) -> str:
+    text = ' '.join(str(value or '').split()).strip()
+    if not text or text == '待确认':
+        return text
+    ordered_markers = (
+        ('凌晨', '凌晨'),
+        ('清晨', '清晨'),
+        ('早晨', '清晨'),
+        ('一早', '清晨'),
+        ('上午', '上午'),
+        ('中午', '中午'),
+        ('正午', '中午'),
+        ('午后', '下午'),
+        ('下午', '下午'),
+        ('傍晚', '傍晚'),
+        ('黄昏', '傍晚'),
+        ('晚上', '晚上'),
+        ('夜里', '夜里'),
+        ('夜晚', '夜里'),
+        ('深夜', '深夜'),
+        ('子夜', '深夜'),
+        ('半夜', '深夜'),
+    )
+    for marker, coarse in ordered_markers:
+        if marker in text:
+            return coarse
+    match = re.search(r'(?:^|[^\d])([01]?\d|2[0-3])\s*(?:点|时)', text)
+    hour: int | None = int(match.group(1)) if match else None
+    if hour is None:
+        chinese_hours = {
+            '零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6,
+            '七': 7, '八': 8, '九': 9, '十': 10, '十一': 11, '十二': 12,
+        }
+        chinese_match = re.search(r'(凌晨|清晨|早晨|上午|中午|下午|傍晚|晚上|夜里|深夜)?([零一二两三四五六七八九十]{1,3})\s*(?:点|时)', text)
+        if chinese_match:
+            raw_hour = chinese_match.group(2)
+            hour = chinese_hours.get(raw_hour)
+            prefix = chinese_match.group(1) or ''
+            if hour is not None and prefix in {'下午', '傍晚', '晚上', '夜里'} and hour <= 12:
+                hour += 12
+    if hour is None:
+        return text
+    if 0 <= hour < 5:
+        return '凌晨'
+    if 5 <= hour < 8:
+        return '清晨'
+    if 8 <= hour < 11:
+        return '上午'
+    if 11 <= hour < 13:
+        return '中午'
+    if 13 <= hour < 18:
+        return '下午'
+    if 18 <= hour < 20:
+        return '傍晚'
+    if 20 <= hour < 23:
+        return '晚上'
+    return '深夜'
+
+
 def _signal_matches_resolved(signal_text: str, resolved_text: str) -> bool:
     left = _clean_signal_text(signal_text)
     right = _clean_signal_text(resolved_text)
@@ -1814,6 +1951,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             current[key] = prev.get(key, '待确认')
         else:
             current[key] = value.strip()
+    current['time'] = coarsen_current_time(current.get('time', '')) or current.get('time', '待确认')
 
     for key in ['main_event', 'immediate_goal']:
         if _looks_like_fragmentary_core_value(current.get(key, ''), key):
@@ -2064,9 +2202,9 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     current['scene_entities'] = _filter_scene_entities_with_person_evidence(current.get('scene_entities', []), current, prev)
     entity_onstage_names = _derive_names_from_scene_entities(current.get('scene_entities', []), onstage_only=True)
     if entity_onstage_names:
-        current['onstage_npcs'] = _filter_person_names_with_evidence(entity_onstage_names, current, prev, limit=6)
+        current['onstage_npcs'] = _filter_onstage_names_with_current_evidence(entity_onstage_names, current, prev, limit=6)
     else:
-        current['onstage_npcs'] = _filter_person_names_with_evidence(current.get('onstage_npcs', []), current, prev, limit=6)
+        current['onstage_npcs'] = _filter_onstage_names_with_current_evidence(current.get('onstage_npcs', []), current, prev, limit=6)
     arbiter_signals = current.get('arbiter_signals', {})
     if not isinstance(arbiter_signals, dict):
         arbiter_signals = {}

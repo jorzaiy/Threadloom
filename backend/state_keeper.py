@@ -15,7 +15,7 @@ try:
     from .llm_manager import call_role_llm
     from .local_model_client import parse_json_response
     from .runtime_store import load_state, seed_default_state
-    from .state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
+    from .state_bridge import coarsen_current_time, derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
     from .state_bridge import _merge_knowledge_scope as merge_knowledge_scope_delta
     from .model_config import load_runtime_config
     from .state_fragment import build_state_from_fragment
@@ -30,7 +30,7 @@ except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
     from runtime_store import load_state, seed_default_state
-    from state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
+    from state_bridge import coarsen_current_time, derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
     from state_bridge import _merge_knowledge_scope as merge_knowledge_scope_delta
     from model_config import load_runtime_config
     from state_fragment import build_state_from_fragment
@@ -118,9 +118,10 @@ time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架�
   要求：
   - 只保留真正会延续到下一轮或后续几轮的信号
   - `text` 控制在 30 字以内，不要抄原文长句，不要半句 prose
-  - `type=risk`：更偏下一轮可能直接改变行动、暴露身份、升级冲突或造成失控后果的现场压力；预约、背景悬念、已排定但尚未临近的事项不要写成 risk
-  - `type=clue`：更偏情报、身份、物件、动机、线索
-  - `type=mixed`：同时兼具线索与风险，不必硬分
+  - `type=risk`：只用于下一轮或接下来1-2轮内可能直接约束行动、暴露身份、升级冲突、造成伤害/惩罚/失控后果的现场压力。
+  - `type=clue`：更偏情报、身份、物件、动机、线索、可疑动作、环境痕迹、远处动向、待验证观察。
+  - `type=mixed`：同时具备明确线索价值和临近现场后果时才使用，不要把普通紧张感写成 mixed。
+  - 预约、背景悬念、模糊不安、NPC 情绪/姿态、远处有人移动、尚未临近的事项、只说明“有人看见/注意到/查过/打开某处”的观察，默认写 clue，不要写成 risk。
   好的例子：
     - {"type":"risk","text":"门外守卫开始排查同行者"}
     - {"type":"clue","text":"陌生人反复追问遗失文件"}
@@ -181,7 +182,7 @@ SKELETON_KEEPER_SYSTEM = """你是 RP 最小骨架状态提取器，从叙事正
 禁止输出其他字段。
 
 各字段要求：
-- time：提取正文中明确出现的时间信息（日期、钟点、时段）。只提取文本中实际出现的，不要推测。
+- time：只提取当前场景的粗时段，如清晨、上午、中午、下午、傍晚、晚上、夜里。正文里出现的具体钟点若只是当前时间戳，必须收敛为粗时段；具体钟点只作为预约、截止、倒计时或课程安排保留在 main_event / immediate_goal / carryover_signals，不要写进 time。
 - location：提取主角当前所在的具体场景。格式简洁，如"城市东门·茶摊旁"或"空间站下层维修廊"。不要复制长句。
 - main_event：用一句话概括本轮叙事的核心事件。要求：描述"谁做了什么"或"发生了什么"，优先写主角当前正在参与的互动；旁观者、监督者、提及者只有实际干预本轮动作时才作为核心人物。不要用模糊标签（如"训练考核""同行安排""当前互动"）。
   好的例子："主角在3000米跑中故意掉速观察教官反应"、"实验体在地下实验室中突然失控"。
@@ -194,6 +195,7 @@ SKELETON_KEEPER_SYSTEM = """你是 RP 最小骨架状态提取器，从叙事正
 
 若不确定，字符串字段写"待确认"，数组字段写空数组。
 不要重新命名稳定人物；优先沿用输入中的结构化状态锚点。
+当前 time 只保留粗时段；精确钟点属于剧情约束，不属于滚动当前时间。
 """
 
 
@@ -201,6 +203,8 @@ def _slim_state_for_model(state: dict) -> dict:
     out = {}
     for field in ('time', 'location', 'main_event', 'immediate_goal'):
         value = str(state.get(field, '') or '').strip()
+        if field == 'time':
+            value = coarsen_current_time(value)
         if value:
             out[field] = value
     for field in ('onstage_npcs', 'relevant_npcs', 'immediate_risks', 'carryover_clues'):
@@ -268,14 +272,14 @@ def skeleton_keeper_enabled() -> bool:
 
 def _skeleton_user_prompt(prev_state: dict, state_fragment: dict, narrator_reply: str) -> str:
     prev_min = {
-        'time': str(prev_state.get('time', '') or '').strip(),
+        'time': coarsen_current_time(str(prev_state.get('time', '') or '').strip()),
         'location': str(prev_state.get('location', '') or '').strip(),
         'main_event': str(prev_state.get('main_event', '') or '').strip(),
         'immediate_goal': str(prev_state.get('immediate_goal', '') or '').strip(),
         'onstage_npcs': [str(item).strip() for item in (prev_state.get('onstage_npcs', []) or []) if str(item).strip()][:3],
     }
     fragment_min = {
-        'time': str(state_fragment.get('time', '') or '').strip(),
+        'time': coarsen_current_time(str(state_fragment.get('time', '') or '').strip()),
         'location': str(state_fragment.get('location', '') or '').strip(),
         'main_event': str(state_fragment.get('main_event', '') or '').strip(),
         'immediate_goal': str(state_fragment.get('immediate_goal', '') or '').strip(),
@@ -290,7 +294,7 @@ def _skeleton_user_prompt(prev_state: dict, state_fragment: dict, narrator_reply
 本轮叙事正文：
 {narrator_reply}
 
-请只输出最小骨架 JSON。"""
+请只输出最小骨架 JSON。time 只能输出粗时段；若正文里有预约/截止的具体钟点，把它留给 main_event 或 immediate_goal，不要放进 time。"""
 
 
 def _fill_user_prompt(baseline_state: dict, narrator_reply: str, user_text: str = '') -> str:
@@ -1452,6 +1456,16 @@ def _useful_entity_count(payload: dict) -> int:
     return count
 
 
+def _has_scene_shift(payload: dict, prev_state: dict) -> bool:
+    changed = 0
+    for field in ('location', 'main_event'):
+        current = _clean_text(str(payload.get(field, '') or ''))
+        previous = _clean_text(str(prev_state.get(field, '') or ''))
+        if current and previous and current != previous and not _has_low_signal(current):
+            changed += 1
+    return changed >= 1
+
+
 def _validate_against_prev_state(payload: dict, prev_state: dict) -> None:
     prev_state = prev_state or {}
     useful_now = _useful_string_count(payload) + _useful_list_count(payload) + _useful_entity_count(payload)
@@ -1464,7 +1478,7 @@ def _validate_against_prev_state(payload: dict, prev_state: dict) -> None:
 
     prev_onstage = set(prev_state.get('onstage_npcs', []) or [])
     next_onstage = set(payload.get('onstage_npcs', []) or [])
-    if prev_onstage and not next_onstage and _useful_entity_count(payload) == 0:
+    if prev_onstage and not next_onstage and _useful_entity_count(payload) == 0 and not _has_scene_shift(payload, prev_state):
         raise ValueError('state payload dropped all onstage entities without replacement')
 
 

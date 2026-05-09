@@ -6,10 +6,12 @@ import re
 
 try:
     from .arbiter_state import merge_arbiter_state
+    from .state_bridge import coarsen_current_time
     from .state_bridge import normalize_text_list
     from .state_bridge import normalize_state_dict
 except ImportError:
     from arbiter_state import merge_arbiter_state
+    from state_bridge import coarsen_current_time
     from state_bridge import normalize_text_list
     from state_bridge import normalize_state_dict
 
@@ -84,6 +86,7 @@ def build_state_fragment(prev_state: dict, scene_facts: dict, user_text: str = '
     }
 
     merged = merge_arbiter_state(base, arbiter) if arbiter else base
+    arbiter_results = arbiter.get('results', []) if isinstance(arbiter, dict) else []
     fragment = {
         'time': merged.get('time', '待确认'),
         'location': merged.get('location', '待确认'),
@@ -104,7 +107,7 @@ def build_state_fragment(prev_state: dict, scene_facts: dict, user_text: str = '
                 'result': str(item.get('result', 'unknown') or 'unknown'),
                 'dice_needed': bool(item.get('dice_needed')),
             }
-            for item in (arbiter.get('results', []) or [])
+            for item in (arbiter_results or [])
             if isinstance(item, dict)
         ],
     }
@@ -149,12 +152,12 @@ def extract_reply_skeleton(narrator_reply: str) -> dict:
         body = (text[:header_match.start()] + text[header_match.end():]).strip()
         parts = [part.strip() for part in re.split(r'[，,、]', header) if part.strip()]
         if len(parts) >= 2:
-            skeleton['time'] = parts[0]
+            skeleton['time'] = coarsen_current_time(parts[0])
             skeleton['location'] = parts[-1]
         elif parts:
             token = parts[0]
             if any(marker in token for marker in ('晨', '早', '午', '暮', '夜', '更', '黄昏', '黎明', '天明')):
-                skeleton['time'] = token
+                skeleton['time'] = coarsen_current_time(token)
             else:
                 skeleton['location'] = token
 

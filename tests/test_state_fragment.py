@@ -19,6 +19,7 @@ from backend.state_keeper import _call_state_keeper_llm, _merge_keeper_fill, _pa
 from backend.state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, normalize_carryover_signals, normalize_keeper_object_label
 from backend.handler_message import _add_lightweight_knowledge_delta, _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _store_turn_audit
 from backend.summary_chunks import _fallback_chunk, _normalize_chunk
+from backend.memory_maintenance import actor_alias_map, canonicalize_event_summaries, canonicalize_state_memory, resolve_stale_state_threads
 
 
 class StateFragmentTest(unittest.TestCase):
@@ -44,8 +45,126 @@ class StateFragmentTest(unittest.TestCase):
             ['纸封未拆', '掌柜仍在隐瞒账册'],
         ))
 
+    def test_signal_normalization_demotes_weak_observation_risk_to_clue(self):
+        signals = normalize_carryover_signals([
+            {'type': 'risk', 'text': '某人握拳又松开'},
+            {'type': 'risk', 'text': '追捕者即将发现主角'},
+        ])
+
+        self.assertEqual(signals[0], {'type': 'clue', 'text': '某人握拳又松开'})
+        self.assertEqual(signals[1], {'type': 'risk', 'text': '追捕者即将发现主角'})
+
     def test_state_keeper_returns_state_but_does_not_own_persistence(self):
         self.assertFalse(hasattr(state_keeper, 'save_state'))
+
+    def test_memory_maintenance_canonicalizes_actor_alias_layers(self):
+        state = {
+            'actors': {
+                'npc_005': {
+                    'actor_id': 'npc_005',
+                    'kind': 'npc',
+                    'name': '秦野',
+                    'aliases': ['剃寸头的高个子学员'],
+                },
+            },
+            'onstage_npcs': ['剃寸头的高个子学员'],
+            'relevant_npcs': ['剃寸头的高个子学员'],
+            'scene_entities': [{'primary_label': '剃寸头的高个子学员', 'aliases': ['剃寸头的高个子学员'], 'onstage': True}],
+            'active_threads': [{'thread_id': 'thread_01', 'actors': ['剃寸头的高个子学员']}],
+            'possession_state': [{'object_id': 'folder', 'holder': '剃寸头的高个子学员'}],
+            'object_visibility': [{'object_id': 'folder', 'known_to': ['剃寸头的高个子学员']}],
+            'knowledge_scope': {'npc_local': {'剃寸头的高个子学员': {'learned': ['陆小环昨晚十一点半睡']}, '秦野': {'learned': ['自己的笔记本已被封存']}}},
+        }
+
+        repaired, changes = canonicalize_state_memory(state)
+
+        self.assertTrue(changes)
+        self.assertEqual(repaired['onstage_npcs'], ['秦野'])
+        self.assertEqual(repaired['relevant_npcs'], ['秦野'])
+        self.assertEqual(repaired['scene_entities'][0]['primary_label'], '秦野')
+        self.assertEqual(repaired['scene_entities'][0]['possible_link'], 'npc_005')
+        self.assertEqual(repaired['active_threads'][0]['actors'], ['秦野'])
+        self.assertEqual(repaired['possession_state'][0]['holder_actor_id'], 'npc_005')
+        self.assertEqual(repaired['object_visibility'][0]['known_to_actor_ids'], ['npc_005'])
+        self.assertEqual(repaired['knowledge_scope']['npc_local']['秦野']['learned'], ['陆小环昨晚十一点半睡', '自己的笔记本已被封存'])
+
+    def test_memory_maintenance_resolves_waiting_risk_when_actor_onstage(self):
+        state = {
+            'onstage_npcs': ['秦野'],
+            'immediate_risks': ['秦野仍在门外等待。', '技术部镜像仍未完成。'],
+            'carryover_signals': [{'type': 'risk', 'text': '秦野仍在门外等待'}, {'type': 'risk', 'text': '技术部镜像仍未完成'}],
+            'active_threads': [
+                {'thread_id': 'thread_01', 'label': '秦野仍在门外等待', 'goal': '避免失控', 'obstacle': '秦野仍在门外等待'},
+                {'thread_id': 'thread_02', 'label': '技术部镜像仍未完成', 'goal': '等待镜像', 'obstacle': '镜像耗时'},
+            ],
+        }
+
+        repaired, changes = resolve_stale_state_threads(state)
+
+        self.assertTrue(any(item['action'] == 'resolve_stale_thread' for item in changes))
+        self.assertEqual(repaired['immediate_risks'], ['技术部镜像仍未完成。'])
+        self.assertEqual(repaired['carryover_signals'], [{'type': 'risk', 'text': '技术部镜像仍未完成'}])
+        self.assertEqual([item['thread_id'] for item in repaired['active_threads']], ['thread_02'])
+        self.assertEqual(repaired['resolved_events'][0]['resolved_reason'], 'actor_now_onstage')
+
+    def test_memory_maintenance_persists_stale_thread_obstacle_clear_without_removal(self):
+        state = {
+            'onstage_npcs': ['秦野'],
+            'active_threads': [
+                {'thread_id': 'thread_01', 'kind': 'main', 'label': '追查笔记本', 'goal': '读取芯片', 'obstacle': '秦野仍在门外等待'},
+            ],
+        }
+
+        repaired, changes = resolve_stale_state_threads(state)
+
+        self.assertTrue(any(item['action'] == 'clear_stale_thread_obstacle' for item in changes))
+        self.assertEqual(repaired['active_threads'][0]['obstacle'], '')
+
+    def test_memory_maintenance_skips_conflicting_actor_aliases(self):
+        state = {
+            'actors': {
+                'npc_001': {'kind': 'npc', 'name': '秦野', 'aliases': ['学员']},
+                'npc_002': {'kind': 'npc', 'name': '赵明', 'aliases': ['学员', '秦野']},
+            },
+        }
+
+        mapping = actor_alias_map(state)
+
+        self.assertNotIn('学员', mapping)
+        self.assertEqual(mapping['秦野'], '秦野')
+        self.assertEqual(mapping['赵明'], '赵明')
+
+    def test_memory_maintenance_canonicalizes_event_summary_actors(self):
+        payload = {'version': 1, 'items': [{'event_id': 'evt_0001', 'actors': ['剃寸头的高个子学员', '维克托·奥古斯特']}]} 
+
+        repaired, changes = canonicalize_event_summaries(payload, {'剃寸头的高个子学员': '秦野', '秦野': '秦野'})
+
+        self.assertTrue(changes)
+        self.assertEqual(repaired['items'][0]['actors'], ['秦野', '维克托·奥古斯特'])
+
+    def test_actor_registry_binds_revealed_name_to_local_descriptive_actor(self):
+        state = {
+            'actors': {
+                'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '严教官', 'aliases': [], 'identity': '教官'},
+                'npc_002': {'actor_id': 'npc_002', 'kind': 'npc', 'name': '矮壮的学员', 'aliases': [], 'appearance': '矮壮', 'identity': '学员'},
+            },
+        }
+        narrator_reply = '矮壮的学员把课本翻开，扉页贴着“李明 / 青年部一班”。严教官在远处继续训话。严教官又点了一次名。'
+
+        updated = update_actor_registry(state, narrator_reply=narrator_reply, turn_number=3, use_llm=False)
+
+        self.assertEqual(updated['actors']['npc_002']['name'], '李明')
+        self.assertIn('矮壮的学员', updated['actors']['npc_002']['aliases'])
+        self.assertNotIn('李明', updated['actors']['npc_001']['aliases'])
+
+    def test_actor_registry_rejects_abstract_topic_candidate(self):
+        state = {}
+        with patch('backend.actor_registry._extract_actor_candidates_with_llm', return_value=([
+            {'name': '时间', 'aliases': ['时间栏', '时间盲区'], 'personality': '', 'appearance': '瘦高', 'identity': '学员'},
+        ], {}, None)):
+            updated = update_actor_registry(state, narrator_reply='老师讲解时间栏。', turn_number=1, use_llm=True)
+
+        self.assertNotIn('npc_001', updated['actors'])
 
 
     def test_normalize_state_does_not_inherit_stale_arbiter_signals(self):
@@ -64,6 +183,38 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertEqual(normalized['arbiter_signals'], {})
 
+    def test_normalize_state_does_not_keep_absent_actor_onstage_from_registry_only(self):
+        prev = {
+            'actors': {
+                'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '维克托', 'aliases': ['教官']},
+            },
+        }
+        current = {
+            'time': '上午',
+            'location': '庭院树下',
+            'main_event': '主角在树下坐着看书。',
+            'immediate_goal': '继续休息看书。',
+            'scene_entities': [{'entity_id': 'scene_npc_01', 'primary_label': '维克托', 'aliases': ['教官'], 'role_label': '教官', 'onstage': True}],
+            'onstage_npcs': ['维克托'],
+        }
+
+        normalized = normalize_state_dict(current, prev_state=prev)
+
+        self.assertEqual(normalized['onstage_npcs'], [])
+        self.assertEqual(normalized['scene_entities'], [])
+
+    def test_normalize_state_rejects_abstract_scene_entity_as_person(self):
+        normalized = normalize_state_dict({
+            'time': '上午',
+            'location': '教室',
+            'main_event': '老师讲解时间栏和时间盲区。',
+            'scene_entities': [{'entity_id': 'scene_npc_01', 'primary_label': '时间', 'aliases': ['时间栏'], 'role_label': '学员', 'onstage': True}],
+            'onstage_npcs': ['时间'],
+        })
+
+        self.assertEqual(normalized['onstage_npcs'], [])
+        self.assertEqual(normalized['scene_entities'], [])
+
     def test_merge_arbiter_state_clears_signals_when_not_needed(self):
         state = {
             'immediate_risks': ['当前潜行或压低动静的动作存在暴露风险。', '年轻男子伤势仍需看护。'],
@@ -80,6 +231,25 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(merged['immediate_risks'], ['年轻男子伤势仍需看护。'])
         self.assertEqual(merged['carryover_clues'], ['纸封是围杀关键物证。'])
 
+    def test_arbiter_stealth_signal_is_clue_not_immediate_risk(self):
+        merged = merge_arbiter_state({}, {
+            'arbiter_needed': True,
+            'results': [{'event_id': 'event-stealth-001', 'result': 'stealth_risk_needs_resolution', 'dice_needed': True}],
+        })
+
+        self.assertEqual(merged['immediate_risks'], [])
+        self.assertEqual(merged['carryover_clues'], ['压低动静或隐蔽行动是否引起注意，仍需在后续回合继续确认。'])
+
+    def test_turn_analyzer_does_not_escalate_quiet_reading_as_stealth(self):
+        from backend.turn_analyzer import _heuristic_analysis
+
+        analysis = _heuristic_analysis(
+            '找了个隐蔽的阴凉位置坐下看书',
+            {'location': '庭院绿化带', 'main_event': '主角在树下休息'},
+        )
+
+        self.assertLess(analysis['trigger_scores']['stealth'], 3)
+
     def test_extract_reply_skeleton_uses_scene_header_and_first_sentence(self):
         reply = '【清早，医馆门前】\n\n陆小环拎着医箱跨过门槛，扬声招呼东家。\n\n屋里药气未散。'
 
@@ -88,6 +258,14 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(skeleton['time'], '清早')
         self.assertEqual(skeleton['location'], '医馆门前')
         self.assertEqual(skeleton['main_event'], '陆小环拎着医箱跨过门槛，扬声招呼东家。')
+
+    def test_extract_reply_skeleton_coarsens_precise_header_time(self):
+        reply = '【2026年9月14日 上午九点三十二分，鹰巢教室】\n\n陆小环把资料塞进背包，准备下午两点去E栋。'
+
+        skeleton = extract_reply_skeleton(reply)
+
+        self.assertEqual(skeleton['time'], '上午')
+        self.assertEqual(skeleton['location'], '鹰巢教室')
 
     def test_merge_reply_skeleton_advances_stale_fragment_without_llm(self):
         fragment = {
@@ -103,6 +281,20 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(merged['time'], '清早')
         self.assertEqual(merged['location'], '医馆门前')
         self.assertEqual(merged['main_event'], '陆小环拎着医箱跨过门槛，声音先一步进了屋。')
+
+    def test_normalize_state_coarsens_current_time_but_preserves_deadline_goal(self):
+        state = {
+            'time': '2026年9月14日 上午九点三十二分',
+            'location': '鹰巢教室',
+            'main_event': '维克托命令陆小环等待镜像完成。',
+            'immediate_goal': '准备下午两点前往E栋地下一层。',
+            'onstage_npcs': [],
+        }
+
+        normalized = normalize_state_dict(state)
+
+        self.assertEqual(normalized['time'], '上午')
+        self.assertEqual(normalized['immediate_goal'], '准备下午两点前往E栋地下一层。')
 
     def test_state_keeper_llm_retries_once_on_empty_output(self):
         usage = {'model': 'test-model', 'finish_reason': 'stop'}
@@ -1209,12 +1401,19 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['active_threads'][0]['actors'], ['秦野'])
 
     def test_keeper_prompts_keep_core_fields_scene_focused(self):
-        self.assertIn('下一轮可能直接改变行动', state_keeper.STATE_KEEPER_FILL_SYSTEM)
+        from backend.narrator_input import build_narrator_input
+
+        self.assertIn('接下来1-2轮内可能直接约束行动', state_keeper.STATE_KEEPER_FILL_SYSTEM)
         self.assertIn('预约、背景悬念', state_keeper.STATE_KEEPER_FILL_SYSTEM)
+        self.assertIn('默认写 clue，不要写成 risk', state_keeper.STATE_KEEPER_FILL_SYSTEM)
         self.assertIn('优先写主角当前正在参与的互动', state_keeper.SKELETON_KEEPER_SYSTEM)
+        self.assertIn('粗时段', state_keeper.SKELETON_KEEPER_SYSTEM)
         self.assertIn('旁观者、监督者、提及者', state_keeper.SKELETON_KEEPER_SYSTEM)
         self.assertIn('必须站在主角视角', state_keeper.SKELETON_KEEPER_SYSTEM)
         self.assertIn('不要写 NPC 的目标', state_keeper.SKELETON_KEEPER_SYSTEM)
+        system_prompt, _user_prompt = build_narrator_input({'scene_facts': {}, 'active_preset': {}}, '继续')
+        self.assertIn('当前时间”默认只写粗时段', system_prompt)
+        self.assertIn('精确钟点只用于剧情内已经明确存在的预约', system_prompt)
 
     def test_lightweight_knowledge_delta_records_visible_object_possession(self):
         state = {
