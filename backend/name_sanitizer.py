@@ -84,6 +84,18 @@ VAGUE_ENTITY_FRAGMENTS = {
     '这几个', '那几个', '几个', '一些', '一群', '一帮',
 }
 
+ABSTRACT_ENTITY_FRAGMENTS = {
+    '时间', '空间', '规则', '概念', '逻辑', '关系', '事件', '问题', '目标', '答案', '线索', '风险',
+    '情报', '记忆', '意识', '状态', '流程', '步骤', '进度', '盲区', '栏目', '标题', '课题', '题目',
+}
+
+ABSTRACT_ENTITY_PARTS = ('时间', '空间', '规则', '概念', '逻辑', '事件', '线索', '风险', '盲区', '栏目')
+
+PERSON_ENTITY_SUFFIXES = (
+    '人', '男人', '女人', '女子', '青年', '少年', '老者', '壮汉', '男生', '女生', '学员', '新生',
+    '教官', '助教', '老师', '教员', '先生', '小姐', '女士', '夫人', '长官', '队长', '主管',
+)
+
 PROSE_ENTITY_PREFIXES = (
     '说是', '据说', '听说', '本以为', '谁知', '这里', '那里', '刚才', '昨夜', '今晨',
 )
@@ -97,6 +109,12 @@ def looks_like_bad_entity_fragment(item) -> bool:
     if looks_like_modifier_fragment(text):
         return True
     if text in VAGUE_ENTITY_FRAGMENTS:
+        return True
+    if text in ABSTRACT_ENTITY_FRAGMENTS:
+        return True
+    if any(text.endswith(suffix) for suffix in ('栏', '栏位', '栏目', '盲区', '概念', '规则', '逻辑', '问题', '答案', '题目', '课题')):
+        return True
+    if any(part in text for part in ABSTRACT_ENTITY_PARTS) and not any(suffix in text for suffix in PERSON_ENTITY_SUFFIXES):
         return True
     if text.startswith(PROSE_ENTITY_PREFIXES):
         return True

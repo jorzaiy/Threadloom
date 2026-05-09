@@ -255,11 +255,29 @@ NON_ALIAS_CONTAINS = (
 )
 
 NON_ALIAS_PREFIXES = ('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着', '低声', '继续')
+ABSTRACT_ACTOR_TOKENS = {
+    '时间', '空间', '规则', '概念', '逻辑', '关系', '事件', '问题', '目标', '答案', '线索', '风险',
+    '情报', '记忆', '意识', '状态', '流程', '步骤', '进度', '盲区', '栏目', '标题', '课题', '题目',
+}
+ABSTRACT_ACTOR_PARTS = ('时间', '空间', '规则', '概念', '逻辑', '事件', '线索', '风险', '盲区', '栏目')
+
+
+def _looks_like_abstract_actor_name(value: str) -> bool:
+    name = sanitize_runtime_name(value)
+    if not name:
+        return True
+    if name in ABSTRACT_ACTOR_TOKENS:
+        return True
+    if any(name.endswith(suffix) for suffix in ('栏', '栏位', '栏目', '盲区', '概念', '规则', '逻辑', '问题', '答案', '题目', '课题')):
+        return True
+    return sum(1 for part in ABSTRACT_ACTOR_PARTS if part in name) >= 1 and not any(suffix in name for suffix in PERSON_ALIAS_SUFFIXES)
 
 
 def _looks_like_person_alias(value: str) -> bool:
     name = sanitize_runtime_name(value)
     if not name or name in NON_NAME_DIALOGUE or is_protagonist_name(name) or looks_like_bad_entity_fragment(name):
+        return False
+    if _looks_like_abstract_actor_name(name):
         return False
     if any(ch.isdigit() for ch in name):
         return False
@@ -363,6 +381,8 @@ def _extract_name_reveals(text: str) -> list[dict]:
     for match in re.finditer(r'["“](?P<quoted>[^"”]{1,16})["”]', value):
         quoted = str(match.group('quoted') or '').strip().strip('。！？!?，,')
         candidates = [quoted]
+        if '/' in quoted or '／' in quoted:
+            candidates.append(re.split(r'[/／]', quoted, maxsplit=1)[0])
         if '姓' in quoted:
             candidates = []
             continue
@@ -372,7 +392,7 @@ def _extract_name_reveals(text: str) -> list[dict]:
             name = _clean_revealed_name(candidate)
             if not _looks_like_revealed_name(name):
                 continue
-            before = value[max(0, match.start() - 900):match.start()]
+            before = value[max(0, match.start() - 220):match.start()]
             after = value[match.end():min(len(value), match.end() + 120)]
             surname = name[:1]
             surname_match = bool(re.search(rf'["“]姓{re.escape(surname)}[。！？!?]?["”]', before[-160:]))
@@ -400,7 +420,7 @@ def _generic_actor_terms(actor: dict) -> set[str]:
     return {term for term in terms if term}
 
 
-def _actor_reveal_score(actor: dict, reveal: dict, haystack: str) -> int:
+def _actor_reveal_score(actor: dict, reveal: dict, _haystack: str) -> int:
     if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
         return 0
     if _actor_name_matches(actor, str(reveal.get('name', '') or '')):
@@ -411,16 +431,28 @@ def _actor_reveal_score(actor: dict, reveal: dict, haystack: str) -> int:
     window = str(reveal.get('window', '') or '')
     score = 0
     for term in terms:
-        if term and term in haystack:
-            score += 1
         if term and term in window:
             score += 2
     actor_name = _actor_name(actor)
-    if actor_name and actor_name in haystack:
+    if actor_name and actor_name in window:
         score += 3
     if reveal.get('surname_match'):
         score += 2
     return score
+
+
+def _reveal_actor_distance(actor: dict, reveal: dict) -> int:
+    window = str(reveal.get('window', '') or '')
+    if not window:
+        return 10**9
+    positions = []
+    for term in _generic_actor_terms(actor) | _actor_names(actor):
+        if not term:
+            continue
+        idx = window.find(term)
+        if idx >= 0:
+            positions.append(idx)
+    return min(positions) if positions else 10**9
 
 
 def _upsert_revealed_actor_aliases(actors: dict, narrator_reply: str) -> list[dict]:
@@ -437,13 +469,13 @@ def _upsert_revealed_actor_aliases(actors: dict, narrator_reply: str) -> list[di
         for actor_id, actor in actors.items():
             score = _actor_reveal_score(actor, reveal, haystack)
             if score > 0:
-                scored.append((score, str(actor_id), actor))
+                scored.append((score, _reveal_actor_distance(actor, reveal), str(actor_id), actor))
         if not scored:
             continue
-        scored.sort(key=lambda item: item[0], reverse=True)
-        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        if len(scored) > 1 and scored[0][0] == scored[1][0] and scored[0][1] == scored[1][1]:
             continue
-        score, actor_id, actor = scored[0]
+        score, _distance, actor_id, actor = scored[0]
         if score < 4:
             continue
         actor_name = _actor_name(actor)
@@ -466,6 +498,8 @@ def _valid_actor_candidate(item: dict) -> dict | None:
         return None
     name = sanitize_runtime_name(item.get('name', ''))
     if not name or is_protagonist_name(name) or looks_like_bad_entity_fragment(name):
+        return None
+    if not (_looks_like_person_alias(name) or _is_descriptive_actor_name(name)):
         return None
     aliases = []
     for alias in item.get('aliases', []) or []:
@@ -671,7 +705,10 @@ def update_actor_registry(state: dict, *, narrator_reply: str, turn_number: int,
         candidates = _fallback_actor_candidates(current)
 
     created_ids = []
-    for candidate in candidates:
+    for raw_candidate in candidates:
+        candidate = _valid_actor_candidate(raw_candidate)
+        if not candidate:
+            continue
         if _candidate_overlaps_existing_actor(candidate, actors, current):
             continue
         if _find_actor_id_by_name(actors, candidate['name']):
