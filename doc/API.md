@@ -384,6 +384,7 @@ partial 相关行为：
 - 不带 `before` 时返回最后一页
 - 带 `before` 时返回更早一页，适合前端“加载更早记录”
 - 实际分页大小由 `runtime.json -> web.history_page_size` 控制
+- 当前会话消息数未超过分页大小时，`has_more=false`，前端不会显示“加载更早记录”入口；超过分页大小时，前端在消息区顶部提供固定工具栏/内联按钮加载更早页。
 - partial assistant 也会在这里返回，但不会进入事实层写回
 
 ## GET /api/entity

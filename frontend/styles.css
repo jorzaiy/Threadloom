@@ -438,7 +438,7 @@ button:active {
   margin: 10px auto 0;
   padding: 0 28px;
   justify-content: center;
-  display: none;
+  display: flex;
 }
 
 .history-inline-wrap {
