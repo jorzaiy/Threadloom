@@ -439,7 +439,7 @@ def build_active_threads(state: dict, *, user_text: str = '', narrator_reply: st
             label=risk,
             kind='risk',
             priority='secondary',
-            goal='避免该风险在下一轮直接失控或越界落地',
+            goal='保持该风险可控；除非当前动作直接触发，不要让它在下一轮自动升级或越界落地',
             obstacle=risk,
             latest=latest_change,
         )

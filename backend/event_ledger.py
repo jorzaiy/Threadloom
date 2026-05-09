@@ -365,12 +365,14 @@ def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[
             for item in (carryover_clues or [])[:2]
             if str(item).strip() and str(item).strip().rstrip('。') in source_text
         ]
+    actor_source_text = ' '.join([summary] + normalized_clues)
+    actors = [name for name in onstage_names[:3] if name and name in actor_source_text]
 
     return {
         'event_id': f'evt_{turn_id[-4:]}',
         'turn_id': turn_id,
         'summary': summary,
-        'actors': [name for name in onstage_names[:3] if name],
+        'actors': actors,
         'objects': [str(item.get('label', '') or '').strip() for item in (tracked_objects or [])[:2] if isinstance(item, dict) and str(item.get('label', '') or '').strip()],
         'clues': normalized_clues,
         'scene_shift': bool(ledger.get('scene_shift', {}).get('changed')),

@@ -14,6 +14,8 @@ except ImportError:
 
 OBSERVATION_MARKERS = ('看', '观察', '打量', '盯', '听', '细听', '查看', '确认', '留神', '扫了一眼')
 STEALTH_MARKERS = ('不出声', '屏住', '放轻', '压低', '悄悄', '藏', '躲', '贴着', '潜行', '绕开', '避开')
+LOW_PRESSURE_SETTLE_MARKERS = ('看书', '读书', '休息', '坐下', '坐着', '躺下', '发呆', '晒太阳', '整理', '吃饭', '喝水')
+ACTIVE_STEALTH_MARKERS = ('潜行', '跟踪', '偷听', '绕开', '避开', '溜', '翻', '钻', '贴着墙', '屏住呼吸')
 CONFRONTATION_MARKERS = ('冲出去', '闯', '拦', '堵', '追上', '抢先', '扑上去', '拔刀', '动手', '出手', '迎上去')
 IDENTITY_MARKERS = ('认出', '认得', '识破', '看穿', '真名', '身份', '名字', '来路', '来历', '伪装', '化名', '面具', '到底是谁')
 INFO_MARKERS = ('告诉', '说出', '传开', '消息', '让他们知道', '提起', '口信', '传闻', '透露', '交代', '情报')
@@ -109,6 +111,9 @@ def _heuristic_analysis(user_text: str, scene_facts: dict) -> dict:
         'pursuit': int(intent_flags['confrontation']) + int(intent_flags['contact_or_threat']) + int(scene_flags['search_pressure']),
         'intercept': int(intent_flags['path_probe']) + int(intent_flags['contact_or_threat']) + int(scene_flags['contact_risk']),
     }
+    if contains_any(text, LOW_PRESSURE_SETTLE_MARKERS) and not contains_any(text, ACTIVE_STEALTH_MARKERS):
+        trigger_scores['stealth'] = max(0, trigger_scores['stealth'] - 2)
+        trigger_scores['pursuit'] = max(0, trigger_scores['pursuit'] - 1)
 
     return {
         'text': text,
@@ -197,7 +202,7 @@ def _coerce_entity_metrics(payload: dict, scene_facts: dict) -> dict:
 
 
 def _normalize_analysis_payload(payload: dict, user_text: str, scene_facts: dict, *, provider: str, usage: dict | None) -> dict:
-    text = clean_text(payload.get('text') if isinstance(payload.get('text'), str) else user_text)
+    text = clean_text(str(payload.get('text') if isinstance(payload.get('text'), str) else user_text or ''))
     return {
         'text': text,
         'entity_metrics': _coerce_entity_metrics(payload, scene_facts),

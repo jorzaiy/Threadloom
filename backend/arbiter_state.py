@@ -45,8 +45,7 @@ def merge_arbiter_state(state: dict, arbiter: dict | None) -> dict:
             signals['flags'][key] = value
 
         if result == 'stealth_risk_needs_resolution':
-            immediate_risks.append('当前潜行或压低动静的动作存在暴露风险。')
-            carryover_clues.append('潜行是否已经惊动观察者，仍需在后续回合继续确认。')
+            carryover_clues.append('压低动静或隐蔽行动是否引起注意，仍需在后续回合继续确认。')
         elif result == 'knowledge_source_check_required':
             carryover_clues.append('身份识别与知情扩散必须继续检查信息来源。')
         elif result == 'propagation_requires_channel_check':
@@ -67,6 +66,7 @@ def _remove_arbiter_derived_text(items) -> list[str]:
     blocked_parts = (
         '当前潜行或压低动静的动作存在暴露风险',
         '潜行是否已经惊动观察者',
+        '压低动静或隐蔽行动是否引起注意',
         '身份识别与知情扩散必须继续检查信息来源',
         '本轮涉及的信息扩散仍需区分私密、小范围共享与公开流通',
         '前方或附近存在观察、试探或接触风险，但尚未坐实为精准堵截',
