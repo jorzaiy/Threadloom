@@ -123,6 +123,63 @@ def looks_like_bad_entity_fragment(item) -> bool:
     return False
 
 
+NON_PERSON_STRUCTURAL_SUBSTRINGS = (
+    '代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '本机', '窗口',
+)
+
+NON_PERSON_PLACE_SUFFIXES = (
+    '馆', '柜台', '窗口', '日志', '编号', '代码', '排序', '机位', '模块', '组件', '系统', '终端',
+    '文件', '文件夹', '文件袋', '地图', '档案', '名单', '公司', '区域', '教室', '楼层', '走廊',
+    '学院', '学校', '基地', '中心', '部门', '办公室', '医务室', '训练场', '食堂', '宿舍', '靶场',
+)
+
+
+def looks_like_time_fragment(item) -> bool:
+    text = sanitize_runtime_name(item)
+    if not text:
+        return False
+    if any(period in text for period in ('凌晨', '清晨', '早晨', '上午', '中午', '午后', '下午', '傍晚', '晚上', '夜里', '深夜')):
+        return True
+    return bool(re.search(r'(?:\d+|[零一二两三四五六七八九十百半]+)\s*(?:点|时|分|秒)', text))
+
+
+def looks_like_group_fragment(item) -> bool:
+    text = sanitize_runtime_name(item)
+    if not text:
+        return False
+    ordinal = r'(?:第\s*)?(?:\d+|[一二两三四五六七八九十百]+)'
+    return bool(
+        re.search(ordinal + r'\s*(?:组|波|队|批|轮|号位|号|排)', text)
+        or re.search(r'(?:\d+|[一二两三四五六七八九十百]+)\s*人一组', text)
+    )
+
+
+def looks_like_non_person_alias_fragment(item) -> bool:
+    text = sanitize_runtime_name(item)
+    if not text:
+        return True
+    if any(part in text for part in NON_PERSON_STRUCTURAL_SUBSTRINGS):
+        return True
+    if looks_like_time_fragment(text) or looks_like_group_fragment(text):
+        return True
+    if text.endswith(NON_PERSON_PLACE_SUFFIXES):
+        return True
+    return False
+
+
+def looks_like_low_quality_signal_fragment(item) -> bool:
+    text = sanitize_runtime_name(item)
+    if not text:
+        return True
+    if looks_like_modifier_fragment(text):
+        return True
+    if len(text) <= 4 and (text.endswith(('了', '着')) or len(set(text)) <= 2):
+        return True
+    if re.search(r'[\u4e00-\u9fff]{1,2}了[\u4e00-\u9fff]{1,2}$', text) and len(text) <= 5:
+        return True
+    return False
+
+
 def is_protagonist_name(item) -> bool:
     text = sanitize_runtime_name(item)
     if not text:

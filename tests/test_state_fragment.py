@@ -20,6 +20,7 @@ from backend.state_bridge import derive_risks_clues_from_signals, entity_descrip
 from backend.handler_message import _add_lightweight_knowledge_delta, _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _store_turn_audit
 from backend.summary_chunks import _fallback_chunk, _normalize_chunk
 from backend.memory_maintenance import actor_alias_map, canonicalize_event_summaries, canonicalize_state_memory, resolve_stale_state_threads
+from backend.name_sanitizer import looks_like_non_person_alias_fragment, looks_like_low_quality_signal_fragment
 
 
 class StateFragmentTest(unittest.TestCase):
@@ -44,6 +45,14 @@ class StateFragmentTest(unittest.TestCase):
             ['巡捕仍在盘查', '掌柜仍在隐瞒账册'],
             ['纸封未拆', '掌柜仍在隐瞒账册'],
         ))
+
+    def test_generic_non_person_filters_do_not_depend_on_card_terms(self):
+        self.assertTrue(looks_like_non_person_alias_fragment('下午三点'))
+        self.assertTrue(looks_like_non_person_alias_fragment('第三组'))
+        self.assertTrue(looks_like_non_person_alias_fragment('两人一组'))
+        self.assertTrue(looks_like_non_person_alias_fragment('训练基地'))
+        self.assertFalse(looks_like_non_person_alias_fragment('秦野'))
+        self.assertTrue(looks_like_low_quality_signal_fragment('惹了涂'))
 
     def test_signal_normalization_demotes_weak_observation_risk_to_clue(self):
         signals = normalize_carryover_signals([
