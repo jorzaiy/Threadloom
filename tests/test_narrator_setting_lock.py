@@ -117,3 +117,33 @@ def test_narrator_prompt_splits_recent_outline_and_full_prose():
     assert '用户动作3' in system_prompt
     assert '叙事正文8' in system_prompt
     assert '不要求逐条复述' in system_prompt
+
+
+def test_narrator_prompt_includes_npc_expression_persona_boundary():
+    system_prompt, _user_prompt = build_narrator_input(
+        {
+            'runtime_rules': 'runtime',
+            'character_core': {'name': '维克托'},
+            'scene_facts': {},
+            'recent_history': [],
+            'active_preset': {},
+            'persona': [
+                {
+                    'name': '测试戊',
+                    'archetype': {'value': '谨慎协助者'},
+                    'hooks': {
+                        'speech_rhythm': '短句、低声',
+                        'social_strategy': '先试探再配合',
+                        'conflict_style': '避开正面冲突',
+                    },
+                }
+            ],
+        },
+        '继续',
+    )
+
+    assert '【NPC 表现层人格】' in system_prompt
+    assert '不证明人物当前在场' in system_prompt
+    assert '不能覆盖角色注册表' in system_prompt
+    assert '外貌、说话方式、习惯动作或性格表现' in system_prompt
+    assert '不要输出 JSON、人物卡、标签清单' in system_prompt

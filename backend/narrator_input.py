@@ -479,6 +479,15 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
             + actor_text
         )
 
+    persona_text = _format_persona_lines(persona)
+    if persona_text != '暂无':
+        blocks.append(
+            '【NPC 表现层人格】\n'
+            '本块是 session-local persona 提示，只约束人物在正文中的表达方式，不证明人物当前在场，也不能覆盖角色注册表。\n'
+            '优先用这些钩子维持 NPC 的语气、社交策略、冲突反应与近期表现；若正文中新出现稳定的外貌、说话方式、习惯动作或性格表现，应自然写进正文，让写回层从可见叙事中沉淀。\n'
+            + persona_text
+        )
+
     selected_chunks = context.get('selected_summary_chunks', [])
     chunk_text = _format_summary_chunks(selected_chunks)
     if chunk_text != '暂无':
@@ -590,6 +599,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         '- 旧线索可以存在，但每轮最多选择一条与当前动作直接相关的旧线索轻触；其余旧风险留在背景，不要反复推到台前。\n'
         '- 当前场景 header 和正文里的“当前时间”默认只写粗时段，如清晨、上午、中午、下午、傍晚、晚上、夜里；不要每轮生成具体几点几分。\n'
         '- 精确钟点只用于剧情内已经明确存在的预约、截止、倒计时或课程安排，例如“下午两点到E栋”“十分钟后提交”，并把它作为目标/风险/对白内容保留，不要把它写成每轮滚动的当前时间戳。'
+        '- 新 NPC 或正在持续互动的 NPC，如果本轮自然涉及他/她的表现，可以在正文中给出一两处可观察的稳定特征，如外貌印象、语气、习惯动作、待人方式或冲突反应；这些必须服务当前场景，不要输出 JSON、人物卡、标签清单或旁白式设定说明。'
     )
 
     system_prompt = '\n\n'.join(blocks)
