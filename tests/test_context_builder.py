@@ -11,7 +11,11 @@ from context_builder import _format_persona_profile_content, _slim_character_cor
 from persona_runtime import build_persona_seed  # noqa: E402
 from persona_updater import _observed_context  # noqa: E402
 from runtime_store import save_persona_seed  # noqa: E402
-from narrator_input import _format_recent_outline, _format_recent_window  # noqa: E402
+from narrator_input import _format_recent_outline, _format_recent_window, build_narrator_input  # noqa: E402
+from selector import summary_chunk_hits  # noqa: E402
+from selector import profile_targets  # noqa: E402
+from event_ledger import build_event_summary_item  # noqa: E402
+from persona_updater import _valid_persona_token  # noqa: E402
 
 
 def test_recent_history_keeps_opening_assistant_before_first_pair():
@@ -241,3 +245,46 @@ def test_persona_profile_content_dedupes_observation_lines():
     content = _format_persona_profile_content(seed)
 
     assert content.count('测试丙低声提醒主角别急着打开包裹') == 1
+
+
+def test_narrator_prompt_preserves_low_pressure_turns():
+    system_prompt, _ = build_narrator_input({'scene_facts': {}, 'active_preset': {}}, '整理课本等上课')
+
+    assert '优先保持低压质感' in system_prompt
+    assert '旧风险留在背景' in system_prompt
+    assert '不要擅自引入新的可疑脚步' in system_prompt
+
+
+def test_summary_chunk_actor_only_pressure_is_not_recalled_for_quiet_turn():
+    chunks = [{
+        'chunk_id': 'chunk_0001',
+        'turn_start': 1,
+        'turn_end': 12,
+        'actors_mentioned': ['测试甲'],
+        'dense_summary': ['测试甲持续监视主角，风险和警告不断逼近。'],
+        'keywords': ['测试甲'],
+        'unresolved': ['暴露风险'],
+    }]
+    recent = [{'role': 'assistant', 'content': '测试甲坐在窗边。'}]
+
+    hits = summary_chunk_hits(chunks, recent_history=recent, user_text='低头整理课本')
+
+    assert hits == []
+
+
+def test_event_summary_does_not_attribute_offscreen_onstage_actor():
+    item = build_event_summary_item(
+        turn_id='turn-0005',
+        ledger={'summary_text': '主角在宿舍检查背包，发现书本位置有细微变化。', 'clue_candidates': ['书本位置有细微变化']},
+        onstage_names=['维克托'],
+    )
+
+    assert item['actors'] == []
+
+
+def test_selector_and_persona_reject_abstract_npc_names():
+    targets = profile_targets(['时间'], ['维克托'], [], [{'role': 'assistant', 'content': '维克托走进教室，老师讲解时间栏。'}], [{'primary_label': '时间'}, {'primary_label': '维克托'}])
+
+    assert targets == ['维克托']
+    assert not _valid_persona_token('时间')
+    assert not _valid_persona_token('时间栏')

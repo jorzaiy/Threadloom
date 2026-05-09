@@ -8,10 +8,12 @@ try:
     from .llm_manager import call_role_llm
     from .local_model_client import parse_json_response
     from .runtime_store import is_complete_assistant_item, load_history, load_summary_chunks, save_summary_chunks
+    from .name_sanitizer import looks_like_bad_entity_fragment
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
     from runtime_store import is_complete_assistant_item, load_history, load_summary_chunks, save_summary_chunks
+    from name_sanitizer import looks_like_bad_entity_fragment
 
 
 SUMMARY_CHUNK_SIZE = 12
@@ -183,6 +185,8 @@ def _normalize_chunk(payload: dict, *, chunk_id: str, turn_start: int, turn_end:
         cleaned = []
         for item in values:
             text = _compact(str(item or ''), 180 if field in {'dense_summary', 'key_events', 'unresolved'} else 40)
+            if field == 'actors_mentioned' and looks_like_bad_entity_fragment(text):
+                continue
             if text and text not in cleaned:
                 cleaned.append(text)
             if len(cleaned) >= limit:

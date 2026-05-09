@@ -4,11 +4,34 @@ from __future__ import annotations
 import json
 import re
 
+try:
+    from .name_sanitizer import looks_like_bad_entity_fragment
+except ImportError:
+    from name_sanitizer import looks_like_bad_entity_fragment
+
 
 GENERIC_TOPIC_TOKENS = {
     '当前', '继续', '已经', '没有', '还有', '一个', '一些', '自己', '觉得', '开始',
     '位置', '地方', '时候', '周围', '后面', '前面', '然后', '只是', '不是', '可能',
 }
+
+PRESSURE_TOKENS = {
+    '风险', '危险', '威胁', '暴露', '怀疑', '审查', '盘问', '追踪', '追捕', '封锁', '惩罚', '倒计时',
+    '监视', '监控', '警告', '失控', '逼近', '逃跑', '退学', '查过', '异常',
+}
+ABSTRACT_NPC_TOKENS = {
+    '时间', '空间', '规则', '概念', '逻辑', '关系', '事件', '问题', '目标', '答案', '线索', '风险',
+    '情报', '记忆', '意识', '状态', '流程', '步骤', '进度', '盲区', '栏目', '标题', '课题', '题目',
+}
+
+
+def _valid_npc_name(name: str) -> bool:
+    text = str(name or '').strip()
+    if not text or looks_like_bad_entity_fragment(text) or text in ABSTRACT_NPC_TOKENS:
+        return False
+    if any(text.endswith(suffix) for suffix in ('栏', '栏位', '栏目', '盲区', '概念', '规则', '逻辑', '问题', '答案', '题目', '课题')):
+        return False
+    return True
 
 
 def joined_recent_text(recent_history: list[dict], limit: int = 6) -> str:
@@ -27,6 +50,11 @@ def _topic_tokens(text: str) -> set[str]:
             continue
         tokens.add(token)
     return tokens
+
+
+def _pressure_tokens(text: str) -> set[str]:
+    value = str(text or '')
+    return {token for token in PRESSURE_TOKENS if token in value}
 
 
 def _event_text(item: dict) -> str:
@@ -156,7 +184,7 @@ def important_npc_names(items: list[dict], limit: int = 4) -> list[str]:
         if not isinstance(item, dict):
             continue
         name = str(item.get('primary_label', '') or '').strip()
-        if name and name not in names:
+        if _valid_npc_name(name) and name not in names:
             names.append(name)
     return names
 
@@ -192,17 +220,17 @@ def profile_targets(onstage: list[str], relevant: list[str], active_threads: lis
     targets = []
     recent_text = joined_recent_text(recent_history)
     for name in onstage:
-        if name and name not in targets:
+        if _valid_npc_name(name) and name not in targets:
             targets.append(name)
     for name in relevant:
         if len(targets) >= limit:
             break
-        if name and name in recent_text and name not in targets:
+        if _valid_npc_name(name) and name in recent_text and name not in targets:
             targets.append(name)
     for name in important_npc_names(important_npcs):
         if len(targets) >= limit:
             break
-        if name and name in recent_text and name not in targets:
+        if _valid_npc_name(name) and name in recent_text and name not in targets:
             targets.append(name)
     return targets[:limit]
 
@@ -211,7 +239,7 @@ def build_npc_roster(*, onstage: list[str], relevant: list[str], active_threads:
     event_by_id = {str(item.get('event_id', '') or ''): item for item in event_summaries if isinstance(item, dict)}
     scored = {}
     def touch(name: str, score: int, role: str = '', status: str = ''):
-        if not name:
+        if not _valid_npc_name(name):
             return
         item = scored.setdefault(name, {'name': name, 'score': 0, 'role': '', 'status': ''})
         item['score'] += score
@@ -266,7 +294,7 @@ def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict]
             continue
         score = 0
         reason = []
-        actors = [str(x).strip() for x in (item.get('actors_mentioned', []) or []) if str(x).strip()]
+        actors = [str(x).strip() for x in (item.get('actors_mentioned', []) or []) if _valid_npc_name(str(x).strip())]
         actor_overlap = any(name and name in query_text for name in actors)
         if actor_overlap:
             score += 2
@@ -291,12 +319,18 @@ def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict]
             if len(shared_topics) >= 2:
                 score += min(3, len(shared_topics))
                 reason.append('topic_overlap')
-        if score >= 2 and (clue_overlap or keyword_overlap or object_overlap or actor_overlap):
-            hits.append({'chunk_id': item.get('chunk_id'), 'turn_start': item.get('turn_start'), 'turn_end': item.get('turn_end'), 'score': score, 'reason': '+'.join(reason), 'keyword_hits': keyword_hits[:8]})
-        elif score >= 2 and 'topic_overlap' in reason:
-            hits.append({'chunk_id': item.get('chunk_id'), 'turn_start': item.get('turn_start'), 'turn_end': item.get('turn_end'), 'score': score, 'reason': '+'.join(reason)})
+        chunk_pressure = _pressure_tokens(chunk_text)
+        user_pressure = _pressure_tokens(user_text)
+        if chunk_pressure and not user_pressure and not object_overlap and not clue_overlap:
+            score -= 1.5
+            reason.append('pressure_downgrade')
+        reason_text = '+'.join(reason)
+        if score >= 3 and (clue_overlap or keyword_overlap or object_overlap or actor_overlap):
+            hits.append({'chunk_id': item.get('chunk_id'), 'turn_start': item.get('turn_start'), 'turn_end': item.get('turn_end'), 'score': score, 'reason': reason_text, 'keyword_hits': keyword_hits[:8]})
+        elif score >= 3 and 'topic_overlap' in reason:
+            hits.append({'chunk_id': item.get('chunk_id'), 'turn_start': item.get('turn_start'), 'turn_end': item.get('turn_end'), 'score': score, 'reason': reason_text})
     hits.sort(key=lambda x: -x['score'])
-    return hits[:3]
+    return hits[:2]
 
 
 def build_selector_decision(*, state_json: dict, recent_history: list[dict], keeper_records: dict, active_threads: list[dict], important_npcs: list[dict], onstage: list[str], relevant: list[str], lorebook_entries: list[dict], system_npc_candidates: list[dict], lorebook_npc_candidates: list[dict], event_summaries: list[dict], summary_text: str, summary_chunks: list[dict] | None = None, user_text: str = '') -> dict:

@@ -8,10 +8,12 @@ try:
     from .persona_runtime import build_persona_seed
     from .runtime_store import load_history, load_persona_index, load_state, save_persona_seed, session_paths
     from .card_hints import get_service_role_tokens
+    from .name_sanitizer import looks_like_bad_entity_fragment
 except ImportError:
     from persona_runtime import build_persona_seed
     from runtime_store import load_history, load_persona_index, load_state, save_persona_seed, session_paths
     from card_hints import get_service_role_tokens
+    from name_sanitizer import looks_like_bad_entity_fragment
 
 SCENE_SEED_MIN_STREAK = 5
 LONGTERM_SEED_MIN_STREAK = 7
@@ -24,6 +26,22 @@ COMMON_SURNAME_PREFIXES = set(
     '梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡'
     '凌霍虞万支柯管卢莫房裴陆沙风漠月血刑关白柳顾韩沈秦谢宋苏萧裴'
 )
+ABSTRACT_PERSONA_TOKENS = {
+    '时间', '空间', '规则', '概念', '逻辑', '关系', '事件', '问题', '目标', '答案', '线索', '风险',
+    '情报', '记忆', '意识', '状态', '流程', '步骤', '进度', '盲区', '栏目', '标题', '课题', '题目',
+}
+ABSTRACT_PERSONA_PARTS = ('时间', '空间', '规则', '概念', '逻辑', '事件', '线索', '风险', '盲区', '栏目')
+
+
+def _looks_like_abstract_persona_name(value: str) -> bool:
+    name = str(value or '').strip()
+    if not name:
+        return True
+    if name in ABSTRACT_PERSONA_TOKENS:
+        return True
+    if any(name.endswith(suffix) for suffix in ('栏', '栏位', '栏目', '盲区', '概念', '规则', '逻辑', '问题', '答案', '题目', '课题')):
+        return True
+    return sum(1 for part in ABSTRACT_PERSONA_PARTS if part in name) >= 1 and not any(name.endswith(suffix) for suffix in ('人', '男人', '女人', '青年', '少年', '学员', '教官', '老师', '先生', '小姐', '管理员'))
 
 
 def _load_local_layer(directory) -> dict[str, dict]:
@@ -188,6 +206,8 @@ def _valid_persona_token(token: str) -> bool:
         return False
     if value in {'不能', '没有', '下一个', '终端', '别迟到', '时间到', '谁先说', '你们两个', '他说的'}:
         return False
+    if looks_like_bad_entity_fragment(value) or _looks_like_abstract_persona_name(value):
+        return False
     if any(part in value for part in ('代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '上午', '下午', '两点', '三十五秒', '第一组', '第三波', '一组', '两人一组', '本机', '窗口', '银行', '咖啡馆', '鹰巢')):
         return False
     if value.startswith(('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着')):
@@ -324,6 +344,8 @@ def update_persona(session_id: str, reference_candidates: list[dict] | None = No
         name = (entity.get('primary_label') or '').strip()
         if not name:
             continue
+        if not _valid_persona_token(name):
+            continue
         matched = _match_existing_persona(entity, {**local_existing, **inherited})
         if matched is not None:
             matched_name, _matched_seed = matched
@@ -430,6 +452,8 @@ def update_persona(session_id: str, reference_candidates: list[dict] | None = No
         )
 
     for name, previous in local_existing.items():
+        if not _valid_persona_token(name):
+            continue
         if name in active_names:
             continue
         role_label = previous.get('identity', {}).get('role_label', '待确认')
