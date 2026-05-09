@@ -8,12 +8,12 @@ from copy import deepcopy
 try:
     from .llm_manager import call_role_llm
     from .local_model_client import parse_json_response
-    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment
+    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
     from .card_hints import get_canonical_name, get_character_primary_name
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
-    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment
+    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
     from card_hints import get_canonical_name, get_character_primary_name
 
 
@@ -249,11 +249,6 @@ NON_ALIAS_SUFFIXES = (
     '文件', '文件夹', '文件袋', '地图', '档案', '名单', '公司', '区域', '教室', '楼层', '走廊',
 )
 
-NON_ALIAS_CONTAINS = (
-    '代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '上午', '下午', '两点', '三十五秒',
-    '第一组', '第三波', '一组', '两人一组', '本机', '窗口', '银行', '咖啡馆', '鹰巢',
-)
-
 NON_ALIAS_PREFIXES = ('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着', '低声', '继续')
 ABSTRACT_ACTOR_TOKENS = {
     '时间', '空间', '规则', '概念', '逻辑', '关系', '事件', '问题', '目标', '答案', '线索', '风险',
@@ -285,7 +280,7 @@ def _looks_like_person_alias(value: str) -> bool:
         return False
     if any(name.startswith(prefix) for prefix in NON_ALIAS_PREFIXES):
         return False
-    if any(token in name for token in NON_ALIAS_CONTAINS):
+    if looks_like_non_person_alias_fragment(name):
         return False
     if name.endswith(NON_ALIAS_SUFFIXES):
         return False

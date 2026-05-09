@@ -9,12 +9,12 @@ from typing import Any, Iterable
 try:
     from .continuity_hints import match_continuity_hint
     from .character_assets import load_system_npcs
-    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment
+    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment, looks_like_low_quality_signal_fragment, looks_like_non_person_alias_fragment
     from .card_hints import get_known_npc_role, get_canonical_name, get_character_primary_name
 except ImportError:
     from continuity_hints import match_continuity_hint
     from character_assets import load_system_npcs
-    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment
+    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_modifier_fragment, looks_like_bad_entity_fragment, looks_like_low_quality_signal_fragment, looks_like_non_person_alias_fragment
     from card_hints import get_known_npc_role, get_canonical_name, get_character_primary_name
 
 
@@ -25,9 +25,6 @@ NON_PERSON_TOKENS = {
     '轻功', '自保', '一声', '规则', '结论', '现象', '世界', '逻辑', '认知', '交互', '概念', '目标', '问题', '决定',
     '对话', '关系', '后续', '物理', '错误', '能力', '剧情', '局势', '线索', '风险', '客厅', '时间', '空间', '答案',
 }
-LOW_QUALITY_SIGNAL_FRAGMENTS = (
-    '惹了涂',
-)
 ABSTRACT_CONTINUITY_TOKENS = {
     '物理接触', '肢体接触', '身体接触', '接触', '互动', '机制', '系统', '面板', '提示', '规则', '判定', '反馈',
     '设定', '限制', '条件', '代价', '状态', '异常', '效果', '能力', '技能', '天赋', '特性', '权限', '接口',
@@ -228,7 +225,7 @@ def _looks_like_bad_signal_text(value: str) -> bool:
     text = _clean_signal_text(value)
     if not text or text == '待确认':
         return True
-    if any(fragment in text for fragment in LOW_QUALITY_SIGNAL_FRAGMENTS):
+    if looks_like_low_quality_signal_fragment(text):
         return True
     if len(text) < 4:
         return True
@@ -1299,7 +1296,7 @@ def _looks_like_actor_alias(value: str) -> bool:
         return False
     if any(name.startswith(prefix) for prefix in ('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着', '低声', '继续')):
         return False
-    if any(token in name for token in ('代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '上午', '下午', '两点', '三十五秒', '第一组', '第三波', '一组', '两人一组', '本机', '窗口', '银行', '咖啡馆', '鹰巢')):
+    if looks_like_non_person_alias_fragment(name):
         return False
     if name in {'不能', '没有', '下一个', '终端', '别迟到', '时间到', '谁先说', '你们两个', '他说的'}:
         return False

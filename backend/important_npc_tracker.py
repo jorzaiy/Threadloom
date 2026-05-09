@@ -4,11 +4,11 @@ from __future__ import annotations
 from copy import deepcopy
 
 try:
-    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, looks_like_modifier_fragment
+    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, looks_like_modifier_fragment, looks_like_non_person_alias_fragment
     from .card_hints import get_service_role_tokens
     from .keeper_archive import load_keeper_record_archive
 except ImportError:
-    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, looks_like_modifier_fragment
+    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, looks_like_modifier_fragment, looks_like_non_person_alias_fragment
     from card_hints import get_service_role_tokens
     from keeper_archive import load_keeper_record_archive
 THREAD_KIND_WEIGHT = {
@@ -77,7 +77,7 @@ def _looks_like_npc_alias(value: str) -> bool:
         return False
     if any(text.startswith(prefix) for prefix in ('在', '抱着', '拿着', '拎着', '看着', '听着', '想着', '说着', '低声', '继续')):
         return False
-    if any(token in text for token in ('代码', '日志', '终端', '编号', 'DNS', '批量', '组件', '模块', '上午', '下午', '两点', '三十五秒', '第一组', '第三波', '一组', '两人一组', '本机', '窗口', '银行', '咖啡馆', '鹰巢')):
+    if looks_like_non_person_alias_fragment(text):
         return False
     if text.endswith(('馆', '柜台', '窗口', '日志', '编号', '代码', '排序', '机位', '模块', '组件', '系统', '终端', '文件', '文件夹', '文件袋', '地图', '档案', '名单', '公司', '区域', '教室', '楼层', '走廊')):
         return False
