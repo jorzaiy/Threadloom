@@ -594,7 +594,10 @@ def _mentioned_actor_ids(actors: dict, text: str) -> set[str]:
         if actor_id == 'protagonist':
             mentioned.add('protagonist')
             continue
-        if any(name and name in haystack for name in _actor_names(actor)):
+        surfaces: set[str] = set()
+        for name in _actor_names(actor):
+            surfaces.update(_name_surfaces(name))
+        if any(name and name in haystack for name in surfaces):
             mentioned.add(str(actor_id))
     return mentioned
 

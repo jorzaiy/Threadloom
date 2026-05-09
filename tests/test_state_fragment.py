@@ -166,6 +166,35 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertNotIn('npc_001', updated['actors'])
 
+    def test_actor_context_counts_partial_canonical_actor_mentions(self):
+        state = {
+            'actors': {
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '维克托·奥古斯特',
+                    'aliases': [],
+                    'identity': '教官',
+                    'created_turn': 1,
+                },
+            },
+            'actor_context_index': {
+                'active_actor_ids': ['protagonist', 'npc_001'],
+                'archived_actor_ids': [],
+                'last_mentioned_turn': {'npc_001': 14},
+            },
+        }
+
+        updated = update_actor_registry(
+            state,
+            narrator_reply='维克托合上记录板，转身提醒下午两点去D栋301。',
+            turn_number=18,
+            use_llm=False,
+        )
+
+        self.assertEqual(updated['actor_context_index']['last_mentioned_turn']['npc_001'], 18)
+        self.assertIn('npc_001', updated['actor_context_index']['active_actor_ids'])
+
 
     def test_normalize_state_does_not_inherit_stale_arbiter_signals(self):
         prev: dict[str, Any] = {
