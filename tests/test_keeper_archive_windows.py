@@ -171,7 +171,7 @@ class KeeperArchiveWindowTests(unittest.TestCase):
                 {
                     'window': {'pair_count': 10, 'end_pair_index': 10},
                     'stable_entities': [],
-                    'ongoing_events': ['围绕特工学院、了一下、秦野的钢笔在的局势仍在持续演化'],
+                    'ongoing_events': ['围绕训练基地、了一下、秦野的钢笔在的局势仍在持续演化'],
                     'open_loops': [],
                     'tracked_objects': [],
                     'history_digest': [],

@@ -97,8 +97,6 @@ def _bad_archive_anchor(text: str) -> bool:
         return True
     if any(token in value for token in ('似乎', '可能', '好像', '或许')) and len(value) <= 8:
         return True
-    if value in {'特工学院', '鹰巢'}:
-        return False
     if value.endswith(('楼', '层', '教室')) and not any(token in value for token in ('搜查', '盘问', '调查', '等待', '封存', '追踪')):
         return True
     return False

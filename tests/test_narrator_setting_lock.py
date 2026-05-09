@@ -58,7 +58,7 @@ def test_narrator_prompt_includes_nested_runtime_player_profile():
                 'talents': {'hacking': '黑客技术不错'},
                 'combat': {'judo': {'level': '黑带水平'}},
             },
-            'weaknesses': ['束胸导致剧烈运动时呼吸困难'],
+            'weaknesses': ['旧伤导致剧烈运动时呼吸困难'],
             'disguise': {'weaknesses': ['喉结不明显']},
             'goals': ['不被发现真实身份'],
         }
@@ -81,7 +81,7 @@ def test_narrator_prompt_includes_nested_runtime_player_profile():
     assert '170cm左右（在男生中偏矮）' in system_prompt
     assert '黑客技术不错' in system_prompt
     assert '柔道：水平=黑带水平' in system_prompt
-    assert '束胸导致剧烈运动时呼吸困难' in system_prompt
+    assert '旧伤导致剧烈运动时呼吸困难' in system_prompt
     assert '不被发现真实身份' in system_prompt
 
 
