@@ -140,6 +140,7 @@
 - 在场景切换后，把不再互动的人物逐步降到 `archive`
 - 优先消费导入器产出的 `system-npcs.json`，而不是主要依赖世界书关键词临时猜系统角色
 - persona root seed 只来自当前角色卡 source；缺失时不再读取仓库共享 `runtime/persona-seeds`，避免不同角色卡的人格骨架静默继承
+- narrator 可以在正文中自然强化 NPC 的表现层细节（外貌、语气、习惯动作、性格表现），但只作为可观察叙事证据；`persona_updater` 从 assistant 正文抽取这些 observation，决定是否随 scene/archive/longterm 层流转。narrator 不直接创建 NPC、不写 actor_id、不输出人物卡 JSON，也不覆盖 `actor_registry` 的锁定基础设定。
 
 ## Session / 角色卡隔离
 

@@ -48,6 +48,7 @@ web input
 - runtime fallback / bootstrap 的词表只允许使用通用职能词、通用地点后缀和通用物件类别；不应把某张角色卡的固定人名、组织名、session id 或剧情专属物件写进生产逻辑来强化表现。
 - 同一层还负责用户控制权边界：用户主角只是世界内角色，不是作者、导演、GM 或世界主宰。用户输入只能提出尝试，不能直接决定 NPC 服从、行动成功、关系成立、物品归属、场景改写或客观结论；这些必须由当前世界的因果、资源、制度和 NPC 反应结算。
 - NPC profile 注入分两级：source markdown profile 是强档案；当前 session 的 persona seed 是兜底档案。兜底内容只包含身份、persona hooks 和 assistant 叙事中观察到的短片段，不能从用户 prompt 原文生成 NPC 事实。
+- NPC 表现层维护采用“narrator 写正文，persona 验证沉淀”的边界：narrator 可以自然写出 NPC 的外貌印象、语气、习惯动作和性格表现；写回层只从 assistant 正文中抽取这些可观察片段作为 persona observation。它不接受用户 prompt 原文中的人物设定声明，也不让 narrator 直接输出 JSON 人物卡或决定持久化。
 - 角色注册表的基础字段默认不可变；实名揭示只在窄口径下允许把稳定 generic actor 提升为实名主称呼，并把原描述称呼保留为 alias。当“剃寸头的高个子学员”这类 actor 后续明确自报姓名或被点名时，runtime 会用实名绑定后续 knowledge/profile/selector，避免同一人物长期分裂成描述称呼与实名两条线。
 - 实名迁移只允许 exact alias map。若两个 actor 都声明了同一个 alias，或某个 alias 与另一个 actor 的 canonical name 冲突，该 alias 不参与迁移，宁可保留重复称呼，也不做高风险自动合并。
 - `active_threads[].actors` 是 thread 自身的辅助索引，不是长期人物事实源。归一化时会把 alias 对齐到 actor canonical name，并只保留 thread 文本或当前 `main_event / immediate_risks / carryover_clues / carryover_signals` 明确支持的人物，避免旧场景 NPC 在 watch/cooling thread 中继续粘住。
