@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'backend'))
 import keeper_archive
 import keeper_record_retriever
 from mid_context_agent import build_mid_window_digest, _is_mid_context_object_relevant, _normalize_digest, _score_open_loops
+from memory_maintenance import canonicalize_keeper_archive
 
 
 def _history(pair_count: int) -> list[dict]:
@@ -161,6 +162,83 @@ class KeeperArchiveWindowTests(unittest.TestCase):
 
         self.assertEqual(archive['source_pair_count'], 12)
         self.assertNotIn('半截回复', str(archive['records']))
+
+    def test_keeper_archive_validation_drops_fragment_digest_records(self):
+        archive = {
+            'version': 1,
+            'source_pair_count': 10,
+            'records': [
+                {
+                    'window': {'pair_count': 10, 'end_pair_index': 10},
+                    'stable_entities': [],
+                    'ongoing_events': ['围绕特工学院、了一下、秦野的钢笔在的局势仍在持续演化'],
+                    'open_loops': [],
+                    'tracked_objects': [],
+                    'history_digest': [],
+                },
+                {
+                    'window': {'pair_count': 10, 'end_pair_index': 10},
+                    'stable_entities': [{'name': '秦野'}],
+                    'ongoing_events': ['秦野笔记本封存等待芯片读取'],
+                    'open_loops': [],
+                    'tracked_objects': [],
+                    'history_digest': [],
+                },
+                {
+                    'provider': 'manual-cleanup',
+                    'window': {'pair_count': 10, 'end_pair_index': 10},
+                    'ongoing_events': ['人工整理的摘要'],
+                },
+            ],
+        }
+
+        validated, result = keeper_archive.validate_keeper_archive(archive)
+
+        self.assertTrue(result['changed'])
+        self.assertEqual(len(validated['records']), 2)
+        self.assertEqual(validated['records'][0]['stable_entities'][0]['name'], '秦野')
+        self.assertEqual(validated['records'][1]['provider'], 'manual-cleanup')
+
+    def test_keeper_archive_validation_keeps_meaningful_uncertainty_sentences(self):
+        archive = {
+            'version': 1,
+            'source_pair_count': 10,
+            'records': [
+                {
+                    'window': {'pair_count': 10, 'end_pair_index': 10},
+                    'stable_entities': [{'name': '秦野'}],
+                    'ongoing_events': ['秦野可能隐瞒了终端编号来源'],
+                    'open_loops': ['技术部没有公开芯片读取结果'],
+                    'tracked_objects': [],
+                    'history_digest': [],
+                },
+            ],
+        }
+
+        validated, result = keeper_archive.validate_keeper_archive(archive)
+
+        self.assertFalse(result['changed'])
+        self.assertEqual(validated['records'][0]['ongoing_events'], ['秦野可能隐瞒了终端编号来源'])
+        self.assertEqual(validated['records'][0]['open_loops'], ['技术部没有公开芯片读取结果'])
+
+    def test_keeper_archive_canonicalizes_stable_entities(self):
+        archive = {
+            'version': 1,
+            'records': [
+                {
+                    'window': {'pair_count': 10, 'end_pair_index': 10},
+                    'stable_entities': [{'name': '剃寸头的高个子学员'}],
+                    'ongoing_events': ['秦野笔记本封存等待芯片读取'],
+                }
+            ],
+            'npc_registry': {'entities': [{'primary_label': '剃寸头的高个子学员'}]},
+        }
+
+        repaired, changes = canonicalize_keeper_archive(archive, {'剃寸头的高个子学员': '秦野'})
+
+        self.assertTrue(changes)
+        self.assertEqual(repaired['records'][0]['stable_entities'][0]['name'], '秦野')
+        self.assertEqual(repaired['npc_registry']['entities'][0]['primary_label'], '秦野')
 
     def test_keeper_archive_digest_uses_window_anchors_events_and_npc_registry(self):
         history = []

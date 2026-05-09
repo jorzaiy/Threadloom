@@ -86,7 +86,7 @@ class KeeperRecordRetrieverTests(unittest.TestCase):
                 recent_window_pairs=4,
             )
 
-        self.assertEqual(calls, [{'skip_bootstrap': True, 'use_llm': False}])
+        self.assertEqual(calls, [{'skip_bootstrap': True, 'use_llm': False, 'allow_archive_write': True}])
 
     def test_prunes_future_records_after_rollback(self):
         saved = []

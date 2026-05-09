@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-
 try:
     from .mid_context_agent import build_mid_window_digest
     from .npc_bootstrap_agent import ensure_npc_registry
@@ -92,7 +91,7 @@ def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overl
             continue
         records.append(digest)
 
-    return {
+    archive = {
         'version': 1,
         'window_size': window_size,
         'recent_window_pairs': overlap_recent_pairs,
@@ -101,6 +100,8 @@ def build_keeper_record_archive(session_id: str, *, window_size: int = 10, overl
         'records': records,
         'npc_registry': registry,
     }
+    validated, _validation = validate_keeper_archive(archive)
+    return validated
 
 
 def save_keeper_record_archive(session_id: str, archive: dict) -> None:
@@ -111,6 +112,99 @@ def save_keeper_record_archive(session_id: str, archive: dict) -> None:
     except ImportError:
         from runtime_store import _atomic_write_json
     _atomic_write_json(path, archive)
+
+
+BAD_DIGEST_FRAGMENTS = {
+    '了一下', '的声音', '的目光', '的钢笔', '的脚步', '下一个',
+}
+SHORT_BAD_DIGEST_FRAGMENTS = {'不能', '没有', '可能', '似乎', '好像'}
+
+
+def _normalize_text(text: str) -> str:
+    return ' '.join(str(text or '').split()).strip()
+
+
+def _valid_record_sentence(text: str) -> bool:
+    value = _normalize_text(text)
+    if not value or len(value) < 6:
+        return False
+    if any(fragment in value for fragment in BAD_DIGEST_FRAGMENTS):
+        return False
+    if value in SHORT_BAD_DIGEST_FRAGMENTS or (len(value) <= 8 and any(fragment in value for fragment in SHORT_BAD_DIGEST_FRAGMENTS)):
+        return False
+    if '围绕' in value and '局势仍在持续演化' in value:
+        if not any(token in value for token in ('搜查', '盘问', '追踪', '调查', '审查', '等待', '封存', '约定', '身份', '来历', '真相', '测评', '终端')):
+            return False
+    if value.isascii():
+        return False
+    return True
+
+
+def _valid_window(window: dict, source_pair_count: int) -> bool:
+    if not isinstance(window, dict):
+        return False
+    try:
+        end_pair_index = int(window.get('end_pair_index', 0) or 0)
+        pair_count = int(window.get('pair_count', 1) or 1)
+    except (TypeError, ValueError):
+        return False
+    if pair_count <= 0 or end_pair_index <= 0:
+        return False
+    if source_pair_count > 0 and end_pair_index > source_pair_count:
+        return False
+    return True
+
+
+def validate_keeper_archive(archive: dict) -> tuple[dict, dict]:
+    """Drop malformed or fragment-like keeper archive records.
+
+    Keeper archives are derived caches; validation is deterministic and safe to
+    run after load/build before recall. Manual-cleanup records are protected.
+    """
+    if not isinstance(archive, dict):
+        return {'version': 1, 'records': []}, {'changed': True, 'changes': [{'artifact': 'keeper_archive', 'action': 'reset_invalid'}], 'warnings': []}
+    records = archive.get('records', []) if isinstance(archive.get('records', []), list) else []
+    try:
+        source_pair_count = int(archive.get('source_pair_count', 0) or 0)
+    except (TypeError, ValueError):
+        source_pair_count = 0
+    kept = []
+    changes = []
+    warnings = []
+    for record in records:
+        if not isinstance(record, dict):
+            changes.append({'artifact': 'keeper_archive', 'action': 'drop_invalid_record', 'reason': 'not_object'})
+            continue
+        if record.get('provider') == 'manual-cleanup':
+            kept.append(record)
+            continue
+        if not _valid_window(record.get('window', {}), source_pair_count):
+            changes.append({'artifact': 'keeper_archive', 'action': 'drop_invalid_record', 'reason': 'bad_window'})
+            continue
+        stable_entities = record.get('stable_entities', []) if isinstance(record.get('stable_entities', []), list) else []
+        ongoing = [item for item in record.get('ongoing_events', []) if _valid_record_sentence(item)] if isinstance(record.get('ongoing_events', []), list) else []
+        loops = [item for item in record.get('open_loops', []) if _valid_record_sentence(item)] if isinstance(record.get('open_loops', []), list) else []
+        history_digest = record.get('history_digest', []) if isinstance(record.get('history_digest', []), list) else []
+        tracked_objects = record.get('tracked_objects', []) if isinstance(record.get('tracked_objects', []), list) else []
+        next_record = dict(record)
+        if ongoing != record.get('ongoing_events', []):
+            next_record['ongoing_events'] = ongoing
+            changes.append({'artifact': 'keeper_archive', 'action': 'sanitize_record', 'field': 'ongoing_events'})
+        if loops != record.get('open_loops', []):
+            next_record['open_loops'] = loops
+            changes.append({'artifact': 'keeper_archive', 'action': 'sanitize_record', 'field': 'open_loops'})
+        has_named_entity = any(isinstance(item, dict) and _normalize_text(item.get('name', '')) for item in stable_entities)
+        has_content = bool(ongoing or loops or tracked_objects or history_digest)
+        if not has_named_entity and not has_content:
+            changes.append({'artifact': 'keeper_archive', 'action': 'drop_invalid_record', 'reason': 'empty_content'})
+            continue
+        kept.append(next_record)
+    changed = len(kept) != len(records) or bool(changes)
+    next_archive = dict(archive)
+    next_archive['records'] = kept
+    if changed:
+        warnings.append(f'keeper archive validation changed {len(changes)} record fields/items')
+    return next_archive, {'changed': changed, 'changes': changes, 'warnings': warnings}
 
 
 def load_keeper_record_archive(
@@ -133,7 +227,11 @@ def load_keeper_record_archive(
             save_keeper_record_archive(session_id, archive)
         return archive
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
+        archive = json.loads(path.read_text(encoding='utf-8'))
+        archive, validation = validate_keeper_archive(archive)
+        if validation.get('changed') and allow_archive_write:
+            save_keeper_record_archive(session_id, archive)
+        return archive
     except Exception:
         archive = build_keeper_record_archive(session_id, skip_bootstrap=skip_bootstrap, use_llm=use_llm)
         if allow_archive_write:
