@@ -138,6 +138,71 @@ class SelectorRecallTests(unittest.TestCase):
 
         self.assertEqual([hit['event_id'] for hit in hits], ['evt_0014'])
 
+    def test_event_recall_skips_sensitive_actor_only_hits_on_quiet_turn(self):
+        events = [{
+            'event_id': 'evt_0008',
+            'turn_id': 'turn-0008',
+            'summary': '维克托注意到陆小环束胸导致呼吸困难，后续存在暴露风险。',
+            'actors': ['维克托'],
+            'clues': ['束胸导致呼吸困难，存在暴露风险'],
+        }]
+
+        quiet_hits = event_summary_hits(
+            events,
+            state_json={
+                'location': '鹰巢特工学院食堂',
+                'main_event': '陆小环坐在角落吃午饭',
+                'onstage_npcs': ['维克托'],
+            },
+            recent_history=[{'role': 'assistant', 'content': '维克托之前巡视过训练场。'}],
+            user_text='低头吃完米饭和菜',
+        )
+        direct_hits = event_summary_hits(
+            events,
+            state_json={
+                'location': '鹰巢特工学院宿舍',
+                'main_event': '陆小环发现束胸勒得呼吸困难',
+                'onstage_npcs': [],
+            },
+            recent_history=[],
+            user_text='束胸勒得呼吸困难',
+        )
+
+        self.assertEqual(quiet_hits, [])
+        self.assertEqual(direct_hits[0]['event_id'], 'evt_0008')
+
+    def test_selector_targets_locked_important_npc_from_selected_event(self):
+        decision = build_selector_decision(
+            state_json={
+                'location': '鹰巢特工学院E栋靶场',
+                'main_event': '陆小环查看射击成绩',
+                'onstage_npcs': [],
+                'relevant_npcs': [],
+            },
+            recent_history=[{'role': 'assistant', 'content': '电子屏显示成绩逐轮提升。'}],
+            keeper_records={'records': []},
+            active_threads=[],
+            important_npcs=[{'primary_label': '维克托', 'role_label': '教官', 'locked': True}],
+            onstage=[],
+            relevant=[],
+            lorebook_entries=[],
+            system_npc_candidates=[],
+            lorebook_npc_candidates=[],
+            event_summaries=[{
+                'event_id': 'evt_0025',
+                'turn_id': 'turn-0025',
+                'summary': '陆小环查看成绩时，维克托折返回来称赞其成绩并提醒下午理论课。',
+                'actors': ['维克托'],
+                'keywords': ['射击成绩', '理论课'],
+            }],
+            summary_text='',
+            summary_chunks=[],
+            user_text='看自己的射击成绩',
+        )
+
+        self.assertIn('维克托', decision['npc_profile_targets'])
+        self.assertEqual(decision['event_hits'][0]['event_id'], 'evt_0025')
+
 
 if __name__ == '__main__':
     unittest.main()

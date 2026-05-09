@@ -290,6 +290,25 @@ def test_summary_chunk_actor_only_pressure_is_not_recalled_for_quiet_turn():
     assert hits == []
 
 
+def test_summary_chunk_weakness_pressure_requires_direct_overlap():
+    chunks = [{
+        'chunk_id': 'chunk_0002',
+        'turn_start': 1,
+        'turn_end': 12,
+        'actors_mentioned': ['维克托'],
+        'dense_summary': ['维克托在晨跑时观察到陆小环束胸导致呼吸困难，这可能成为暴露风险。'],
+        'keywords': ['维克托', '束胸', '呼吸困难'],
+        'unresolved': ['束胸弱点暴露风险'],
+    }]
+    recent = [{'role': 'assistant', 'content': '维克托曾经巡视训练场。'}]
+
+    assert summary_chunk_hits(chunks, recent_history=recent, user_text='低头吃完午饭') == []
+
+    hits = summary_chunk_hits(chunks, recent_history=recent, user_text='束胸勒得呼吸困难')
+
+    assert hits and hits[0]['chunk_id'] == 'chunk_0002'
+
+
 def test_event_summary_does_not_attribute_offscreen_onstage_actor():
     item = build_event_summary_item(
         turn_id='turn-0005',

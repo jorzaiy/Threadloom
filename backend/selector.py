@@ -19,6 +19,10 @@ PRESSURE_TOKENS = {
     '风险', '危险', '威胁', '暴露', '怀疑', '审查', '盘问', '追踪', '追捕', '封锁', '惩罚', '倒计时',
     '监视', '监控', '警告', '失控', '逼近', '逃跑', '退学', '查过', '异常',
 }
+WEAKNESS_TOKENS = {
+    '弱点', '弱势', '虚弱', '缺氧', '呼吸困难', '束胸', '疼痛', '受伤', '肿胀', '发紫', '青紫',
+    '手抖', '发抖', '体力不支', '撑不住', '暴露', '可疑',
+}
 ABSTRACT_NPC_TOKENS = {
     '时间', '空间', '规则', '概念', '逻辑', '关系', '事件', '问题', '目标', '答案', '线索', '风险',
     '情报', '记忆', '意识', '状态', '流程', '步骤', '进度', '盲区', '栏目', '标题', '课题', '题目',
@@ -55,6 +59,22 @@ def _topic_tokens(text: str) -> set[str]:
 def _pressure_tokens(text: str) -> set[str]:
     value = str(text or '')
     return {token for token in PRESSURE_TOKENS if token in value}
+
+
+def _sensitive_tokens(text: str) -> set[str]:
+    value = str(text or '')
+    return {token for token in (PRESSURE_TOKENS | WEAKNESS_TOKENS) if token in value}
+
+
+def _event_hit_text(event_hits: list[dict], event_summaries: list[dict]) -> str:
+    event_by_id = {str(item.get('event_id', '') or ''): item for item in event_summaries if isinstance(item, dict)}
+    parts = []
+    for hit in event_hits or []:
+        event = event_by_id.get(str(hit.get('event_id', '') or ''))
+        if not isinstance(event, dict):
+            continue
+        parts.append(_event_text(event))
+    return '\n'.join(parts)
 
 
 def _event_text(item: dict) -> str:
@@ -140,6 +160,12 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
         for name in (item.get('actors', []) or []):
             if str(name or '').strip() and str(name).strip() in actor_context_text:
                 actor_bonus += 1
+        event_text = _event_text(item)
+        event_sensitive = _sensitive_tokens(event_text)
+        user_sensitive = _sensitive_tokens(user_text)
+        explicit_user_overlap = bool(_topic_tokens(str(user_text or '')) & event_tokens)
+        if event_sensitive and not user_sensitive and not current_shared and not location_shared and not carryover_shared and not explicit_user_overlap:
+            continue
         if carryover_shared and not current_shared and not recent_shared and not location_shared and actor_bonus == 0:
             continue
         if clue_key and clue_key in seen_clues and carryover_shared and not current_shared and not location_shared:
@@ -216,9 +242,10 @@ def should_inject_npc_candidates(onstage: list[str], relevant: list[str], active
     return False
 
 
-def profile_targets(onstage: list[str], relevant: list[str], active_threads: list[dict], recent_history: list[dict], important_npcs: list[dict], limit: int = 3) -> list[str]:
+def profile_targets(onstage: list[str], relevant: list[str], active_threads: list[dict], recent_history: list[dict], important_npcs: list[dict], limit: int = 3, event_hits: list[dict] | None = None, event_summaries: list[dict] | None = None) -> list[str]:
     targets = []
     recent_text = joined_recent_text(recent_history)
+    selected_event_text = _event_hit_text(event_hits or [], event_summaries or [])
     for name in onstage:
         if _valid_npc_name(name) and name not in targets:
             targets.append(name)
@@ -230,7 +257,7 @@ def profile_targets(onstage: list[str], relevant: list[str], active_threads: lis
     for name in important_npc_names(important_npcs):
         if len(targets) >= limit:
             break
-        if _valid_npc_name(name) and name in recent_text and name not in targets:
+        if _valid_npc_name(name) and (name in recent_text or name in selected_event_text) and name not in targets:
             targets.append(name)
     return targets[:limit]
 
@@ -320,8 +347,12 @@ def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict]
                 score += min(3, len(shared_topics))
                 reason.append('topic_overlap')
         chunk_pressure = _pressure_tokens(chunk_text)
-        user_pressure = _pressure_tokens(user_text)
-        if chunk_pressure and not user_pressure and not object_overlap and not clue_overlap:
+        chunk_sensitive = _sensitive_tokens(chunk_text)
+        user_sensitive = _sensitive_tokens(user_text)
+        explicit_user_overlap = bool(_topic_tokens(str(user_text or '')) & _topic_tokens(chunk_text))
+        if chunk_sensitive and not user_sensitive and not object_overlap and not clue_overlap and not explicit_user_overlap:
+            continue
+        if chunk_pressure and not user_sensitive and not object_overlap and not clue_overlap:
             score -= 1.5
             reason.append('pressure_downgrade')
         reason_text = '+'.join(reason)
@@ -337,7 +368,6 @@ def build_selector_decision(*, state_json: dict, recent_history: list[dict], kee
     inject_lorebook = should_inject_lorebook_text(state_json, recent_history, keeper_records, lorebook_entries, active_threads, user_text=user_text)
     all_candidates = list(system_npc_candidates) + list(lorebook_npc_candidates)
     inject_candidates = should_inject_npc_candidates(onstage, relevant, active_threads, recent_history, important_npcs, all_candidates)
-    targets = profile_targets(onstage, relevant, active_threads, recent_history, important_npcs, limit=3)
     chunk_hits = summary_chunk_hits(
         summary_chunks or [],
         recent_history=recent_history,
@@ -346,6 +376,7 @@ def build_selector_decision(*, state_json: dict, recent_history: list[dict], kee
         knowledge_records=state_json.get('knowledge_records', []),
     )
     event_hits = event_summary_hits(event_summaries, state_json=state_json, recent_history=recent_history, user_text=user_text)
+    targets = profile_targets(onstage, relevant, active_threads, recent_history, important_npcs, limit=3, event_hits=event_hits, event_summaries=event_summaries)
     inject_summary = bool(chunk_hits) and any(hit.get('score', 0) >= 2 for hit in chunk_hits)
     npc_roster = build_npc_roster(
         onstage=onstage,
