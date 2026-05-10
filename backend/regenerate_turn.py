@@ -3,13 +3,115 @@ from __future__ import annotations
 
 try:
     from .handler_message import handle_message
-    from .runtime_store import load_history, load_meta, save_history, save_meta
+    from .runtime_store import load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, load_summary_chunks, load_turn_trace, save_event_summaries, save_history, save_meta, save_session_persona_layers, save_state, save_summary, save_summary_chunks, session_paths
+    from .summary_updater import update_summary
 except ImportError:
     from handler_message import handle_message
-    from runtime_store import load_history, load_meta, save_history, save_meta
+    from runtime_store import load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, load_summary_chunks, load_turn_trace, save_event_summaries, save_history, save_meta, save_session_persona_layers, save_state, save_summary, save_summary_chunks, session_paths
+    from summary_updater import update_summary
 
 
-def regenerate_last_partial(session_id: str) -> dict:
+def _latest_turn_id(meta: dict) -> str | None:
+    last_turn_id = int(meta.get('last_turn_id', 0) or 0)
+    if last_turn_id <= 0:
+        return None
+    return f'turn-{last_turn_id:04d}'
+
+
+def _drop_processed_turn(meta: dict, target_turn_id: str | None) -> None:
+    processed = dict(meta.get('processed_client_turn_ids', {}))
+    if processed and target_turn_id:
+        processed = {
+            key: value for key, value in processed.items()
+            if not isinstance(value, dict) or value.get('turn_id') != target_turn_id
+        }
+    meta['processed_client_turn_ids'] = processed
+
+
+def _drop_turn_audits(meta: dict, target_turn_id: str | None) -> None:
+    if not target_turn_id:
+        return
+    audits = meta.get('turn_audits', [])
+    if isinstance(audits, list):
+        meta['turn_audits'] = [
+            item for item in audits
+            if not isinstance(item, dict) or item.get('turn_id') != target_turn_id
+        ]
+    last_audit = meta.get('last_turn_audit')
+    if isinstance(last_audit, dict) and last_audit.get('turn_id') == target_turn_id:
+        remaining = meta.get('turn_audits', [])
+        if isinstance(remaining, list) and remaining:
+            meta['last_turn_audit'] = remaining[-1]
+        else:
+            meta.pop('last_turn_audit', None)
+
+
+def _rollback_derived_artifacts(session_id: str, target_turn_id: str, turn_trace: dict) -> None:
+    pre_turn = turn_trace.get('pre_turn', {}) if isinstance(turn_trace.get('pre_turn', {}), dict) else {}
+    prev_state = pre_turn.get('state') if isinstance(pre_turn.get('state'), dict) else None
+    if prev_state is None:
+        raise ValueError('turn trace does not contain pre-turn state')
+
+    save_state(session_id, prev_state)
+    persona_layers = pre_turn.get('persona_layers')
+    if isinstance(persona_layers, dict):
+        save_session_persona_layers(session_id, persona_layers)
+
+    event_payload = load_event_summaries(session_id)
+    items = [
+        item for item in event_payload.get('items', [])
+        if not isinstance(item, dict) or str(item.get('turn_id', '') or '') != target_turn_id
+    ]
+    event_payload['items'] = items
+    save_event_summaries(session_id, event_payload)
+
+    save_summary_chunks(session_id, {'version': 1, 'chunks': []})
+    keeper_archive = session_paths(session_id)['keeper_archive']
+    if keeper_archive.exists():
+        keeper_archive.unlink()
+
+
+def _snapshot_artifacts(session_id: str, history: list, meta: dict) -> dict:
+    paths = session_paths(session_id)
+    keeper_archive = paths['keeper_archive']
+    return {
+        'history': list(history),
+        'meta': dict(meta),
+        'state': load_state(session_id),
+        'persona_layers': load_session_persona_layers(session_id),
+        'event_summaries': load_event_summaries(session_id),
+        'summary_chunks': load_summary_chunks(session_id),
+        'summary': load_summary(session_id),
+        'keeper_archive_exists': keeper_archive.exists(),
+        'keeper_archive_text': keeper_archive.read_text(encoding='utf-8') if keeper_archive.exists() else '',
+    }
+
+
+def _restore_artifacts(session_id: str, snapshot: dict) -> None:
+    save_history(session_id, snapshot.get('history', []))
+    save_meta(session_id, snapshot.get('meta', {}))
+    state = snapshot.get('state')
+    if isinstance(state, dict):
+        save_state(session_id, state)
+    persona_layers = snapshot.get('persona_layers')
+    if isinstance(persona_layers, dict):
+        save_session_persona_layers(session_id, persona_layers)
+    event_summaries = snapshot.get('event_summaries')
+    if isinstance(event_summaries, dict):
+        save_event_summaries(session_id, event_summaries)
+    summary_chunks = snapshot.get('summary_chunks')
+    if isinstance(summary_chunks, dict):
+        save_summary_chunks(session_id, summary_chunks)
+    save_summary(session_id, str(snapshot.get('summary', '') or ''))
+    keeper_archive = session_paths(session_id)['keeper_archive']
+    if snapshot.get('keeper_archive_exists'):
+        keeper_archive.parent.mkdir(parents=True, exist_ok=True)
+        keeper_archive.write_text(str(snapshot.get('keeper_archive_text', '') or ''), encoding='utf-8')
+    elif keeper_archive.exists():
+        keeper_archive.unlink()
+
+
+def regenerate_last_partial(session_id: str, *, allow_complete: bool = False) -> dict:
     history = load_history(session_id)
     meta = load_meta(session_id)
     if len(history) < 2:
@@ -19,30 +121,54 @@ def regenerate_last_partial(session_id: str) -> dict:
     user = history[-2]
     if user.get('role') != 'user' or assistant.get('role') != 'assistant':
         return {'error': {'code': 'NO_PARTIAL_TURN', 'message': 'latest turn is not a user/assistant pair'}}
-    if assistant.get('completion_status') != 'partial':
+    completion_status = assistant.get('completion_status', 'complete')
+    if completion_status != 'partial' and not allow_complete:
         return {'error': {'code': 'NO_PARTIAL_TURN', 'message': 'latest assistant reply is not partial'}}
+
+    restore_snapshot = _snapshot_artifacts(session_id, history, meta) if completion_status != 'partial' else None
+    target_turn_id = _latest_turn_id(meta)
+    if completion_status != 'partial':
+        if not target_turn_id:
+            return {'error': {'code': 'NO_REGENERATABLE_TURN', 'message': 'no committed turn to regenerate'}}
+        turn_trace = load_turn_trace(session_id, target_turn_id)
+        if not turn_trace:
+            return {'error': {'code': 'TURN_TRACE_MISSING', 'message': 'latest turn trace is required to regenerate a complete turn'}}
+        try:
+            _rollback_derived_artifacts(session_id, target_turn_id, turn_trace)
+        except ValueError as err:
+            return {'error': {'code': 'TURN_TRACE_MISSING', 'message': str(err)}}
 
     trimmed_history = history[:-2]
     save_history(session_id, trimmed_history)
+    if completion_status != 'partial':
+        update_summary(session_id)
 
-    target_turn_id = f'turn-{int(meta.get("last_turn_id", 0)):04d}' if int(meta.get('last_turn_id', 0) or 0) > 0 else None
     if meta.get('last_turn_id', 0) > 0:
         meta['last_turn_id'] = int(meta.get('last_turn_id', 0)) - 1
-    processed = dict(meta.get('processed_client_turn_ids', {}))
-    if processed and target_turn_id:
-        processed = {
-            key: value for key, value in processed.items()
-            if not isinstance(value, dict) or value.get('turn_id') != target_turn_id
-        }
-    meta['processed_client_turn_ids'] = processed
+    _drop_processed_turn(meta, target_turn_id)
+    _drop_turn_audits(meta, target_turn_id)
     save_meta(session_id, meta)
 
-    return handle_message({
-        'session_id': session_id,
-        'text': str(user.get('content', '') or ''),
-        'client_turn_id': f'regenerate-{assistant.get("ts", "latest")}',
-        'meta': {
-            'source': 'regenerate',
-            'debug': True,
-        },
-    })
+    try:
+        result = handle_message({
+            'session_id': session_id,
+            'text': str(user.get('content', '') or ''),
+            'client_turn_id': f'regenerate-{assistant.get("ts", "latest")}',
+            'meta': {
+                'source': 'regenerate',
+                'debug': True,
+            },
+        })
+    except Exception:
+        if restore_snapshot is not None:
+            _restore_artifacts(session_id, restore_snapshot)
+        raise
+    if 'error' in result and restore_snapshot is not None:
+        _restore_artifacts(session_id, restore_snapshot)
+        return result
+    if 'error' not in result:
+        regenerated_history = load_history(session_id)
+        if len(regenerated_history) >= 2 and regenerated_history[-2].get('role') == 'user':
+            regenerated_history[-2] = dict(user)
+            save_history(session_id, regenerated_history)
+    return result

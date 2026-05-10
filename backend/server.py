@@ -832,6 +832,7 @@ class Handler(BaseHTTPRequestHandler):
                 session_id = str(payload.get('session_id', '') or '').strip()
                 if not session_id:
                     return self._invalid_input('session_id is required')
+                allow_complete = payload_bool(payload, 'allow_complete', required=False)
                 try:
                     session_id = normalize_session_id(session_id)
                 except ValueError as err:
@@ -839,7 +840,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._validate_active_session_scope(session_id, allow_missing=False):
                     return
                 with self._session_lock(session_id):
-                    result = regenerate_last_partial(session_id)
+                    result = regenerate_last_partial(session_id, allow_complete=allow_complete)
                 status = 200 if 'error' not in result else 400
                 return self._send(status, result)
 
