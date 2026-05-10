@@ -184,14 +184,7 @@ class RegressionTester:
         
         try:
             # 构建context（这会触发selector）
-            history = load_history(self.session_id)
-            state = load_state(self.session_id)
-            
-            context = build_runtime_context(
-                session_id=self.session_id,
-                recent_history=history[-20:] if len(history) > 20 else history,
-                state_json=state
-            )
+            context = build_runtime_context(session_id=self.session_id)
             
             # 1. 检查keeper records注入
             keeper_records = context.get('keeper_records', {})
