@@ -149,8 +149,9 @@ def _extract_chat_content(data: dict) -> str:
 
 
 def _extract_responses_text(data: dict) -> str:
-    if isinstance(data.get('output_text'), str) and data.get('output_text').strip():
-        return data['output_text'].strip()
+    output_text = data.get('output_text')
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
     outputs = data.get('output') or []
     parts = []
     for item in outputs:

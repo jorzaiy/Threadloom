@@ -58,9 +58,11 @@ def _resolve_and_validate(host: str, port: int, *, allow_loopback: bool) -> list
         if family not in (socket.AF_INET, socket.AF_INET6):
             continue
         ip = sockaddr[0]
+        if not isinstance(ip, str):
+            continue
         if not _is_safe_ip(ip, allow_loopback=allow_loopback):
             raise UnsafeTargetError(f'{host} resolves to non-public address {ip}')
-        out.append((family, ip))
+        out.append((int(family), ip))
     if not out:
         raise UnsafeTargetError(f'{host} has no usable address records')
     return out
@@ -71,12 +73,13 @@ class _IPPinnedHTTPSConnection(http.client.HTTPSConnection):
         super().__init__(host, port, timeout=timeout, context=context)
         self._target_ip = target_ip
         self._target_family = target_family
+        self._ssl_context = context
 
     def connect(self):
         sock = socket.socket(self._target_family, socket.SOCK_STREAM)
         sock.settimeout(self.timeout)
         sock.connect((self._target_ip, self.port))
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+        self.sock = self._ssl_context.wrap_socket(sock, server_hostname=self.host)
 
 
 class _IPPinnedHTTPConnection(http.client.HTTPConnection):
