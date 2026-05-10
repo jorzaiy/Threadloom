@@ -4,15 +4,18 @@ import ipaddress
 import json
 import os
 import re
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
 try:
     from . import paths as _paths
+    from .atomic_io import atomic_write_json
     from .paths import APP_ROOT, DEFAULT_USER_ID, active_user_id, read_json_file, resolve_layered_source, user_config_root, user_presets_root
     from .user_manager import is_multi_user_enabled
 except ImportError:
     import paths as _paths
+    from atomic_io import atomic_write_json
     from paths import APP_ROOT, DEFAULT_USER_ID, active_user_id, read_json_file, resolve_layered_source, user_config_root, user_presets_root
     from user_manager import is_multi_user_enabled
 
@@ -55,6 +58,7 @@ DEFAULT_ADVANCED_MODELS = {
         'stream': False,
     },
 }
+MODEL_CONFIG_LOCK = threading.RLock()
 STATE_KEEPER_CANDIDATE_DEFAULT = {
     'provider': SITE_PROVIDER_NAME,
     'model': '',
@@ -92,8 +96,8 @@ def read_json(path: Path):
 
 
 def write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    with MODEL_CONFIG_LOCK:
+        atomic_write_json(path, payload)
 
 
 def _global_site_config() -> Path:

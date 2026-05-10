@@ -3,12 +3,54 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
+import threading
 from pathlib import Path
 
 try:
+    from .atomic_io import atomic_write_bytes, atomic_write_json
     from .paths import character_source_root, is_character_override_active, is_multi_user_request_context, shared_path, user_profile_root
 except ImportError:
+    from atomic_io import atomic_write_bytes, atomic_write_json
     from paths import character_source_root, is_character_override_active, is_multi_user_request_context, shared_path, user_profile_root
+
+
+PLAYER_PROFILE_LOCK = threading.RLock()
+
+
+def _paths_module():
+    for name in ('paths', 'backend.paths'):
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        if module.is_multi_user_request_context() or module.active_user_id() != module.DEFAULT_USER_ID:
+            return module
+    return sys.modules.get('paths') or sys.modules.get('backend.paths')
+
+
+def _user_profile_root() -> Path:
+    module = _paths_module()
+    return module.user_profile_root() if module is not None else user_profile_root()
+
+
+def _character_source_root() -> Path:
+    module = _paths_module()
+    return module.character_source_root() if module is not None else character_source_root()
+
+
+def _shared_path(*parts: str) -> Path:
+    module = _paths_module()
+    return module.shared_path(*parts) if module is not None else shared_path(*parts)
+
+
+def _is_multi_user_request_context() -> bool:
+    module = _paths_module()
+    return module.is_multi_user_request_context() if module is not None else is_multi_user_request_context()
+
+
+def _is_character_override_active() -> bool:
+    module = _paths_module()
+    return module.is_character_override_active() if module is not None else is_character_override_active()
 
 
 PROFILE_FIELD_ALIASES = {
@@ -245,22 +287,22 @@ def _merge_value(base, override):
 
 
 def base_player_profile_path() -> Path:
-    layered = user_profile_root() / 'player-profile.base.json'
+    layered = _user_profile_root() / 'player-profile.base.json'
     if layered.exists():
         return layered
-    legacy = user_profile_root() / 'player-profile.json'
+    legacy = _user_profile_root() / 'player-profile.json'
     if legacy.exists():
         return legacy
-    if is_multi_user_request_context() or is_character_override_active():
+    if _is_multi_user_request_context() or _is_character_override_active():
         return layered
-    shared_base = shared_path('player-profile.base.json')
+    shared_base = _shared_path('player-profile.base.json')
     if shared_base.exists():
         return shared_base
-    return shared_path('player-profile.json')
+    return _shared_path('player-profile.json')
 
 
 def character_player_profile_override_path() -> Path:
-    return character_source_root() / 'player-profile.override.json'
+    return _character_source_root() / 'player-profile.override.json'
 
 
 def load_base_player_profile() -> dict:
@@ -268,14 +310,14 @@ def load_base_player_profile() -> dict:
 
 
 def save_base_player_profile(payload: dict) -> Path:
-    path = user_profile_root() / 'player-profile.base.json'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    path = _user_profile_root() / 'player-profile.base.json'
+    with PLAYER_PROFILE_LOCK:
+        atomic_write_json(path, payload)
     return path
 
 
 def user_avatar_dir() -> Path:
-    return user_profile_root() / 'assets'
+    return _user_profile_root() / 'assets'
 
 
 def resolve_user_avatar_path() -> Path | None:
@@ -293,27 +335,29 @@ def save_user_avatar(filename: str, content: bytes) -> Path:
     suffix = Path(filename or '').suffix.lower()
     if suffix not in {'.png', '.jpg', '.jpeg', '.webp'}:
         raise ValueError('avatar file must be png, jpg, jpeg, or webp')
-    root = user_avatar_dir()
-    root.mkdir(parents=True, exist_ok=True)
-    for existing in root.glob('avatar.*'):
-        try:
-            existing.unlink()
-        except Exception:
-            pass
-    target = root / f'avatar{suffix}'
-    target.write_bytes(content)
+    with PLAYER_PROFILE_LOCK:
+        root = user_avatar_dir()
+        root.mkdir(parents=True, exist_ok=True)
+        for existing in root.glob('avatar.*'):
+            try:
+                existing.unlink()
+            except Exception:
+                pass
+        target = root / f'avatar{suffix}'
+        atomic_write_bytes(target, content)
     return target
 
 
 def delete_user_avatar() -> bool:
-    path = resolve_user_avatar_path()
-    if not path:
-        return False
-    try:
-        path.unlink()
-        return True
-    except Exception:
-        return False
+    with PLAYER_PROFILE_LOCK:
+        path = resolve_user_avatar_path()
+        if not path:
+            return False
+        try:
+            path.unlink()
+            return True
+        except Exception:
+            return False
 
 
 def load_character_player_profile_override() -> dict:
@@ -333,8 +377,8 @@ def load_effective_player_profile() -> dict:
 
 def save_character_player_profile_override(payload: dict) -> Path:
     path = character_player_profile_override_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    with PLAYER_PROFILE_LOCK:
+        atomic_write_json(path, payload)
     return path
 
 

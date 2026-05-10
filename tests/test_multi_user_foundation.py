@@ -81,6 +81,24 @@ def make_get_handler(path: str) -> CaptureGetHandler:
 
 
 class MultiUserFoundationTests(unittest.TestCase):
+    def setUp(self):
+        for module_name in ('backend.paths', 'paths'):
+            module = sys.modules.get(module_name)
+            if module is None:
+                continue
+            module._ACTIVE_USER_ID.set(module.DEFAULT_USER_ID)
+            module._MULTI_USER_REQUEST.set(False)
+            module.clear_active_character_override()
+
+    def tearDown(self):
+        for module_name in ('backend.paths', 'paths'):
+            module = sys.modules.get(module_name)
+            if module is None:
+                continue
+            module._ACTIVE_USER_ID.set(module.DEFAULT_USER_ID)
+            module._MULTI_USER_REQUEST.set(False)
+            module.clear_active_character_override()
+
     def test_active_user_context_resets_after_scope(self):
         self.assertEqual(paths.active_user_id(), paths.DEFAULT_USER_ID)
 
@@ -856,14 +874,15 @@ class MultiUserFoundationTests(unittest.TestCase):
 
     def test_user_profile_route_uses_multi_user_context_before_loading_profile(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_runtime_root = paths.RUNTIME_DATA_ROOT
-            original_shared_root = paths.SHARED_ROOT
+            path_modules = [module for name in ('backend.paths', 'paths') if (module := sys.modules.get(name)) is not None]
+            original_module_roots = [(module, getattr(module, 'RUNTIME_DATA_ROOT'), getattr(module, 'SHARED_ROOT')) for module in path_modules]
             original_is_multi_user_enabled = server.is_multi_user_enabled
             original_resolve_user_from_request = server.resolve_user_from_request
             temp_root = Path(temp_dir)
             try:
-                paths.RUNTIME_DATA_ROOT = temp_root / 'runtime-data'
-                paths.SHARED_ROOT = temp_root / 'shared'
+                for module in path_modules:
+                    setattr(module, 'RUNTIME_DATA_ROOT', temp_root / 'runtime-data')
+                    setattr(module, 'SHARED_ROOT', temp_root / 'shared')
                 shared_profile = paths.SHARED_ROOT / 'player-profile.json'
                 shared_profile.parent.mkdir(parents=True, exist_ok=True)
                 shared_profile.write_text(json.dumps({'name': 'shared-private'}), encoding='utf-8')
@@ -881,8 +900,9 @@ class MultiUserFoundationTests(unittest.TestCase):
                 self.assertEqual(paths.active_user_id(), paths.DEFAULT_USER_ID)
                 self.assertFalse(paths.is_multi_user_request_context())
             finally:
-                paths.RUNTIME_DATA_ROOT = original_runtime_root
-                paths.SHARED_ROOT = original_shared_root
+                for module, runtime_root, shared_root in original_module_roots:
+                    setattr(module, 'RUNTIME_DATA_ROOT', runtime_root)
+                    setattr(module, 'SHARED_ROOT', shared_root)
                 server.is_multi_user_enabled = original_is_multi_user_enabled
                 server.resolve_user_from_request = original_resolve_user_from_request
 
