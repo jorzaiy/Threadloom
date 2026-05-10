@@ -298,6 +298,8 @@ partial 相关行为：
 - `ENTITY_NOT_FOUND`
 - `SESSION_NOT_FOUND`
 - `NO_PARTIAL_TURN`
+- `NO_REGENERATABLE_TURN`
+- `TURN_TRACE_MISSING`
 - `NARRATOR_UNAVAILABLE`
 - `INTERNAL_ERROR`
 
@@ -518,24 +520,38 @@ partial 相关行为：
 
 ## POST /api/regenerate-last
 
-仅当“最后一条 assistant 回复为 partial”时可用。
+重新生成最后一条 narrator/assistant 回复。
+
+默认保持旧行为：仅当最后一条 assistant 回复为 `partial` 时可用。前端重新生成按钮会传 `allow_complete=true`，允许对最新完整 narrator 回合执行“保留用户输入、替换 narrator 输出”的重生。
 
 ### Request
 
 ```json
 {
-  "session_id": "story-live"
+  "session_id": "story-live",
+  "allow_complete": true
 }
 ```
 
+`allow_complete` 可选，默认 `false`。
+
 ### Current Behavior
 
-当前实现会：
+partial 回复路径会：
 - 检查最后两条历史是否为 `user -> assistant(partial)`
 - 回滚最后一对 user/assistant
 - 回退 `last_turn_id`
 - 按 `turn_id` 清理对应幂等缓存项
 - 重新调用 `handle_message()` 生成该轮
+
+完整 narrator 回复且 `allow_complete=true` 时会：
+- 检查最后两条历史是否为 `user -> assistant(complete)`
+- 读取最新 turn trace 的 `pre_turn.state` 与 `pre_turn.persona_layers`
+- 回滚上一条 narrator 输出造成的 `state / persona / event_summaries / summary_chunks / keeper_archive / summary / meta audit` 派生影响
+- 保留原用户输入作为该回合输入；最终 history 仍是同一条 user 后接新的 assistant
+- 回退并重新提交同一个 turn 序号，清理指向旧 turn response 的幂等缓存
+
+完整回合 regenerate 需要最新 turn trace；如果 trace 已被关闭或清理，会拒绝执行，避免只回滚 history 导致事实层不一致。
 
 ### Error
 

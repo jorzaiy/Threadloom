@@ -199,6 +199,21 @@ Persona 写回的职责边界：`persona_updater` 负责人物 seed 的 scene/ar
 - state snapshot
 - 调试信息（可选）
 
+### Regenerate latest narrator turn
+
+用户对最后一条 narrator 输出不满意时，前端可以调用 `/api/regenerate-last` 并传 `allow_complete=true`。该流程不是新增用户回合，也不改写用户输入；它只替换最新 `user -> assistant` 对里的 assistant/narrator 输出。
+
+完整回合 regenerate 必须先用最新 turn trace 的 `pre_turn` 快照回滚旧 narrator 输出造成的事实层影响：
+
+- `state.json` 恢复到该轮 narrator 生成前
+- session-local `persona/*` 恢复到该轮生成前
+- 删除该 turn 的 `event_summaries` 项
+- 清空 `summary_chunks` 与 `keeper_record_archive` 派生缓存，避免旧输出继续参与 selector/context
+- 用回滚后的 history/state 重建 `summary.md`
+- 清理指向旧 turn response 的幂等缓存与 audit
+
+回滚后再用同一条用户输入重新进入主链。最终 history 仍保持一条原 user，后接新的 assistant。若最新 turn trace 缺失，完整回合 regenerate 会拒绝执行，避免只替换 history 而留下污染的事实层。
+
 ---
 
 ## Backend Handler 顺序
