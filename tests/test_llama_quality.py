@@ -3,9 +3,17 @@
 在已有Kimi session基础上测试Llama质量
 """
 import json
+import os
 import requests
 import time
 from pathlib import Path
+
+import pytest
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(os.environ.get('THREADLOOM_RUN_INTEGRATION') != '1', reason='live integration check; set THREADLOOM_RUN_INTEGRATION=1 to run'),
+]
 
 BASE_URL = "http://localhost:8765"
 CONFIG_PATH = Path("runtime-data/default-user/config/model-runtime.json")
@@ -187,7 +195,8 @@ def test_llama_quality():
         success = [r for r in results if r['success']]
         
         print(f"\n成功率: {len(success)}/{len(TEST_MESSAGES)} ({len(success)/len(TEST_MESSAGES)*100:.0f}%)")
-        print(f"平均耗时: {total_time/len(success):.1f}秒/轮")
+        avg_time = total_time / len(success) if success else 0
+        print(f"平均耗时: {avg_time:.1f}秒/轮")
         print(f"总耗时: {total_time:.1f}秒")
         
         if success:
@@ -222,6 +231,9 @@ def test_llama_quality():
                     print(f"   - 质量分数低: {quality_score}")
                 print(f"\n❌ 暂不推荐替换")
                 return False
+
+        print("\n❌ 所有请求均失败，无法评估质量")
+        return False
         
         # 保存结果
         Path('llama_quality_test_result.json').write_text(

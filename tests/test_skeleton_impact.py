@@ -131,7 +131,7 @@ def get_state_quality(session_id: str) -> dict:
     
     return quality
 
-def test_session(session_id: str, skeleton_enabled: bool) -> dict:
+def run_session_check(session_id: str, skeleton_enabled: bool) -> dict:
     """测试单个session"""
     mode = "开启Skeleton" if skeleton_enabled else "关闭Skeleton"
     print(f"\n{'='*70}")
@@ -150,7 +150,6 @@ def test_session(session_id: str, skeleton_enabled: bool) -> dict:
         result = send_message(session_id, msg)
         
         if result['success']:
-            state = result['state_snapshot']
             quality = get_state_quality(session_id)
             
             print(f"  ✅ {result['elapsed']:.1f}s")
@@ -289,7 +288,7 @@ def main():
     
     try:
         # 测试1: 开启skeleton
-        with_skeleton = test_session(
+        with_skeleton = run_session_check(
             f"skeleton-test-on-{int(time.time())}",
             skeleton_enabled=True
         )
@@ -297,7 +296,7 @@ def main():
         time.sleep(3)
         
         # 测试2: 关闭skeleton
-        without_skeleton = test_session(
+        without_skeleton = run_session_check(
             f"skeleton-test-off-{int(time.time())}",
             skeleton_enabled=False
         )

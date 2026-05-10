@@ -147,7 +147,7 @@ def analyze_result(result: Dict, message: str) -> Dict:
         'scene_mode': debug.get('scene_mode', 'unknown'),
     }
 
-def test_model(model_id: str, model_name: str, session_id: str) -> Dict:
+def run_model_check(model_id: str, model_name: str, session_id: str) -> Dict:
     """测试单个模型"""
     print(f"\n{'='*60}")
     print(f"🧪 测试模型: {model_name} ({model_id})")
@@ -295,7 +295,7 @@ def main():
     
     try:
         # 测试Kimi
-        kimi_summary = test_model(
+        kimi_summary = run_model_check(
             'kimi-k2-0905-preview',
             'Kimi',
             'model-test-kimi'
@@ -304,7 +304,7 @@ def main():
         time.sleep(5)
         
         # 测试Llama
-        llama_summary = test_model(
+        llama_summary = run_model_check(
             'Llama-3.3-70B',
             'Llama-3.3-70B',
             'model-test-llama'

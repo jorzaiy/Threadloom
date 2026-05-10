@@ -75,7 +75,7 @@ def send_message(session_id: str, text: str, timeout: int = 180) -> dict:
             'error': str(e)
         }
 
-def test_model_simple(model_id: str, model_name: str, base_session: str) -> dict:
+def run_model_simple(model_id: str, model_name: str, base_session: str) -> dict:
     """简化的模型测试 - 基于已有session"""
     print(f"\n{'='*70}")
     print(f"🧪 测试: {model_name}")
@@ -216,12 +216,12 @@ def main():
     
     try:
         # 测试Kimi
-        kimi = test_model_simple('kimi-k2-0905-preview', 'Kimi', 'compare')
+        kimi = run_model_simple('kimi-k2-0905-preview', 'Kimi', 'compare')
         
         time.sleep(3)
         
         # 测试Llama  
-        llama = test_model_simple('Llama-3.3-70B', 'Llama-3.3-70B', 'compare')
+        llama = run_model_simple('Llama-3.3-70B', 'Llama-3.3-70B', 'compare')
         
         # 保存结果
         result = {
