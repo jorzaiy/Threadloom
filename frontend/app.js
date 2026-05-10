@@ -1168,6 +1168,8 @@ function renderMessages(items) {
     messagesEl.appendChild(empty);
     return;
   }
+  const lastAssistantIndex = allItems.map(i => i.role).lastIndexOf('assistant');
+  let i = 0;
   for (const item of allItems) {
     const article = document.createElement('article');
     article.className = `msg ${item.role}`;
@@ -1197,12 +1199,38 @@ function renderMessages(items) {
     body.className = 'msg-body';
     if (item.role === 'assistant') {
       body.innerHTML = renderMarkdown(item.content);
+      if (i === lastAssistantIndex && !pendingUserMessage) {
+        const wrap = document.createElement('div');
+        wrap.className = 'msg-regenerate-wrap';
+        const btn = document.createElement('button');
+        btn.className = 'msg-regenerate-btn';
+        btn.type = 'button';
+        btn.title = '重新生成上一条';
+        btn.setAttribute('aria-label', '重新生成上一条');
+        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 1 0 2.63-6.37L21 8"></path></svg>';
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          btn.classList.add('loading');
+          setStatus('重新生成中...', 'working');
+          try {
+            await regenerateLast();
+            setStatus('已重新生成', 'ok');
+          } catch (err) {
+            setStatus(`错误：${err.message}`, 'error');
+            btn.disabled = false;
+            btn.classList.remove('loading');
+          }
+        });
+        wrap.appendChild(btn);
+        body.appendChild(wrap);
+      }
     } else {
       body.textContent = item.content;
     }
     article.appendChild(head);
     article.appendChild(body);
     messagesEl.appendChild(article);
+    i++;
   }
 
   if (historyToolbar) historyToolbar.hidden = true;
@@ -1629,7 +1657,7 @@ async function regenerateLast() {
   const data = await apiJson('/api/regenerate-last', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({session_id: sessionId()})
+    body: JSON.stringify({session_id: sessionId(), allow_complete: true})
   });
   pendingUserMessage = null;
   await loadHistory();

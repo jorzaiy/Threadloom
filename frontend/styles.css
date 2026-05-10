@@ -789,6 +789,59 @@ button:active {
   border-radius: 16px;
 }
 
+.msg-regenerate-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+  margin-bottom: -10px;
+  margin-right: -6px;
+}
+
+.msg-regenerate-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  opacity: 0.25;
+}
+
+.msg.assistant:hover .msg-regenerate-btn {
+  opacity: 0.6;
+}
+
+.msg-regenerate-btn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--primary);
+}
+
+.msg-regenerate-btn:disabled,
+.msg-regenerate-btn.loading {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.msg-regenerate-btn:disabled:hover,
+.msg-regenerate-btn.loading:hover {
+  opacity: 0.3;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.msg-regenerate-btn.loading svg {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  100% { transform: rotate(360deg); }
+}
+
 .msg.pending .msg-body {
   opacity: 0.74;
 }
