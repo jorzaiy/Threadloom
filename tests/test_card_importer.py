@@ -589,7 +589,7 @@ def test_cover_small_is_actually_smaller_than_original(tmp_path, monkeypatch):
     import character_assets
 
     # Build a real PNG (non-square so we exercise center crop)
-    src = Image.new('RGB', (1024, 1536), color=(123, 45, 67))
+    src = Image.new('RGB', (1024, 1536))
     buf = BytesIO()
     src.save(buf, format='PNG')
     png_bytes = buf.getvalue()
@@ -603,7 +603,7 @@ def test_cover_small_is_actually_smaller_than_original(tmp_path, monkeypatch):
     small = tmp_path / 'assets' / 'cover-small.png'
     assert original.read_bytes() == png_bytes
     assert small.read_bytes() != png_bytes, "small must not be a byte-copy of original"
-    with Image.open(small) as img:
+    with Image.open(str(small)) as img:
         assert img.size == (320, 320), f"thumbnail should be 320x320, got {img.size}"
     assert small.stat().st_size < original.stat().st_size
 

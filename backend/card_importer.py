@@ -19,12 +19,15 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import struct
+import tempfile
 from pathlib import Path
 from typing import Any
 
 try:
+    from atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
     from .card_hints import invalidate_card_hints_cache
     from .name_sanitizer import invalidate_protagonist_names_cache
     from .character_assets import (
@@ -41,6 +44,7 @@ try:
     )
     from .lorebook_distiller import rebuild_lorebook_distillation
 except ImportError:
+    from atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
     from card_hints import invalidate_card_hints_cache
     from name_sanitizer import invalidate_protagonist_names_cache
     from character_assets import (
@@ -180,8 +184,7 @@ def load_raw_card(path: str | Path) -> dict:
 
 
 def _write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    atomic_write_json(path, payload)
 
 
 def _clean_text(value: Any) -> str:
@@ -292,9 +295,12 @@ def _replace_sillytavern_placeholders(text: str, *, char_name: str = '', user_na
 
     def _replace(match: re.Match) -> str:
         key = match.group(1).strip().lower()
-        return replacements.get(key, match.group(0))
+        if key in replacements:
+            return replacements[key]
+        return match.group(0)
 
-    return re.sub(r'\{\{\s*(char|user)\s*\}\}', _replace, value, flags=re.IGNORECASE)
+    result: str = re.sub(r'\{\{\s*(char|user)\s*\}\}', _replace, value, flags=re.IGNORECASE)
+    return result
 
 
 def _extract_character_core(card_json: dict) -> dict:
@@ -1422,7 +1428,7 @@ def _write_cover_assets(png_data: bytes | None, *, raw_card_hash: str) -> dict:
         return result
     original_path = assets_root / 'cover-original.png'
     small_path = assets_root / 'cover-small.png'
-    original_path.write_bytes(png_data)
+    atomic_write_bytes(original_path, png_data)
 
     small_written = False
     try:
@@ -1444,7 +1450,7 @@ def _write_cover_assets(png_data: bytes | None, *, raw_card_hash: str) -> dict:
         logger.warning('Failed to generate cover-small thumbnail (%s); falling back to full-size copy', err)
 
     if not small_written:
-        small_path.write_bytes(png_data)
+        atomic_write_bytes(small_path, png_data)
 
     result['cover_saved'] = True
     result['cover_paths'] = [str(original_path), str(small_path)]
@@ -1459,7 +1465,7 @@ def _write_imported_backups(card_json: dict, png_data: bytes | None, *, raw_card
     png_path = None
     if png_data:
         png_path = imported_root / f'{raw_card_hash}.original.png'
-        png_path.write_bytes(png_data)
+        atomic_write_bytes(png_path, png_data)
     return {
         'raw_card_path': str(raw_path),
         'png_backup_path': str(png_path) if png_path else '',
@@ -1553,7 +1559,7 @@ def _write_runtime_baselines(core: dict, lorebook: dict, system_npcs: dict) -> N
         '- 系统级 NPC 应优先来自 system-npcs.json，不在这里重复堆叠整份人物表。',
         '',
     ])
-    canon_path.write_text('\n'.join(canon_lines), encoding='utf-8')
+    atomic_write_text(canon_path, '\n'.join(canon_lines))
 
     state_lines = [
         '# State',
@@ -1590,7 +1596,7 @@ def _write_runtime_baselines(core: dict, lorebook: dict, system_npcs: dict) -> N
         '- 先完成开局选择并建立当前局势。',
         '',
     ]
-    state_path.write_text('\n'.join(state_lines), encoding='utf-8')
+    atomic_write_text(state_path, '\n'.join(state_lines))
 
     npc_count = len(system_npcs.get('items', [])) if isinstance(system_npcs.get('items', []), list) else 0
     summary_lines = [
@@ -1613,7 +1619,7 @@ def _write_runtime_baselines(core: dict, lorebook: dict, system_npcs: dict) -> N
         '- 第一批在场人物如何进入当前局势。',
         '',
     ]
-    summary_path.write_text('\n'.join(summary_lines), encoding='utf-8')
+    atomic_write_text(summary_path, '\n'.join(summary_lines))
 
 
 def import_card_bundle(card_json: dict, *, png_data: bytes | None = None) -> dict:
