@@ -7,11 +7,13 @@ from pathlib import Path
 from urllib.parse import quote
 
 try:
+    from atomic_io import atomic_write_json, atomic_write_text
     from .character_assets import resolve_character_cover_path
     from .persona_runtime import infer_persona_traits
     from .name_sanitizer import sanitize_runtime_name, looks_like_bad_entity_fragment
     from .paths import APP_ROOT, SHARED_ROOT, active_character_id, active_user_label, character_npcs_root, character_runtime_persona_root, character_source_root, is_character_override_active, is_multi_user_request_context, normalize_turn_id, resolve_layered_source, resolve_session_dir, shared_path
 except ImportError:
+    from atomic_io import atomic_write_json, atomic_write_text
     from character_assets import resolve_character_cover_path
     from persona_runtime import infer_persona_traits
     from name_sanitizer import sanitize_runtime_name, looks_like_bad_entity_fragment
@@ -26,24 +28,11 @@ CONFIG = RUNTIME_WEB / 'config' / 'runtime.json'
 # 原子写入：先写临时文件再 rename，防止中途中断导致文件损坏
 # ---------------------------------------------------------------------------
 def _atomic_write_text(path: Path, content: str, encoding: str = 'utf-8') -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
-    try:
-        with os.fdopen(fd, 'w', encoding=encoding) as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, str(path))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(path, content, encoding=encoding)
 
 
 def _atomic_write_json(path: Path, data, *, indent: int = 2) -> None:
-    _atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=indent) + '\n')
+    atomic_write_json(path, data, indent=indent)
 
 _history_cache: dict[str, tuple[float, list]] = {}
 
