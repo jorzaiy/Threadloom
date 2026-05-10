@@ -2334,6 +2334,7 @@ async function checkAuth() {
     authState.role = data.role || 'admin';
     authState.multiUserEnabled = !!data.multi_user_enabled;
     authState.adminHasPassword = !!data.admin_has_password;
+    if (data.token) setAuthToken(data.token);
     return data;
   } catch (_err) {
     authState.userId = '';
@@ -2394,7 +2395,8 @@ async function runMainBoot() {
 // Multi-user auth + settings glue
 // ─────────────────────────────────────────────────────────────
 
-const AUTH_TOKEN_KEY = 'tl_session_token';
+let authToken = '';
+try { localStorage.removeItem('tl_session_token'); } catch (_err) {}
 
 const authState = {
   userId: '',
@@ -2404,13 +2406,13 @@ const authState = {
 };
 
 function getAuthToken() {
-  try { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch (_e) { return ''; }
+  return authToken;
 }
 function setAuthToken(token) {
-  try { localStorage.setItem(AUTH_TOKEN_KEY, token); } catch (_e) {}
+  authToken = token || '';
 }
 function clearAuthToken() {
-  try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (_e) {}
+  authToken = '';
 }
 
 function clearClientUserState() {
@@ -2582,7 +2584,6 @@ if (changePasswordFormEl) {
 }
 
 // ── Multi-user toggle wizard ────────────────────────────────
-const multiUserStatusEl = document.getElementById('multiUserStatus');
 const multiUserToggleBtnEl = document.getElementById('multiUserToggleBtn');
 const multiUserNoteEl = document.getElementById('multiUserNote');
 
@@ -2847,7 +2848,6 @@ async function loadUsersList() {
       const userRows = users.map(user => {
         const roleTag = user.role === 'admin' ? '<span class="user-role-tag admin">管理员</span>' : '<span class="user-role-tag">普通用户</span>';
         const statusTag = user.disabled ? '<span class="user-role-tag">已禁用</span>' : '';
-        const created = '';
         const userId = escapeHtml(user.user_id);
         const isAdminRow = user.user_id === 'default-user';
         const lifecycleAction = user.disabled
@@ -2908,7 +2908,7 @@ if (userListContainerEl) {
     if (action === 'logout') {
       try {
         await apiPost('/api/logout');
-      } catch(e) {}
+      } catch (_err) {}
       window.location.reload();
       return;
     }

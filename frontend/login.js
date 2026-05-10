@@ -1,12 +1,9 @@
-const AUTH_TOKEN_KEY = 'tl_session_token';
 const loginFormEl = document.getElementById('loginForm');
 const loginUserIdEl = document.getElementById('loginUserId');
 const loginPasswordEl = document.getElementById('loginPassword');
 const loginErrorEl = document.getElementById('loginError');
 
-function setAuthToken(token) {
-  try { localStorage.setItem(AUTH_TOKEN_KEY, token); } catch (_e) {}
-}
+try { localStorage.removeItem('tl_session_token'); } catch (_err) {}
 
 async function login(userId, password) {
   const res = await fetch('/api/auth/login', {
@@ -32,8 +29,7 @@ loginFormEl?.addEventListener('submit', async (event) => {
     return;
   }
   try {
-    const data = await login(userId, password);
-    setAuthToken(data.token);
+    await login(userId, password);
     window.location.reload();
   } catch (err) {
     if (loginErrorEl) loginErrorEl.textContent = err.message || '登录失败';

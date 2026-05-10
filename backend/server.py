@@ -456,6 +456,14 @@ class Handler(BaseHTTPRequestHandler):
             return auth[7:]
         return ''
 
+    def _extract_cookie_token(self) -> str:
+        cookie = self.headers.get('Cookie', '')
+        for part in cookie.split(';'):
+            item = part.strip()
+            if item.startswith('session_token='):
+                return item[len('session_token='):]
+        return ''
+
     def _authenticated_admin_user(self) -> str | None:
         return authenticated_admin_from_token(self._extract_token())
 
@@ -608,16 +616,20 @@ class Handler(BaseHTTPRequestHandler):
                 if is_multi_user_enabled() and uid is None:
                     return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': 'login required'}})
                 role = 'admin' if uid == DEFAULT_USER_ID else 'user'
-                token = self._extract_token()
+                token = self._extract_token() or self._extract_cookie_token()
                 headers = {'Set-Cookie': auth_cookie_header(token)} if uid and is_safe_session_token(token) else None
                 # admin_has_password lets the frontend know whether the
                 # "enable multi-user" wizard needs to set a password first.
-                return self._send(200, {
+                payload = {
                     'user_id': uid or '',
                     'role': role,
                     'multi_user_enabled': is_multi_user_enabled(),
                     'admin_has_password': admin_has_password(),
-                }, extra_headers=headers)
+                    'token': token if uid and is_safe_session_token(token) else '',
+                }
+                if headers:
+                    return self._send(200, payload, extra_headers=headers)
+                return self._send(200, payload)
 
             if parsed.path == '/api/history':
                 if not session_id:
