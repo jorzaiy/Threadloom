@@ -8,12 +8,14 @@ import re
 from pathlib import Path
 
 try:
+    from .atomic_io import atomic_write_json
     from .llm_manager import get_role_runtime
     from .local_model_client import parse_json_response
     from .model_client import call_model
     from .model_config import resolve_provider_model
     from .character_assets import character_source_base, lorebook_path
 except ImportError:
+    from atomic_io import atomic_write_json
     from llm_manager import get_role_runtime
     from local_model_client import parse_json_response
     from model_client import call_model
@@ -73,8 +75,7 @@ def _read_json(path: Path) -> dict:
 
 
 def _write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    atomic_write_json(path, payload)
 
 
 def _compact(value: str, limit: int = 220) -> str:

@@ -15,6 +15,7 @@ from lorebook_distiller import rebuild_lorebook_distillation
 from name_sanitizer import invalidate_protagonist_names_cache
 from player_profile import build_player_profile_override_draft, load_base_player_profile
 from paths import APP_ROOT, DEFAULT_USER_ID, active_character_id, active_user_id, active_user_label, character_root, normalize_session_id, read_json_file, slugify, user_root
+from atomic_io import atomic_write_json
 from runtime_store import invalidate_history_cache
 from user_manager import is_multi_user_enabled
 
@@ -41,8 +42,7 @@ def _read_json(path: Path) -> dict:
 
 
 def _write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    atomic_write_json(path, payload)
 
 
 def current_user_character_root() -> Path:

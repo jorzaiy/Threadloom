@@ -15,6 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from paths import normalize_session_id, reset_active_character_override, resolve_session_dir, set_active_character_override
+from atomic_io import atomic_write_json
 from arbiter_runtime import run_arbiter
 from arbiter_state import merge_arbiter_state
 from context_builder import build_runtime_context
@@ -243,6 +244,8 @@ def rebuild_session_from_history(source_session: str, *, target_session: str | N
     using_target_copy = bool(target_session and target_session != source_session)
     try:
         if using_target_copy:
+            if target_session is None:
+                raise ValueError('target_session is required when rebuilding into a copy')
             full_history = _prepare_target_session(source_session, target_session, force_recreate=force_recreate)
         else:
             full_history = load_history(session_id)
@@ -326,7 +329,7 @@ def rebuild_session_from_history(source_session: str, *, target_session: str | N
             'turn_reports': reports[-8:],
         }
         report_path = session_paths(session_id)['session_dir'] / 'rebuild-report.json'
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        atomic_write_json(report_path, report)
         return report
     except Exception:
         if using_target_copy:

@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from atomic_io import atomic_write_bytes, atomic_write_json
 from bootstrap_session import load_runtime_config, read_text, resolve_source_from_config
 from paths import current_session_owner_context, normalize_session_id, reset_active_character_override, resolve_session_dir, set_active_character_override
 from runtime_store import append_history, build_state_snapshot, save_canon, save_context, save_meta, save_state, save_summary, seed_default_state, session_paths
@@ -21,7 +22,6 @@ RECALL_TAG_RE = re.compile(r'<recall>.*?</recall>', re.S | re.I)
 XML_TAG_RE = re.compile(r'</?[^>\n]+>')
 TERMINAL_BLOCK_RE = re.compile(r'^\s*【[^】]{0,20}(?:终端|状态栏)[^】]*】.*?(?:\n\s*\*{4,}.*?){0,1}', re.S)
 INLINE_TERMINAL_HEADER_RE = re.compile(r'^\s*[\u4e00-\u9fffA-Za-z·0-9\-]+(?:终端|状态栏)?·\d{1,2}:\d{2}\s*(?:AM|PM)?\s*$', re.M)
-
 
 def _slug(text: str) -> str:
     value = str(text or '').strip()
@@ -300,9 +300,9 @@ def import_sillytavern_jsonl(source_path: Path, *, target_session: str | None = 
         import_dir = paths['session_dir'] / 'imports'
         import_dir.mkdir(parents=True, exist_ok=True)
         source_copy_path = import_dir / source_path.name
-        source_copy_path.write_bytes(source_path.read_bytes())
+        atomic_write_bytes(source_copy_path, source_path.read_bytes())
         metadata_sidecar_path = import_dir / 'sillytavern-chat-metadata.json'
-        metadata_sidecar_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        atomic_write_json(metadata_sidecar_path, metadata)
 
         report = {
             'import_version': 1,
@@ -318,7 +318,7 @@ def import_sillytavern_jsonl(source_path: Path, *, target_session: str | None = 
             'initial_state_snapshot': build_state_snapshot(initial_state),
         }
         report_path = import_dir / 'sillytavern-import-report.json'
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        atomic_write_json(report_path, report)
 
         return report
     finally:
