@@ -17,6 +17,7 @@ from pathlib import Path
 import bcrypt
 
 import paths as _paths
+from atomic_io import atomic_write_json
 from paths import (
     RUNTIME_DATA_ROOT,
     DEFAULT_USER_ID,
@@ -86,21 +87,8 @@ def _atomic_write(path: Path, data: dict) -> None:
     """原子写入 JSON：先写临时文件再 rename，防止竞态损坏。"""
     with _SYSTEM_FILE_LOCK:
         _ensure_system_dir()
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, str(path))
-            os.chmod(path, 0o600)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        atomic_write_json(path, data)
+        os.chmod(path, 0o600)
 
 
 def _load_users() -> dict:
@@ -245,8 +233,7 @@ def set_multi_user_enabled(enabled: bool) -> None:
             except Exception:
                 pass
         cfg['multi_user_enabled'] = enabled
-        site_json.parent.mkdir(parents=True, exist_ok=True)
-        site_json.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), 'utf-8')
+        atomic_write_json(site_json, cfg)
         # Wipe sessions on every transition. Disabling needs a clean slate so
         # multi-user-issued tokens cannot survive into single-user mode; enabling
         # is what closes the bootstrap window where default-user could log in
