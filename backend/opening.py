@@ -18,9 +18,12 @@ def render_opening_text(text: str) -> str:
 
     def _replace(match: re.Match) -> str:
         key = match.group(1).strip().lower()
-        return replacements.get(key, match.group(0))
+        if key in replacements:
+            return replacements[key]
+        return match.group(0)
 
-    return re.sub(r'\{\{\s*(char|user)\s*\}\}', _replace, str(text or ''), flags=re.IGNORECASE)
+    result: str = re.sub(r'\{\{\s*(char|user)\s*\}\}', _replace, str(text or ''), flags=re.IGNORECASE)
+    return result
 
 
 def opening_bootstrap() -> dict:
