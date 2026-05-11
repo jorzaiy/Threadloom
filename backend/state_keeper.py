@@ -1580,7 +1580,6 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
         reply_text, usage, attempts = _call_state_keeper_llm(user_prompt)
         payload = _coerce_state_payload(_parse_fill_payload(reply_text), baseline_state=baseline_state)
         new_state = _merge_keeper_fill(baseline_state, payload)
-        new_state = _semantic_cleanup(new_state, prev_state, state_fragment)
         validate_state_payload(new_state, prev_state)
         new_state = _with_diagnostics(
             new_state,

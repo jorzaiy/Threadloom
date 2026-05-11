@@ -901,7 +901,12 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         context = dict(context)
         context['state_fragment'] = state_fragment
         turn_trace['runtime']['state_fragment_reply_skeleton'] = copy.deepcopy(state_fragment)
-    should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and (not is_first_turn) and (not needs_keeper_bootstrap)
+    cfg = load_runtime_config()
+    consolidate_every = cfg.get('memory', {}).get('consolidate_every_turns', 3)
+    is_consolidation_turn = consolidate_every > 0 and current_turn_num % consolidate_every == 0
+    force_full_keeper_for_objects = _is_object_heavy_turn(text, reply, state, state_fragment)
+    _will_run_fill = is_first_turn or needs_keeper_bootstrap or is_consolidation_turn or force_full_keeper_for_objects
+    should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and (not is_first_turn) and (not needs_keeper_bootstrap) and (not _will_run_fill)
     if should_run_skeleton:
         try:
             skeleton_result = call_skeleton_keeper(state, state_fragment, reply, return_trace=True)
@@ -936,7 +941,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'model_usage': None,
             'fallback_used': False,
             'fallback_reason': None,
-            'skipped_reason': 'full state_keeper bootstrap turn' if (is_first_turn or needs_keeper_bootstrap) else f'non-skeleton turn ({current_turn_num}/{skeleton_every})',
+            'skipped_reason': 'full state_keeper fill covers all fields' if _will_run_fill else f'non-skeleton turn ({current_turn_num}/{skeleton_every})',
             'skeleton_every_turns': skeleton_every,
         }
     turn_trace['runtime']['skeleton_keeper'] = {
@@ -989,10 +994,6 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state_error = None
     state_keeper_diagnostics = None
     state_keeper_trace = {}
-    cfg = load_runtime_config()
-    consolidate_every = cfg.get('memory', {}).get('consolidate_every_turns', 3)
-    is_consolidation_turn = consolidate_every > 0 and current_turn_num % consolidate_every == 0
-    force_full_keeper_for_objects = _is_object_heavy_turn(text, reply, state, state_fragment)
 
     if is_first_turn or needs_keeper_bootstrap or is_consolidation_turn or force_full_keeper_for_objects:
         try:
@@ -1082,6 +1083,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         location=str(state.get('location', '') or ''),
         recent_pairs=recent_pairs,
         current_state=state,
+        keeper_signals=state if _will_run_fill else None,
     )
     event_summary_item = build_event_summary_item(
         turn_id=turn_id,

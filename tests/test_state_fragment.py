@@ -711,6 +711,27 @@ class StateFragmentTest(unittest.TestCase):
         self.assertIn('迟到新生', updated['actors']['npc_001']['aliases'])
         self.assertEqual(updated['actor_context_index']['last_mentioned_turn']['npc_001'], 10)
 
+    def test_actor_registry_rejects_quoted_comparison_as_revealed_name(self):
+        state = {
+            'actors': {
+                'npc_001': {
+                    'actor_id': 'npc_001',
+                    'kind': 'npc',
+                    'name': '助教',
+                    'aliases': [],
+                    'identity': '助教',
+                    'created_turn': 9,
+                },
+            },
+        }
+        reply = '教官看向远处的学员。“注意她的呼吸节奏。”他说，“和之前比。”助教愣了一下，把视线移过去。'
+
+        updated = update_actor_registry(state, narrator_reply=reply, turn_number=15, use_llm=False)
+
+        self.assertEqual(updated['actors']['npc_001']['name'], '助教')
+        self.assertEqual(updated['actors']['npc_001']['aliases'], [])
+        self.assertEqual(updated['actor_registry_diagnostics']['alias_updates'], [])
+
     def test_actor_registry_rejects_phrase_fragments_as_aliases(self):
         state = {
             'actors': {

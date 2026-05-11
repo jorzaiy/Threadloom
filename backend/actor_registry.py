@@ -360,7 +360,24 @@ def _looks_like_revealed_name(value: str) -> bool:
         return False
     if any(name.endswith(suffix) for suffix in ('学员', '新生', '男生', '女生', '教官', '助教', '老师')):
         return False
+    if _looks_like_dialogue_phrase_fragment(name):
+        return False
     return True
+
+
+def _looks_like_dialogue_phrase_fragment(value: str) -> bool:
+    name = sanitize_runtime_name(value)
+    if not name:
+        return True
+    if any(part in name for part in ('之前', '之后', '刚才', '现在', '以前', '以后', '一样')):
+        return True
+    if '比' in name and not name.endswith('比'):
+        return True
+    if len(name) > 2 and name.startswith(('和', '但', '可', '又', '再', '还', '也', '就', '都', '别', '把', '被', '给', '让', '从', '到', '在', '往', '向', '跟', '对')):
+        return True
+    if len(name) > 2 and name.endswith(('了', '着', '过', '吗', '吧', '呢', '啊')):
+        return True
+    return False
 
 
 def _clean_revealed_name(value: str) -> str:
@@ -391,6 +408,10 @@ def _extract_name_reveals(text: str) -> list[dict]:
             after = value[match.end():min(len(value), match.end() + 120)]
             surname = name[:1]
             surname_match = bool(re.search(rf'["“]姓{re.escape(surname)}[。！？!?]?["”]', before[-160:]))
+            quoted_has_name_marker = bool('/' in quoted or '／' in quoted or '——' in quoted or '—' in quoted or '-' in quoted or '－' in quoted)
+            context_has_name_marker = bool(re.search(r'(?:叫什么|名字|姓名|点名|名牌|胸牌|扉页|登记|档案|记录)', before[-120:] + after[:80]))
+            if not (surname_match or quoted_has_name_marker or context_has_name_marker):
+                continue
             reveals.append({'name': name, 'window': before + after, 'surname_match': surname_match})
     deduped: list[dict] = []
     seen = set()

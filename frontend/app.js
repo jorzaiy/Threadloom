@@ -96,6 +96,7 @@ const profileEditorNote = document.getElementById('profileEditorNote');
 let lastCharacterCard = null;
 let shouldStickToBottom = true;
 let pendingUserMessage = null;
+let pendingClientTurnId = null;
 let lastHistoryItems = [];
 let historyHasMore = false;
 let historyNextBefore = null;
@@ -1858,6 +1859,10 @@ composer.addEventListener('submit', async (e) => {
   const submitButton = composer.querySelector('button[type="submit"]');
   submitButton.disabled = true;
   setStatus('发送中...', 'working');
+  const clientTurnId = (pendingClientTurnId && text === pendingUserMessage)
+    ? pendingClientTurnId
+    : `web-${Date.now()}`;
+  pendingClientTurnId = clientTurnId;
   pendingUserMessage = text;
   input.value = '';
   shouldStickToBottom = true;
@@ -1870,10 +1875,11 @@ composer.addEventListener('submit', async (e) => {
       body: JSON.stringify({
         session_id: sessionId(),
         text,
-        client_turn_id: `web-${Date.now()}`,
+        client_turn_id: clientTurnId,
         meta: {source: 'web', debug: webConfig.default_debug}
       })
     });
+    pendingClientTurnId = null;
     pendingUserMessage = null;
     shouldStickToBottom = true;
     await loadHistory();
@@ -1886,7 +1892,7 @@ composer.addEventListener('submit', async (e) => {
     }
     setStatus('已更新', 'ok');
   } catch {
-    pendingUserMessage = null;
+    pendingUserMessage = text;
     input.value = originalText;
     renderMessages(lastHistoryItems);
     setStatus('发送失败', 'error');

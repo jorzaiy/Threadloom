@@ -299,31 +299,6 @@ def _is_reference_priority(name: str, reference_candidates: list[dict], previous
     return previous.get('identity', {}).get('faction') in {'世界书既有 NPC', '系统级 NPC'}
 
 
-def _is_clue_bearer(entity: dict, state: dict, history: list[dict]) -> bool:
-    name = (entity.get('primary_label') or '').strip()
-    aliases = entity.get('aliases', []) or []
-    tokens = [name] + aliases
-    scene_text_parts = [
-        state.get('main_event', ''),
-        ' '.join(state.get('immediate_risks', []) or []),
-        ' '.join(state.get('carryover_clues', []) or []),
-        entity.get('role_label', ''),
-        entity.get('possible_link', '') or '',
-    ]
-    recent_pairs = _turn_pairs(history)[-3:]
-    for user_text, assistant_text in recent_pairs:
-        scene_text_parts.append(user_text)
-        scene_text_parts.append(assistant_text)
-    haystack = '\n'.join(part for part in scene_text_parts if part)
-    clue_keywords = (
-        '线索', '可疑', '当事人', '后院', '房间', '空出来', '押钱', '走得急', '门闩', '钥匙',
-        '盘查', '巡街', '监视', '盯', '人影', '搜查', '追索', '命令', '口信', '痕迹'
-    )
-    has_entity_presence = any(token and token in haystack for token in tokens)
-    has_clue_signal = any(keyword in haystack for keyword in clue_keywords)
-    return has_entity_presence and has_clue_signal
-
-
 def update_persona(session_id: str, reference_candidates: list[dict] | None = None) -> dict:
     state = load_state(session_id)
     history = load_history(session_id)
@@ -392,19 +367,18 @@ def update_persona(session_id: str, reference_candidates: list[dict] | None = No
         generic_service_npc = _is_service_npc(name, role_label) and not _has_proper_name(name)
         worldbook_priority = _is_reference_priority(name, reference_candidates or [], previous)
         important_lock = name in important_names
-        clue_bearer = _is_clue_bearer(entity, state, history)
         user_focus_priority = recent_user_focus >= 2
         previous_scene_signature = previous.get('source_window', {}).get('scene_signature', '')
         scene_changed = bool(previous_scene_signature) and previous_scene_signature != current_scene_signature
         retention_grace = bool(previous) and not is_onstage and recent_turn_presence >= 1 and quiet_turns <= 1
         interaction_grace = bool(previous) and is_relevant and (recent_user_focus >= 1 or recent_turn_presence >= 2 or retention_grace)
         early_seed_reason = None
-        if user_focus_priority:
+        if important_lock and not generic_service_npc:
+            early_seed_reason = '该人物已被 important_npc_tracker 锁定为重要角色。'
+        elif user_focus_priority:
             early_seed_reason = '用户已连续多轮主动关注该人物，提前保留 scene 骨架。'
         elif worldbook_priority and is_relevant:
             early_seed_reason = '该人物来自世界书既有重要人物层，且已进入当前局势。'
-        elif clue_bearer and is_relevant:
-            early_seed_reason = '该人物正在承载当前场景的可疑点或线索链，提前保留 scene 骨架。'
         elif interaction_grace:
             early_seed_reason = '该人物虽未必仍是主线索承载者，但当前仍与用户或场景持续互动，暂时保留 scene 骨架。'
         exceptional_seed = bool(early_seed_reason)

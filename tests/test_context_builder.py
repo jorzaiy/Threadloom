@@ -273,6 +273,14 @@ def test_narrator_prompt_preserves_low_pressure_turns():
     assert '不要擅自引入新的可疑脚步' in system_prompt
 
 
+def test_narrator_prompt_rejects_unstated_intermediate_actions():
+    system_prompt, user_prompt = build_narrator_input({'scene_facts': {}, 'active_preset': {}}, '经过前厅走到后院坐下休息')
+
+    assert '不要把用户只作为路径、经过、抵达、等待或休息背景提到的地点' in system_prompt
+    assert '自动扩写成主角在那里完成了未明说的消费、进食、购买、交谈、领取、训练或调查' in system_prompt
+    assert '经过前厅走到后院坐下休息' in user_prompt
+
+
 def test_summary_chunk_actor_only_pressure_is_not_recalled_for_quiet_turn():
     chunks = [{
         'chunk_id': 'chunk_0001',

@@ -310,7 +310,27 @@ def _coerce_ledger_payload(payload: dict) -> dict:
     }
 
 
-def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_state: dict, onstage_names: list[str], location: str, recent_pairs: list[tuple[str, str]] | None = None, current_state: dict | None = None) -> dict:
+def _ledger_from_keeper_signals(keeper_signals: dict, prev_state: dict, onstage_names: list[str], location: str, fallback: dict) -> dict:
+    """Build event ledger from state_keeper fill output, skipping LLM call."""
+    main_event = str(keeper_signals.get('main_event', '') or '').strip()
+    risks = [str(r).strip() for r in (keeper_signals.get('immediate_risks', []) or []) if str(r).strip()][:2]
+    clues = [str(c).strip() for c in (keeper_signals.get('carryover_clues', []) or []) if str(c).strip()][:2]
+    prev_loc = str(prev_state.get('location', '') or '').strip()
+    changed = bool(location and prev_loc and location != prev_loc)
+    return {
+        'ledger_version': 2,
+        'provider': 'keeper_signals',
+        'summary_text': main_event[:150],
+        'scene_shift': {'changed': changed, 'score': 3 if changed else 0},
+        'main_event_candidates': [{'text': main_event, 'fragment_score': 0, 'scene_score': 5}] if main_event else [],
+        'risk_candidates': risks,
+        'clue_candidates': clues or fallback.get('clue_candidates', [])[:2],
+        'discarded_fragments': [],
+        'fallback_heuristic': fallback,
+    }
+
+
+def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_state: dict, onstage_names: list[str], location: str, recent_pairs: list[tuple[str, str]] | None = None, current_state: dict | None = None, keeper_signals: dict | None = None) -> dict:
     fallback = build_event_ledger(
         user_text=user_text,
         narrator_reply=narrator_reply,
@@ -320,6 +340,8 @@ def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_sta
         recent_pairs=recent_pairs,
         current_state=current_state,
     )
+    if keeper_signals is not None:
+        return _ledger_from_keeper_signals(keeper_signals, prev_state, onstage_names, location, fallback)
     try:
         cfg = resolve_provider_model('state_keeper_candidate')
         reply, _usage = call_model(
