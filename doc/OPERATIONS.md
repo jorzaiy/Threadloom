@@ -174,6 +174,19 @@ cd /root/Threadloom/backend
 ./start.sh
 ```
 
+### systemd 服务（推荐）
+
+已注册为 systemd 服务，支持开机自启和快速重启：
+
+```bash
+systemctl restart threadloom   # 重启
+systemctl stop threadloom      # 停止
+systemctl status threadloom    # 查看状态
+journalctl -u threadloom -f    # 实时日志
+```
+
+服务文件位于 `/etc/systemd/system/threadloom.service`，自动加载 `.env.local` 环境变量。
+
 说明：
 - `backend/start.sh` 会自动加载 `/root/Threadloom/.env.local`
 - 后端默认只监听 `127.0.0.1:8765`，可用 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖；如需远程访问，应通过可信反向代理暴露，不建议直接改成公网监听。
