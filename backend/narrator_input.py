@@ -147,10 +147,19 @@ def _format_actor_registry(actors: dict, context_index: dict, limit: int = 8) ->
         aliases = [str(alias).strip() for alias in (actor.get('aliases', []) or []) if str(alias).strip() and str(alias).strip() != name][:4]
         parts = []
         identity = str(actor.get('identity', '') or '').strip()
+        public_identity = str(actor.get('public_identity', '') or '').strip()
+        private_identity = str(actor.get('private_identity', '') or '').strip()
+        knowledge_boundary = str(actor.get('knowledge_boundary', '') or '').strip()
         personality = str(actor.get('personality', '') or '').strip()
         appearance = str(actor.get('appearance', '') or '').strip()
+        if public_identity:
+            parts.append(f"公开身份={public_identity}")
+        if private_identity:
+            parts.append(f"私密身份={private_identity}")
         if identity:
             parts.append(f"身份={identity}")
+        if knowledge_boundary:
+            parts.append(f"知情边界={knowledge_boundary}")
         if personality:
             parts.append(f"性格={personality}")
         if appearance:
@@ -476,6 +485,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
             '【角色注册表】\n'
             '本块是长期角色基础设定表。角色的姓名、别称、性格、外貌、身份一旦登记就视为锁定；不要在正文中随意改写。\n'
             '本块不表示这些角色当前在场，也不记录临时处境、行动阶段或空间关系。当前局势以最近完整正文、前段提纲和本轮用户输入为准，但不得反向改写已锁定身份和角色卡世界。\n'
+            '主角注册表若同时包含公开身份与私密身份/伪装边界，旁白可用于维持身体与伪装连续性；NPC 对白、称呼和判断只能使用其已知信息，不得因为玩家档案或旁白事实就自动识破私密身份。\n'
             + actor_text
         )
 
@@ -592,6 +602,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         '- 不要扩写或美化用户输入本身。用户说过的动作/态度只需轻承接，正文主体应写用户动作之后外部局势如何变化、NPC 如何反应、信息如何显露或风险如何推进。\n'
         '- 不要把用户只作为路径、经过、抵达、等待或休息背景提到的地点，自动扩写成主角在那里完成了未明说的消费、进食、购买、交谈、领取、训练或调查；除非用户输入、最近完整正文或明确场景事实已经写出该动作。\n'
         '- 再次检查本轮有没有把用户叙述、内心疑问或语气说明当成主角对白；若没有明确对白标记，NPC 不得引用或回应那些文字，只能回应可观察行为。\n'
+        '- 若主角存在伪装、化名、隐藏身份、真实性别、真实阵营或其他私密身份边界，NPC 只有在知情边界、知识记录或最近完整正文明确显示其已经获知时，才能在对白、称呼或判断中承接；否则只能按场内公开表象称呼与反应。\n'
         '- 若上一到三轮已经主要停留在观察、揣测、沉默、不点破、目光变化或心理判断，本轮必须推进一个客观可感知的变化；不要继续输出同义的“看着/判断/没有说破”。\n'
         '- 即使本轮处于回屋、关门、换位、烧水、整理、短暂观察等过渡段，也不要塌成一句摘要。至少写出具体环境变化、人物反应、动作后的余波，或场景中正在累积的细节变化，让场景继续“活着”。\n'
         '- 只有当当前局势本来就存在追索、怀疑、风险、未决冲突或逼近感时，才继续强化压力；不要为了“有戏”而每轮硬塞危险感。\n'

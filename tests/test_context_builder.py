@@ -375,3 +375,28 @@ def test_selector_and_persona_reject_abstract_npc_names():
     assert targets == ['维克托']
     assert not _valid_persona_token('时间')
     assert not _valid_persona_token('时间栏')
+
+
+def test_narrator_prompt_marks_private_identity_as_not_npc_known():
+    system_prompt, _ = build_narrator_input({
+        'active_preset': {},
+        'scene_facts': {
+            'actors': {
+                'protagonist': {
+                    'actor_id': 'protagonist',
+                    'kind': 'protagonist',
+                    'name': '测试主角',
+                    'aliases': ['主角'],
+                    'public_identity': '场内公开呈现为见习学徒',
+                    'private_identity': '真实身份=逃亡继承人',
+                    'knowledge_boundary': '真实身份属于私密事实。',
+                }
+            },
+            'actor_context_index': {'active_actor_ids': ['protagonist']},
+        },
+    }, '继续后退')
+
+    assert '公开身份=场内公开呈现为见习学徒' in system_prompt
+    assert '私密身份=真实身份=逃亡继承人' in system_prompt
+    assert 'NPC 对白、称呼和判断只能使用其已知信息' in system_prompt
+    assert '否则只能按场内公开表象称呼与反应' in system_prompt

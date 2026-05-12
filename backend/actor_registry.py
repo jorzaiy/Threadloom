@@ -10,11 +10,13 @@ try:
     from .local_model_client import parse_json_response
     from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
     from .card_hints import get_canonical_name, get_character_primary_name
+    from .player_profile import load_effective_player_profile
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
     from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
     from card_hints import get_canonical_name, get_character_primary_name
+    from player_profile import load_effective_player_profile
 
 
 ARCHIVE_AFTER_QUIET_TURNS = 12
@@ -166,6 +168,66 @@ def _actor_name_matches(actor: dict, name: str) -> bool:
     return bool(actor_surfaces & target_surfaces)
 
 
+def _compact_profile_text(value: object, limit: int = 120) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, list):
+        return '；'.join(str(item).strip() for item in value if str(item).strip())[:limit]
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            text = _compact_profile_text(item, limit)
+            if text:
+                parts.append(f'{key}={text}')
+        return '；'.join(parts)[:limit]
+    return str(value).strip()[:limit]
+
+
+def _protagonist_profile_fields() -> dict:
+    try:
+        profile = load_effective_player_profile()
+    except Exception:
+        profile = {}
+    if not isinstance(profile, dict) or not profile:
+        return {}
+    character = profile.get('character', {}) if isinstance(profile.get('character', {}), dict) else {}
+    appearance = character.get('appearance', {}) if isinstance(character.get('appearance', {}), dict) else {}
+    body = appearance.get('body', {}) if isinstance(appearance.get('body', {}), dict) else {}
+    clothing = appearance.get('clothing', {}) if isinstance(appearance.get('clothing', {}), dict) else {}
+    disguise = character.get('disguise', {}) if isinstance(character.get('disguise', {}), dict) else {}
+    gender = str(profile.get('gender', character.get('gender', '')) or '').strip()
+    status = str(profile.get('status', character.get('status', '')) or '').strip()
+    appearance_parts = []
+    for item in (body.get('height'), body.get('figure'), body.get('chest'), body.get('skin'), clothing):
+        text = _compact_profile_text(item, 100)
+        if text:
+            appearance_parts.append(text)
+    private_parts = []
+    if gender:
+        private_parts.append(f'性别={gender}')
+    if status:
+        private_parts.append(f'身份={status}')
+    public_identity = status
+    disguise_target = ''
+    match = re.search(r'伪装成([^）)；;，,\s]+)', gender)
+    if match:
+        disguise_target = match.group(1).strip()
+    if disguise_target:
+        public_identity = f'场内公开呈现为{disguise_target}'
+    elif disguise:
+        public_identity = public_identity or '场内公开身份以伪装表象为准'
+    fields = {}
+    if appearance_parts:
+        fields['appearance'] = '；'.join(appearance_parts)[:160]
+    if public_identity:
+        fields['public_identity'] = public_identity[:120]
+    if private_parts:
+        fields['private_identity'] = '；'.join(private_parts)[:160]
+    if disguise:
+        fields['knowledge_boundary'] = '主角伪装、隐藏身份或真实身份属于私密事实；NPC 只有在知情记录明确写出其已获知时，才能在对白、称呼或判断中承接。'
+    return fields
+
+
 def _ensure_protagonist(actors: dict, player_name: str = '') -> None:
     aliases = ['你', '主角']
     cleaned_player = sanitize_runtime_name(player_name)
@@ -177,14 +239,18 @@ def _ensure_protagonist(actors: dict, player_name: str = '') -> None:
     for alias in aliases:
         if alias not in existing_aliases:
             existing_aliases.append(alias)
+    profile_fields = _protagonist_profile_fields()
     actors['protagonist'] = {
         'actor_id': 'protagonist',
         'kind': 'protagonist',
         'name': existing.get('name') or cleaned_player or '主角',
         'aliases': existing_aliases or aliases,
         'personality': existing.get('personality', ''),
-        'appearance': existing.get('appearance', ''),
-        'identity': existing.get('identity') or '主角',
+        'appearance': existing.get('appearance', '') or profile_fields.get('appearance', ''),
+        'identity': existing.get('identity') or profile_fields.get('public_identity') or '主角',
+        'public_identity': existing.get('public_identity', '') or profile_fields.get('public_identity', ''),
+        'private_identity': existing.get('private_identity', '') or profile_fields.get('private_identity', ''),
+        'knowledge_boundary': existing.get('knowledge_boundary', '') or profile_fields.get('knowledge_boundary', ''),
         'created_turn': int(existing.get('created_turn', 1) or 1),
     }
 

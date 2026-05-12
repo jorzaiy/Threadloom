@@ -166,6 +166,35 @@ class StateFragmentTest(unittest.TestCase):
         self.assertIn('矮壮的学员', updated['actors']['npc_002']['aliases'])
         self.assertNotIn('李明', updated['actors']['npc_001']['aliases'])
 
+    def test_actor_registry_persists_protagonist_public_private_identity_boundary(self):
+        profile = {
+            'name': '测试主角',
+            'gender': '女性（伪装成男性）',
+            'character': {
+                'appearance': {
+                    'body': {
+                        'figure': '身形偏瘦',
+                        'chest': '用束带压平轮廓',
+                    },
+                    'clothing': {'style': '宽松制服'},
+                },
+                'disguise': {
+                    'level': '稳定',
+                    'techniques': ['压低声线'],
+                    'weaknesses': ['喉结不明显'],
+                },
+            },
+        }
+        with patch('backend.actor_registry.load_effective_player_profile', return_value=profile):
+            updated = update_actor_registry({}, narrator_reply='训练场风声很低。', turn_number=1, player_name='测试主角', use_llm=False)
+
+        protagonist = updated['actors']['protagonist']
+        self.assertEqual(protagonist['identity'], '场内公开呈现为男性')
+        self.assertEqual(protagonist['public_identity'], '场内公开呈现为男性')
+        self.assertIn('性别=女性（伪装成男性）', protagonist['private_identity'])
+        self.assertIn('NPC 只有在知情记录明确写出其已获知时', protagonist['knowledge_boundary'])
+        self.assertIn('身形偏瘦', protagonist['appearance'])
+
     def test_actor_registry_rejects_abstract_topic_candidate(self):
         state = {}
         with patch('backend.actor_registry._extract_actor_candidates_with_llm', return_value=([
