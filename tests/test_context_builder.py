@@ -317,6 +317,48 @@ def test_summary_chunk_weakness_pressure_requires_direct_overlap():
     assert hits and hits[0]['chunk_id'] == 'chunk_0002'
 
 
+def test_summary_chunk_ignores_archival_knowledge_with_only_weak_keywords():
+    chunks = [{
+        'chunk_id': 'chunk_0003',
+        'turn_start': 1,
+        'turn_end': 12,
+        'actors_mentioned': [],
+        'dense_summary': ['主角早训时因绷带限制呼吸，被教官注意到步频变化。'],
+        'keywords': ['主角的', '的呼吸', '脚步落在'],
+    }]
+    knowledge_records = [{'holder_actor_id': 'protagonist', 'text': '绷带限制呼吸幅度'}]
+
+    hits = summary_chunk_hits(
+        chunks,
+        recent_history=[{'role': 'assistant', 'content': '主角正在山坡上和陌生人谈判。'}],
+        user_text='要求对方承认任务完成',
+        knowledge_records=knowledge_records,
+    )
+
+    assert hits == []
+
+
+def test_summary_chunk_allows_knowledge_when_current_turn_directly_mentions_it():
+    chunks = [{
+        'chunk_id': 'chunk_0004',
+        'turn_start': 1,
+        'turn_end': 12,
+        'actors_mentioned': [],
+        'dense_summary': ['主角早训时因绷带限制呼吸，被教官注意到步频变化。'],
+        'keywords': ['绷带限制'],
+    }]
+    knowledge_records = [{'holder_actor_id': 'protagonist', 'text': '绷带限制呼吸幅度'}]
+
+    hits = summary_chunk_hits(
+        chunks,
+        recent_history=[],
+        user_text='绷带限制呼吸，先停下调整',
+        knowledge_records=knowledge_records,
+    )
+
+    assert hits and hits[0]['chunk_id'] == 'chunk_0004'
+
+
 def test_event_summary_does_not_attribute_offscreen_onstage_actor():
     item = build_event_summary_item(
         turn_id='turn-0005',

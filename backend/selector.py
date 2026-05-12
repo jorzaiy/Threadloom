@@ -13,7 +13,14 @@ except ImportError:
 GENERIC_TOPIC_TOKENS = {
     '当前', '继续', '已经', '没有', '还有', '一个', '一些', '自己', '觉得', '开始',
     '位置', '地方', '时候', '周围', '后面', '前面', '然后', '只是', '不是', '可能',
+    '主角', '用户', '玩家', '叙事', '正文', '世界', '反馈', '动作', '事情',
 }
+
+WEAK_RECALL_TOKENS = {
+    '陆小环的', '的呼吸', '的呼吸声', '脚步落在', '一下一下', '刻意压低',
+}
+WEAK_RECALL_SUFFIXES = ('的', '地')
+WEAK_RECALL_PARTS = ('呼吸', '脚步', '声音', '目光', '视线')
 
 PRESSURE_TOKENS = {
     '风险', '危险', '威胁', '暴露', '怀疑', '审查', '盘问', '追踪', '追捕', '封锁', '惩罚', '倒计时',
@@ -64,6 +71,40 @@ def _pressure_tokens(text: str) -> set[str]:
 def _sensitive_tokens(text: str) -> set[str]:
     value = str(text or '')
     return {token for token in (PRESSURE_TOKENS | WEAKNESS_TOKENS) if token in value}
+
+
+def _strong_keywords(items: list[str]) -> list[str]:
+    out: list[str] = []
+    for item in items or []:
+        token = str(item or '').strip()
+        if not token or token in WEAK_RECALL_TOKENS or token in GENERIC_TOPIC_TOKENS:
+            continue
+        if len(token) < 3:
+            continue
+        if token.endswith(WEAK_RECALL_SUFFIXES):
+            continue
+        if len(token) <= 5 and any(part in token for part in WEAK_RECALL_PARTS):
+            continue
+        out.append(token)
+    return out
+
+
+def _knowledge_record_overlap(chunk_text: str, knowledge_texts: list[str]) -> list[str]:
+    hits: list[str] = []
+    normalized_chunk = re.sub(r'[，。！？、；：,.!?;:\s"“”‘’（）()【】\[\]]+', '', str(chunk_text or ''))
+    for text in knowledge_texts:
+        value = str(text or '').strip()
+        if len(value) < 8:
+            continue
+        normalized_value = re.sub(r'[，。！？、；：,.!?;:\s"“”‘’（）()【】\[\]]+', '', value)
+        if normalized_value[:8] in normalized_chunk:
+            hits.append(value)
+            continue
+        for idx in range(0, max(0, len(normalized_value) - 5)):
+            if normalized_value[idx:idx + 6] in normalized_chunk:
+                hits.append(value)
+                break
+    return hits
 
 
 def _event_hit_text(event_hits: list[dict], event_summaries: list[dict]) -> str:
@@ -332,11 +373,12 @@ def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict]
             score += 2
             reason.append('object_overlap')
         chunk_text = ' '.join(str(x or '') for field in ('dense_summary', 'key_events', 'unresolved', 'keywords', 'locations') for x in (item.get(field, []) or []))
-        clue_overlap = any(text and text[:8] in chunk_text for text in knowledge_texts if len(text) >= 8)
+        knowledge_hits = _knowledge_record_overlap(chunk_text, knowledge_texts)
+        clue_overlap = bool(knowledge_hits)
         if clue_overlap:
             score += 2
             reason.append('knowledge_overlap')
-        keyword_hits = [str(keyword).strip() for keyword in (item.get('keywords', []) or []) if str(keyword).strip() and str(keyword).strip() in query_text]
+        keyword_hits = _strong_keywords([str(keyword).strip() for keyword in (item.get('keywords', []) or []) if str(keyword).strip() and str(keyword).strip() in query_text])
         keyword_overlap = bool(keyword_hits)
         if keyword_overlap:
             score += 2
@@ -356,7 +398,14 @@ def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict]
             score -= 1.5
             reason.append('pressure_downgrade')
         reason_text = '+'.join(reason)
-        if score >= 3 and (clue_overlap or keyword_overlap or object_overlap or actor_overlap):
+        has_direct_anchor = bool(keyword_overlap or object_overlap or actor_overlap)
+        if clue_overlap:
+            has_direct_anchor = has_direct_anchor or any(hit and hit in query_text for hit in knowledge_hits)
+        if clue_overlap and not has_direct_anchor and not keyword_overlap and not object_overlap:
+            score -= 1
+            reason.append('archival_knowledge_only')
+        reason_text = '+'.join(reason)
+        if score >= 3 and has_direct_anchor:
             hits.append({'chunk_id': item.get('chunk_id'), 'turn_start': item.get('turn_start'), 'turn_end': item.get('turn_end'), 'score': score, 'reason': reason_text, 'keyword_hits': keyword_hits[:8]})
         elif score >= 3 and 'topic_overlap' in reason:
             hits.append({'chunk_id': item.get('chunk_id'), 'turn_start': item.get('turn_start'), 'turn_end': item.get('turn_end'), 'score': score, 'reason': reason_text})
