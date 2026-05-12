@@ -66,6 +66,54 @@ class StateFragmentTest(unittest.TestCase):
     def test_state_keeper_returns_state_but_does_not_own_persistence(self):
         self.assertFalse(hasattr(state_keeper, 'save_state'))
 
+    def test_keeper_fill_merges_scene_objective_without_replacing_immediate_goal(self):
+        baseline = {
+            'time': '中午',
+            'location': '训练场',
+            'main_event': '主角和对手围绕补给箱僵持。',
+            'immediate_goal': '决定是否接受交换条件。',
+        }
+        payload = {
+            'scene_objective': {
+                'label': '第二轮训练',
+                'objective': '测试学员在资源争夺和规则模糊下的判断能力',
+                'status': 'active',
+                'completion_hint': '取得补给、被承认完成或训练叫停时结束',
+            }
+        }
+
+        merged = _merge_keeper_fill(baseline, payload)
+
+        self.assertEqual(merged['immediate_goal'], '决定是否接受交换条件。')
+        self.assertEqual(merged['scene_objective']['label'], '第二轮训练')
+        self.assertEqual(merged['scene_objective']['objective'], '测试学员在资源争夺和规则模糊下的判断能力')
+        self.assertEqual(merged['scene_objective']['status'], 'active')
+
+    def test_normalize_state_preserves_scene_objective_across_turns(self):
+        prev = {
+            'time': '上午',
+            'location': '训练场',
+            'main_event': '旧事件',
+            'immediate_goal': '旧目标',
+            'scene_objective': {
+                'label': '体能测试',
+                'objective': '测试学员基础体能',
+                'status': 'active',
+            },
+        }
+        current = {
+            'time': '上午',
+            'location': '训练场',
+            'main_event': '主角继续跑步。',
+            'immediate_goal': '调整呼吸继续跑。',
+        }
+
+        normalized = normalize_state_dict(current, prev_state=prev)
+
+        self.assertEqual(normalized['scene_objective']['label'], '体能测试')
+        self.assertEqual(normalized['scene_objective']['objective'], '测试学员基础体能')
+        self.assertEqual(normalized['scene_objective']['status'], 'active')
+
     def test_memory_maintenance_canonicalizes_actor_alias_layers(self):
         state = {
             'actors': {

@@ -98,6 +98,7 @@ STATE_KEEPER_FILL_SYSTEM = """你是 RP 结构化状态补全器，只在既有�
 只输出一个 JSON 对象，不要代码块，不要解释，不要额外文字。
 
 默认只补这些字段：
+scene_objective,
 carryover_signals,
 resolved_signals,
 tracked_objects, possession_state, object_visibility,
@@ -110,6 +111,21 @@ time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架�
 除非叙事正文明确推翻它们，否则不要重复输出，也不要改写。
 
 各补全字段要求：
+- scene_objective（对象）：当前事件/场景段的稳定目标，用于防止叙事主轴散乱。只在当前事件目标缺失、明显开启新事件、或明确结束当前事件时输出。
+  格式：
+  ```
+  "scene_objective": {
+    "label": "短标签，如：第二轮训练 / 坡顶补给点对抗",
+    "objective": "这一段事件为什么存在、测试/推进什么",
+    "status": "active|resolved",
+    "completion_hint": "可选：什么情况算完成或失败"
+  }
+  ```
+  规则：
+  - 普通对话、观察、移动、短暂心理变化不是新事件；宁可沿用，不要频繁新开。
+  - 新事件必须有新目标；如果说不出新的 objective，就不要输出新 scene_objective。
+  - 结束必须有明确证据，如目标达成/失败、训练叫停、任务切换、用户离开并不再处理该事件。
+  - objective 是事件主轴，不是主角下一拍行动；主角下一拍仍放在 immediate_goal。
 - carryover_signals（数组，每项为对象，最多4项）：本轮出现、且后续仍会影响局势推进的关键信号。
   格式：
   [
@@ -244,6 +260,13 @@ def _slim_state_for_model(state: dict) -> dict:
         out['possession_state'] = state.get('possession_state', [])[:6]
     if isinstance(state.get('object_visibility', []), list) and state.get('object_visibility'):
         out['object_visibility'] = state.get('object_visibility', [])[:6]
+    scene_objective = state.get('scene_objective', {})
+    if isinstance(scene_objective, dict) and scene_objective:
+        out['scene_objective'] = {
+            key: scene_objective.get(key)
+            for key in ('label', 'objective', 'status', 'completion_hint')
+            if scene_objective.get(key)
+        }
     return out
 
 
@@ -424,6 +447,9 @@ def _parse_fill_payload(text: str) -> dict:
         knowledge_scope = _extract_json_field_value(text, 'knowledge_scope')
         if isinstance(knowledge_scope, (dict, str)):
             fallback['knowledge_scope'] = knowledge_scope
+        scene_objective = _extract_json_field_value(text, 'scene_objective')
+        if isinstance(scene_objective, (dict, str)):
+            fallback['scene_objective'] = scene_objective
         if fallback:
             return fallback
         raise
@@ -738,6 +764,30 @@ def _coerce_knowledge_scope(value) -> dict:
     return result
 
 
+def _coerce_scene_objective(value) -> dict:
+    if isinstance(value, str):
+        objective = str(value or '').strip()
+        return {'objective': objective, 'status': 'active'} if objective else {}
+    if not isinstance(value, dict):
+        return {}
+    label = str(value.get('label', '') or '').strip()
+    objective = str(value.get('objective', '') or '').strip()
+    status = str(value.get('status', '') or 'active').strip().lower() or 'active'
+    completion_hint = str(value.get('completion_hint', '') or '').strip()
+    if status not in {'active', 'resolved'}:
+        status = 'active'
+    if not objective and status != 'resolved':
+        return {}
+    out = {'status': status}
+    if label:
+        out['label'] = label[:40]
+    if objective:
+        out['objective'] = objective[:160]
+    if completion_hint:
+        out['completion_hint'] = completion_hint[:120]
+    return out
+
+
 def _coerce_possession_item(item, known_holders: set[str] | None = None, objects_by_label: dict[str, dict] | None = None, next_idx: int = 0) -> tuple[dict | None, int]:
     if not isinstance(item, dict):
         return None, next_idx
@@ -924,6 +974,15 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
             baseline_scope = baseline_state.get('knowledge_scope', {}) if isinstance(baseline_state.get('knowledge_scope', {}), dict) else {}
             merged['knowledge_scope'] = merge_knowledge_scope_delta(baseline_scope, scope)
 
+    if 'scene_objective' in payload:
+        objective = _coerce_scene_objective(payload.get('scene_objective'))
+        if objective:
+            baseline_objective = baseline_state.get('scene_objective', {}) if isinstance(baseline_state.get('scene_objective', {}), dict) else {}
+            if objective.get('status') == 'resolved':
+                merged['scene_objective'] = {**baseline_objective, **objective}
+            elif objective.get('objective'):
+                merged['scene_objective'] = objective
+
     for field in ('tracked_objects', 'possession_state', 'object_visibility'):
         if field in payload and isinstance(payload.get(field), list) and payload.get(field):
             base_items = baseline_state.get(field, []) if isinstance(baseline_state.get(field, []), list) else []
@@ -1102,6 +1161,8 @@ def _coerce_state_payload(payload: dict, baseline_state: dict | None = None) -> 
             normalized['carryover_clues'] = derived_clues
     if 'knowledge_scope' in normalized:
         normalized['knowledge_scope'] = _coerce_knowledge_scope(normalized.get('knowledge_scope'))
+    if 'scene_objective' in normalized:
+        normalized['scene_objective'] = _coerce_scene_objective(normalized.get('scene_objective'))
     return _coerce_object_layers(normalized, baseline_state)
 
 

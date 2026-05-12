@@ -1899,6 +1899,25 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         if not isinstance(value, list):
             value = prev.get(key, []) if isinstance(prev.get(key, []), list) else []
         current[key] = value
+    scene_objective = current.get('scene_objective', prev.get('scene_objective', {}))
+    if isinstance(scene_objective, dict):
+        status = str(scene_objective.get('status', '') or 'active').strip().lower() or 'active'
+        if status not in {'active', 'resolved'}:
+            status = 'active'
+        label = str(scene_objective.get('label', '') or '').strip()
+        objective = str(scene_objective.get('objective', '') or '').strip()
+        completion_hint = str(scene_objective.get('completion_hint', '') or '').strip()
+        if objective or status == 'resolved':
+            current['scene_objective'] = {
+                **({'label': label[:40]} if label else {}),
+                **({'objective': objective[:160]} if objective else {}),
+                'status': status,
+                **({'completion_hint': completion_hint[:120]} if completion_hint else {}),
+            }
+        else:
+            current.pop('scene_objective', None)
+    else:
+        current.pop('scene_objective', None)
 
     def _derive_names_from_scene_entities(items: list[dict], *, onstage_only: bool = False) -> list[str]:
         out: list[str] = []
