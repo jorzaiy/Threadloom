@@ -40,6 +40,7 @@ web input
 - state 写入分三类：opening 只做开局状态机 checkpoint；`handler_message.py` 负责每个完整 turn 的最终权威提交；keeper archive 写入只维护派生缓存。
 - keeper 写回按增量 patch 执行：骨架字段由 skeleton keeper 维护，fill keeper 只补信号、物件、持有关系、可见性和本轮知情 delta。
 - `knowledge_scope` 是本轮 delta，长期知识落到 `knowledge_records`；物件退出 active 状态通过 `lifecycle_status` 和 `graveyard_objects` 表达。
+- `scene_objective` 是事件级目标锚点，负责稳定当前场景段的主轴；`immediate_goal` 仍是主角下一拍目标，二者不合并。
 - keeper archive 是派生缓存，刷新时会清理超过当前有效 pair index 的未来 records，避免撤回/重试后的旧分支污染召回。
 - keeper archive 的读路径默认允许维护派生缓存；需要只读检查时，调用方可通过 `allow_archive_write=False` 禁止 prune/rebuild 落盘，默认运行行为不变。
 - memory maintenance 是每轮提交后的确定性维护层，不是新的事实来源。它只根据 `actor_registry`、当前 `onstage_npcs` 和 keeper archive 结构做收敛：实名 alias 已知时迁移旧称呼；人物已在场时关闭明确过时的“门外等待”风险；archive 只过滤结构坏记录或已知摘要碎片。
@@ -58,6 +59,7 @@ web input
 - 低压用户动作不会自动把旧压力召回成当前主轴。selector 会降低 pressure-only / actor-only 旧 chunk 的权重，arbiter 的弱 stealth 信号写入 clue 而不是 immediate risk，narrator 也不能为了制造戏剧性给休息/看书场景硬塞新威胁。
 - summary chunk 召回需要当前 turn 的强锚点支持：弱 token、泛化动作残片、称呼碎片或旧情报账本的模糊重叠只能作为辅助，不能单独把 12 轮外摘要带回 narrator。长期回忆应由当前地点、事件、人物、物件或关系线的直接相关性触发，而不是靠历史里的高频碎片粘住。
 - 主角档案会拆成公开身份与私密身份边界。公开伪装、可见外貌和场内身份可作为 NPC 当前判断依据；真实性别、隐藏身份、伪装底细等私密事实属于 knowledge boundary，只有当对应 NPC 在结构化知情层里明确知情时，才能被其称呼、对白或判断使用。
+- 当前事件目标由 keeper fill 轻量维护：缺失时补上，明确任务/场景主轴切换时替换，目标达成/失败/被叫停时标记结束。普通对话、观察、移动或心理变化不应新开事件，避免 narrator 每轮换主轴。
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。
@@ -73,6 +75,7 @@ web input
   - `signals` 负责“当前还没消失、会继续影响下一拍”的东西；
   - `resolved_signals` 负责显式关闭本轮已经解决的旧风险或旧线索，关闭发生在 thread tracker 重建前；
   - `knowledge_scope` 只负责本轮新增知情 delta，长期情报由 `knowledge_records` 承担；
+  - `scene_objective` 负责“这一段事件为什么存在、围绕什么目标推进”；
   - `objects` 负责 active 物件、持有关系、可见性和生命周期退出；
   - `event` 负责“前几轮到底发生了什么值得检索”；
   - `summary` 负责“更长阶段该如何压缩”；

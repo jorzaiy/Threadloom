@@ -191,7 +191,7 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 写回管线的 LLM 调用策略：
 
 - **skeleton keeper**：每轮提取 5 个核心字段（time/location/main_event/onstage_npcs/goal）。在 fill 轮次（合并轮/首轮/bootstrap/物件密集轮）自动跳过，因为 fill keeper 的输出已覆盖所有 skeleton 字段。
-- **state keeper fill**：每 N 轮（默认 3）做一次完整状态提取，补充 signals/objects/knowledge_scope。
+- **state keeper fill**：每 N 轮（默认 3）做一次完整状态提取，补充 scene_objective、signals、objects、knowledge_scope。
 - **actor registry**：每轮从叙事中提取新角色候选。
 - **event ledger**：每轮生成事件摘要。在 fill 轮次直接复用 state_keeper 的 signal 输出（main_event/risks/clues），跳过独立 LLM 调用。
 - **summary chunks**：每 12 轮生成历史分块摘要。
@@ -199,6 +199,8 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 名称规范化只在 actor_registry 绑定后由 `memory_maintenance` 统一执行一次，state_keeper 内部不再做独立的 semantic_cleanup。
 
 Persona 写回的职责边界：`persona_updater` 负责人物 seed 的 scene/archive/longterm 流转、重要度计数与近期观察沉淀。NPC 是否值得保留 persona seed 的判断优先依赖 `important_npc_tracker` 的锁定结果，辅以出场连续性和用户关注度启发式。`actor_registry` 仍负责不可变人物基础设定，不应被 persona 的短期观察覆盖。Persona observation 只提供最近表现/关系压力/表达层风格的轻量提示，不能替代角色卡或 actor registry。外貌、语气、习惯动作和性格表现只从 assistant 正文中抽取，不读取用户 prompt 原文，也不让 narrator 直接提交 JSON sidecar。
+
+`scene_objective` 是当前事件/场景段的稳定目标，区别于每轮可变的 `immediate_goal`。它回答“这一段事件为什么存在、围绕什么测试或推进”，例如训练段的资源争夺、规则理解或风险控制；`immediate_goal` 仍只表示主角下一拍要处理的事。fill keeper 只在目标缺失、明确新事件开启或旧事件明确结束时更新；普通对白、观察、移动和短暂心理变化应沿用当前目标。narrator 只读取 active objective，用它约束本轮不要偏离事件主轴。
 
 输出：
 - 新的 `state`

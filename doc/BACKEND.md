@@ -17,7 +17,7 @@
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）；调用方必须显式提供 `base_url` 与 `model`，不再内置旧本地模型默认值
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
 - `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、当前时间粗时段归一化、抽象/非人物 entity 过滤、onstage 当前证据校验、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
-- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前只维护物品、持有关系、情报与信号，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
+- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报与信号，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
 - `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；`actors_mentioned` 会过滤非人物/抽象话题，避免 selector 以后按伪 actor 召回
@@ -48,7 +48,7 @@
 - narrator 已接上真实模型调用
 - 新 session 会继承 root `canon / summary / state`
 - state / summary / persona / threads / important NPC / actor registry 都已接入 session-local 写回
-- narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / items / knowledge / recent window 前段提纲 / 最近完整正文 / user input`
+- narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / scene_objective / items / knowledge / keeper archive hits / recent window 前段提纲 / 最近完整正文 / user input`
 - `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近完整正文 + 前段提纲 + 本轮输入为准
 - `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回
 - 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
@@ -82,6 +82,7 @@
 - `main_event` 与 `active_threads.main.label` 当前已改为条件同步：不再让较慢更新的 `main_event` 无条件覆盖主线程标签；只有当 `main_event` 质量明显更高，或主线程标签仍是占位值时，才允许它接管主线程标签
 - `active_threads` 当前已降为“state/debug 辅助层”的实验状态：数据结构仍保留，但不再默认进入 narrator prompt，也不再作为 selector 的主要命中依据；归一化层也不再允许它反向补 `relevant_npcs / scene_entities / main_event`
 - `carryover_signals` 统一信号层已接入状态 schema并真实落盘：设计目标是让 keeper 优先维护“后续仍会影响局势的统一信号”，再由兼容层派生旧 `immediate_risks / carryover_clues`；当前真实回合里 keeper 仍常直接产出旧字段，但状态归一化层已会把旧字段反推回统一信号层并持久化
+- `scene_objective` 是轻量事件级目标锚点：keeper fill 只在目标缺失、明显开启新任务/新场景主轴或目标明确结束时更新；narrator 注入 active objective 来约束本轮围绕事件目标推进，避免把 `immediate_goal` 误用成宏观训练/事件目标
 - 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里存在；`thread_tracker / context_builder / state_snapshot` 等核心消费点已开始优先使用统一信号层，再兼容旧字段
 - `onstage_npcs` 当前只作为 state/UI 快照存在，不进入 narrator 主 prompt，也不承载长期人物基础设定；长期人物基础设定进入不可变 `actors`
 - `onstage_npcs / relevant_npcs / scene_entities` 当前必须有正向人物证据：稳定 actor、important NPC、continuity hint、明确人物 role，或正文/事件中“人物称谓 + 行动锚点”。地点、标题残片、事件短语不能从 `main_event/location` 反推出 NPC
