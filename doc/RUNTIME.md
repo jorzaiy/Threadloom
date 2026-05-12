@@ -33,6 +33,8 @@
 
 当前实现补充说明：selector 选中 NPC profile target 后，优先读取角色卡 source 下的 markdown profile；若缺失，会回落到当前 session 的 `persona/scene`、`persona/longterm`、`persona/archive` JSON seed，并把其中的身份、persona hooks 与近期观察片段格式化为 narrator 的 NPC profile。这样可以避免“persona 已经生成但 narrator 仍显示 profile missing”的断链。
 
+Selector 对 12 轮外固定 summary chunk 的回流采用“当前 turn 强锚点优先”原则。人物名、地点、物件、事件短语和关系线可作为有效锚点；泛化虚词、短动作残片、称呼碎片和旧情报账本的弱 overlap 只能辅助排序，不能单独触发远期摘要注入。召回规则必须保持角色卡无关，不通过写死具体人名、session id 或剧情专属关键词来强化某个个案。
+
 Session-local persona seed 仍不是完整人物传记。它每轮可更新重要度、前后台层级和近期观察，但 observation 只从 assistant 叙事中抽取与该 NPC 相关的短片段，不把用户 prompt 原文写入人物详情，也不把同一片段重复塞进多个字段。NPC 的外貌印象、语气、习惯动作和性格表现也走这条“narrator 正文可观察表现 -> persona observation”的窄通道沉淀；narrator 可以自然写出表现层细节，但不能直接输出结构化人物卡或决定是否持久建档。
 
 ### 深刷新（默认每 20 轮或事件触发）
@@ -150,6 +152,7 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 输入源包括：
 - 当前 scene facts
 - 当前角色卡核心与 `世界设定锁`
+- 主角公开身份 / 私密身份边界：公开伪装和可见外貌可被场内 NPC 判断；真实性别、隐藏身份或伪装底细只有对应 NPC 已知情时才可用于其称呼与对白
 - 当前 onstage / relevant NPC
 - persona hooks
 - selector 命中的 NPC profile；当 source profile 缺失时，可由 session persona seed 兜底生成轻量 profile

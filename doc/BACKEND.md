@@ -10,7 +10,7 @@
 - `handler_message.py`：`POST /api/message` 主链入口
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照
 - `bootstrap_session.py`：新 session bootstrap
-- `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed
+- `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed；summary chunk 只在当前 turn 有足够直接锚点时回流
 - `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及 recent window 前段 event outline + 近端完整正文
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `server.py` 当前默认绑定 `127.0.0.1:8765`，可通过 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
@@ -26,7 +26,7 @@
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档；最终 actor 索引由 state normalization 对齐和剪枝
-- `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重；LLM candidate 在创建前会再过人物性/抽象名校验
+- `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；内置 protagonist 会从玩家档案沉淀公开身份、私密身份、外貌与知情边界；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重；LLM candidate 在创建前会再过人物性/抽象名校验
 - `memory_maintenance.py`：长期记忆维护层；按 actor registry 的精确 alias 做跨 state / event / summary chunk / keeper archive canonicalization，并清理“人物已在场但旧风险仍称其在门外等待”的 stale signal/thread。该层只做确定性维护，不通过正文推断新人物等价关系
 - `event_ledger.py`：事件账本；产出阶段事件摘要，不再负责人物短期状态写回
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
@@ -75,6 +75,7 @@
 - actor / persona / selector / summary chunk 共享非人物名防线：时间、空间、规则、栏目、盲区、题目等抽象或结构标签不能因 LLM 附带“外貌/身份”字段就被固化为 NPC。
 - actor registry 创建新 actor 时会读取最近 1~3 对 turn，因此上一轮 actor registry LLM 失败后，下一轮仍可从 recent window 补建，不需要依赖脏 fallback
 - actor registry 已内置 `protagonist`，物品持有和情报记录可统一绑定到 `actor_id`；`possession_state` 会补 `holder_actor_id`，`object_visibility` 会补 `known_to_actor_ids`，本轮 `knowledge_scope` 会派生长期 `knowledge_records`
+- protagonist actor 会把玩家档案拆成 `public_identity`、`private_identity`、`knowledge_boundary` 与 `appearance`：公开伪装、可见外貌和他人可观察身份可进入 NPC 判断；真实性别、隐藏身份、伪装底细等私密事实只有在 `knowledge_records` / 本轮 `knowledge_scope` 明确证明对应 NPC 知情时，才能被 NPC 对白、称呼或判断承接
 - 12 轮未被正文提及的 actor 会进入 `actor_context_index.archived_actor_ids`，只影响后续上下文注入，不修改 actor 基础设定；再次被正文提及时会回到 active
 - 每满 12 个完整 user/assistant pair 生成一个不可变 dense summary chunk，保存到 `memory/summary_chunks.json`；chunk 覆盖固定区间，不重叠、不滚动覆盖
 - opening-choice 分支现在不再“只生成正文然后直接返回”；首轮开局正文会进入 `state_fragment -> skeleton keeper -> fill keeper -> thread/important_npc` 写回链，避免正文与 state 从第一轮开始分叉。当前这条链通常能落下 `time/location/main_event/onstage/immediate_risks/carryover_clues`，但 `immediate_goal` 仍可能偏保守
@@ -91,6 +92,7 @@
 - keeper archive 构建/读取时会运行 deterministic validation：删除坏窗口、空记录和已知摘要碎片，保护 `manual-cleanup` 人工记录；离线 repair 可在 dry-run 中报告并在 `--apply` 时写回这些派生缓存清理
 - narrator prompt 当前不靠列举“翻墙/离场”等剧情关键词维持连续性，而是通过 recent window（前段提纲 + 近端完整正文）和通用原则约束空间关系、视线范围、人物控制权与行动链的承接
 - narrator / arbiter / selector 对低压 turn 有共同降压规则：普通阅读、坐下、休息和无明确潜行收益的隐蔽位置不会自动升级为 stealth risk；旧高压 chunk 若只靠人物名或压力词命中，会被降权。
+- selector 对固定 summary chunk 的召回要求当前 turn 具备强语义锚点；泛化助词、动作残片、称呼残片和仅来自旧 `knowledge_records` 的弱 overlap 不足以把远期 chunk 拉回 prompt。这样避免长 session 中旧摘要靠“的/呼吸/某人的”等弱 token 误回流，同时不依赖具体角色名、剧情物件或 session id。
 - runtime heuristic / prompt examples 当前避免绑定具体角色卡或 session：summary keyword 示例、clue 组织触发词、persona archetype 兜底和 state fallback 物件提示均应使用通用职能/物件词，不使用某张卡的固定角色名、组织名或剧情专属物件来强化表现
 - 当前目标分工草案：
 - `event`：中程检索层，服务于 recall / summary，不默认主导 narrator

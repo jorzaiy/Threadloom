@@ -56,6 +56,8 @@ web input
 - `state.time` 只表示当前场景的粗时段，如清晨、上午、中午、下午、傍晚、晚上、夜里；精确钟点属于预约、截止、倒计时或课程安排，应留在 `immediate_goal / carryover_signals / active_threads` 等剧情约束层，不作为每轮滚动的当前时间戳。
 - NPC 抽取现在有跨层人物性校验：抽象概念、时间/空间/答案等连续性话题、栏目/盲区/标题等结构标签，即使 LLM 给出外貌或身份，也不能进入 actor registry、scene entity、persona seed、selector profile target 或 summary chunk actor metadata。
 - 低压用户动作不会自动把旧压力召回成当前主轴。selector 会降低 pressure-only / actor-only 旧 chunk 的权重，arbiter 的弱 stealth 信号写入 clue 而不是 immediate risk，narrator 也不能为了制造戏剧性给休息/看书场景硬塞新威胁。
+- summary chunk 召回需要当前 turn 的强锚点支持：弱 token、泛化动作残片、称呼碎片或旧情报账本的模糊重叠只能作为辅助，不能单独把 12 轮外摘要带回 narrator。长期回忆应由当前地点、事件、人物、物件或关系线的直接相关性触发，而不是靠历史里的高频碎片粘住。
+- 主角档案会拆成公开身份与私密身份边界。公开伪装、可见外貌和场内身份可作为 NPC 当前判断依据；真实性别、隐藏身份、伪装底细等私密事实属于 knowledge boundary，只有当对应 NPC 在结构化知情层里明确知情时，才能被其称呼、对白或判断使用。
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。
