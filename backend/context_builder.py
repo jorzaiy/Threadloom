@@ -1109,6 +1109,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
             'object_visibility': state_json.get('object_visibility', []),
             'knowledge_scope': state_json.get('knowledge_scope', {}),
             'knowledge_records': state_json.get('knowledge_records', []),
+            'scene_objective': state_json.get('scene_objective', {}),
             'actors': state_json.get('actors', {}),
             'actor_context_index': state_json.get('actor_context_index', {}),
             'resolved_events': state_json.get('resolved_events', []),

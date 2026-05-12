@@ -191,6 +191,26 @@ def _format_summary_chunks(chunks: list[dict], limit: int = 2) -> str:
     return '\n\n'.join(blocks) if blocks else '暂无'
 
 
+def _format_scene_objective(value: dict) -> str:
+    if not isinstance(value, dict):
+        return '暂无'
+    status = str(value.get('status', '') or 'active').strip().lower() or 'active'
+    if status != 'active':
+        return '暂无'
+    objective = str(value.get('objective', '') or '').strip()
+    if not objective:
+        return '暂无'
+    label = str(value.get('label', '') or '').strip()
+    completion_hint = str(value.get('completion_hint', '') or '').strip()
+    lines = []
+    if label:
+        lines.append(f"- 事件：{label}")
+    lines.append(f"- 目标：{objective}")
+    if completion_hint:
+        lines.append(f"- 完成/失败边界：{completion_hint}")
+    return '\n'.join(lines)
+
+
 def _clean_preset_template(text: str) -> str:
     value = str(text or '').strip()
     if not value:
@@ -489,6 +509,16 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
             + actor_text
         )
 
+    scene_objective_text = _format_scene_objective(scene.get('scene_objective', {}))
+    if scene_objective_text != '暂无':
+        blocks.append(
+            '【当前事件目标】\n'
+            '本块是当前事件/场景段的稳定目标，用来防止叙事主轴散乱。它不是主角下一拍行动；下一拍以 immediate_goal、最近完整正文和本轮用户输入为准。'
+            '本轮正文应服务该目标；普通对白、观察或移动不要把主轴偏到无关旧风险、随机新威胁或纯心理观察。'
+            '只有最近完整正文或本轮用户输入明确显示目标达成、失败、训练叫停、任务切换或主动离开时，才自然收束或转入新事件。\n'
+            + scene_objective_text
+        )
+
     persona_text = _format_persona_lines(persona)
     if persona_text != '暂无':
         blocks.append(
@@ -507,6 +537,16 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
             '若本块包含旧风险、旧怀疑、旧追索或旧压迫感，只有在当前完整正文或本轮用户输入直接重新触发时才继续强化；'
             '否则把它当作背景事实轻量承接，不要让旧压力覆盖当前低压动作。\n'
             + chunk_text
+        )
+
+    keeper_record_text = _format_keeper_records(context.get('keeper_records', {}))
+    if keeper_record_text != '暂无':
+        blocks.append(
+            '【keeper archive 命中】\n'
+            '本块来自 keeper archive 的中程结构化记录，只用于补足 recent window 外的连续性。'
+            '它不是当前镜头事实源；人物是否在场、物件即时位置和风险是否仍然活跃，必须以后面的最近完整正文、前段提纲、本轮用户输入和知情边界为准。'
+            '不要把 archive 中的旧人物、旧压力或旧物件状态自动升级为当前场景事实；只有当前上下文直接触发时才轻量承接。\n'
+            + keeper_record_text
         )
 
     # 9. 最近窗口：前段提纲 + 近端完整正文

@@ -400,3 +400,60 @@ def test_narrator_prompt_marks_private_identity_as_not_npc_known():
     assert '私密身份=真实身份=逃亡继承人' in system_prompt
     assert 'NPC 对白、称呼和判断只能使用其已知信息' in system_prompt
     assert '否则只能按场内公开表象称呼与反应' in system_prompt
+
+
+def test_narrator_prompt_injects_keeper_archive_hits_as_background_only():
+    system_prompt, _ = build_narrator_input({
+        'active_preset': {},
+        'scene_facts': {},
+        'keeper_records': {
+            'records': [
+                {
+                    'window': {'from_turn': 13, 'to_turn': 24},
+                    'location_anchor': '旧训练场',
+                    'stable_entities': [{'name': '测试甲'}],
+                    'ongoing_events': ['测试甲曾经看守补给箱'],
+                    'tracked_objects': [{'label': '补给箱'}],
+                }
+            ]
+        },
+    }, '低头检查鞋带')
+
+    assert '【keeper archive 命中】' in system_prompt
+    assert '13..24 | 地点=旧训练场 | 人物=测试甲 | 事件=测试甲曾经看守补给箱 | 物件=补给箱' in system_prompt
+    assert '不是当前镜头事实源' in system_prompt
+    assert '不要把 archive 中的旧人物、旧压力或旧物件状态自动升级为当前场景事实' in system_prompt
+
+
+def test_narrator_prompt_injects_active_scene_objective():
+    system_prompt, _ = build_narrator_input({
+        'active_preset': {},
+        'scene_facts': {
+            'scene_objective': {
+                'label': '第二轮训练',
+                'objective': '测试学员在资源争夺和规则模糊下的判断能力',
+                'status': 'active',
+                'completion_hint': '取得补给、被承认完成或训练叫停时结束',
+            }
+        },
+    }, '继续谈判')
+
+    assert '【当前事件目标】' in system_prompt
+    assert '事件：第二轮训练' in system_prompt
+    assert '目标：测试学员在资源争夺和规则模糊下的判断能力' in system_prompt
+    assert '不要把主轴偏到无关旧风险、随机新威胁或纯心理观察' in system_prompt
+
+
+def test_narrator_prompt_omits_resolved_scene_objective():
+    system_prompt, _ = build_narrator_input({
+        'active_preset': {},
+        'scene_facts': {
+            'scene_objective': {
+                'label': '旧训练',
+                'objective': '旧目标',
+                'status': 'resolved',
+            }
+        },
+    }, '转身离开')
+
+    assert '【当前事件目标】' not in system_prompt
