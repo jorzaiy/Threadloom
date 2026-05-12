@@ -1083,7 +1083,6 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         location=str(state.get('location', '') or ''),
         recent_pairs=recent_pairs,
         current_state=state,
-        keeper_signals=state if _will_run_fill else None,
     )
     event_summary_item = build_event_summary_item(
         turn_id=turn_id,
