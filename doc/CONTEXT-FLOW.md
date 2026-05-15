@@ -38,7 +38,7 @@ web input
 - 更早历史优先收敛成 keeper archive，而不是自由摘要层。
 - 写回时先收口到结构化状态；`summary` 可继续保留为调试/运维产物，但不再主导 narrator。
 - state 写入分三类：opening 只做开局状态机 checkpoint；`handler_message.py` 负责每个完整 turn 的最终权威提交；keeper archive 写入只维护派生缓存。
-- keeper 写回按增量 patch 执行：骨架字段由 skeleton keeper 维护，fill keeper 只补信号、物件、持有关系、可见性和本轮知情 delta。
+- keeper 写回按增量 patch 执行：骨架字段由 skeleton keeper 维护，fill keeper 只补信号、物件、持有关系、可见性、本轮知情 delta 和本轮有证据的 NPC↔主角关系 delta。
 - `knowledge_scope` 是本轮 delta，长期知识落到 `knowledge_records`；物件退出 active 状态通过 `lifecycle_status` 和 `graveyard_objects` 表达。
 - `scene_objective` 是事件级目标锚点，负责稳定当前场景段的主轴；`immediate_goal` 仍是主角下一拍目标，二者不合并。
 - keeper archive 是派生缓存，刷新时会清理超过当前有效 pair index 的未来 records，避免撤回/重试后的旧分支污染召回。
@@ -51,6 +51,7 @@ web input
 - NPC profile 注入分两级：source markdown profile 是强档案；当前 session 的 persona seed 是兜底档案。兜底内容只包含身份、persona hooks 和 assistant 叙事中观察到的短片段，不能从用户 prompt 原文生成 NPC 事实。
 - NPC 表现层维护采用“narrator 写正文，persona 验证沉淀”的边界：narrator 可以自然写出 NPC 的外貌印象、语气、习惯动作和性格表现；写回层只从 assistant 正文中抽取这些可观察片段作为 persona observation。它不接受用户 prompt 原文中的人物设定声明，也不让 narrator 直接输出 JSON 人物卡或决定持久化。
 - 角色注册表的基础字段默认不可变；实名揭示只在窄口径下允许把稳定 generic actor 提升为实名主称呼，并把原描述称呼保留为 alias。当“剃寸头的高个子学员”这类 actor 后续明确自报姓名或被点名时，runtime 会用实名绑定后续 knowledge/profile/selector，避免同一人物长期分裂成描述称呼与实名两条线。
+- NPC 与主角关系不是基础设定覆盖，而是 actor registry 上的独立关系面。fill keeper 只在 narrator 正文提供可见互动、共同经历、明确承诺或冲突结果时输出 `npc_relationships` 增量；actor registry 将其绑定到既有 NPC actor 的 `relationship_to_protagonist`，再进入 narrator `【角色注册表】`。用户单方面声称“我们是好友/队友”不能直接写成事实。
 - 实名迁移只允许 exact alias map。若两个 actor 都声明了同一个 alias，或某个 alias 与另一个 actor 的 canonical name 冲突，该 alias 不参与迁移，宁可保留重复称呼，也不做高风险自动合并。
 - `active_threads[].actors` 是 thread 自身的辅助索引，不是长期人物事实源。归一化时会把 alias 对齐到 actor canonical name，并只保留 thread 文本或当前 `main_event / immediate_risks / carryover_clues / carryover_signals` 明确支持的人物，避免旧场景 NPC 在 watch/cooling thread 中继续粘住。
 - `relevant_npcs` 只保留有正向人物证据、且当前信号层仍明确提到的非 onstage 人物；当前风险/线索点名的 offstage actor 可继续保留给 selector，但不能再从地点、标题残片或 active thread 文本反推虚假 NPC。
@@ -79,6 +80,7 @@ web input
   - `signals` 负责“当前还没消失、会继续影响下一拍”的东西；
   - `resolved_signals` 负责显式关闭本轮已经解决的旧风险或旧线索，关闭发生在 thread tracker 重建前；
   - `knowledge_scope` 只负责本轮新增知情 delta，长期情报由 `knowledge_records` 承担；
+  - `npc_relationships` 只负责本轮关系标签 delta，长期关系挂在既有 NPC actor 上；
   - `scene_objective` 负责“这一段事件为什么存在、围绕什么目标推进”；
   - `objects` 负责 active 物件、持有关系、可见性和生命周期退出；
   - `event` 负责“前几轮到底发生了什么值得检索”；
