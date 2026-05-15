@@ -129,3 +129,56 @@ def test_runtime_render_supports_nested_character_override_schema():
     assert '耐力极差' in rendered
     assert '刻意压低声线说话' in rendered
     assert '在学院中生存下去' in rendered
+
+
+def test_unified_profile_validation_rejects_schema_shape_changes():
+    profile = player_profile.empty_unified_player_profile()
+    profile['identity']['name'] = '陆小环'
+    profile['abilities'] = ['灵识敏锐']
+
+    normalized = player_profile.validate_unified_player_profile(profile)
+
+    assert normalized['identity']['name'] == '陆小环'
+    assert normalized['abilities'] == ['灵识敏锐']
+
+    bad = player_profile.empty_unified_player_profile()
+    bad['abilities'] = {'name': '不允许对象'}
+    try:
+        player_profile.validate_unified_player_profile(bad)
+    except ValueError as err:
+        assert 'array fields must stay arrays' in str(err)
+    else:
+        raise AssertionError('expected schema validation failure')
+
+
+def test_unified_profile_runtime_render_uses_flat_arrays():
+    profile = player_profile.empty_unified_player_profile()
+    profile['identity']['name'] = '陆小环'
+    profile['identity']['status'] = '散修'
+    profile['abilities'] = ['灵识敏锐，能感知细微灵气波动。']
+    profile['privateBoundaries'] = ['真实来历不自动对 NPC 公开。']
+
+    rendered = player_profile.render_runtime_player_profile_markdown(profile)
+
+    assert '名字：陆小环' in rendered
+    assert '身份：散修' in rendered
+    assert '灵识敏锐，能感知细微灵气波动。' in rendered
+    assert '真实来历不自动对 NPC 公开。' in rendered
+
+
+def test_unified_profile_merge_preserves_base_when_override_fields_blank():
+    base = player_profile.empty_unified_player_profile()
+    base['identity']['name'] = '陆小环'
+    base['identity']['origin'] = '神都'
+    base['personality'] = ['安静内向']
+    override = player_profile.empty_unified_player_profile()
+    override['identity']['status'] = '散修'
+    override['abilities'] = ['灵识敏锐']
+
+    merged = player_profile.merge_unified_player_profiles(base, override)
+
+    assert merged['identity']['name'] == '陆小环'
+    assert merged['identity']['origin'] == '神都'
+    assert merged['identity']['status'] == '散修'
+    assert merged['personality'] == ['安静内向']
+    assert merged['abilities'] == ['灵识敏锐']

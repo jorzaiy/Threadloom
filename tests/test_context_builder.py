@@ -16,6 +16,7 @@ from selector import summary_chunk_hits  # noqa: E402
 from selector import profile_targets  # noqa: E402
 from event_ledger import build_event_summary_item  # noqa: E402
 from persona_updater import _valid_persona_token  # noqa: E402
+from player_profile import normalize_player_profile, render_runtime_player_profile_markdown  # noqa: E402
 
 
 def test_recent_history_keeps_opening_assistant_before_first_pair():
@@ -281,6 +282,29 @@ def test_narrator_prompt_rejects_unstated_intermediate_actions():
     assert '经过前厅走到后院坐下休息' in user_prompt
 
 
+def test_narrator_prompt_rejects_unevidenced_concrete_item_details():
+    system_prompt, _ = build_narrator_input({'scene_facts': {}, 'active_preset': {}}, '拿出饼看一眼')
+
+    assert '物件来源、剩余数量、当前位置、谁看见过/知道它' in system_prompt
+    assert '不要编造购买地点、食用进度、存放位置或旁观者知情' in system_prompt
+
+
+def test_active_tracked_object_evidence_is_in_prompt_without_summary_recall():
+    system_prompt, _ = build_narrator_input({
+        'active_preset': {},
+        'scene_facts': {
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '油纸包饼', 'kind': 'item', 'story_relevant': True}],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '主角', 'status': 'saved', 'location': '怀里'}],
+            'object_visibility': [{'object_id': 'obj_01', 'visibility': 'private', 'known_to': ['主角']}],
+        },
+        'selected_summary_chunks': [],
+    }, '摸摸怀里的饼还在不在')
+
+    assert '【重要物件与持有关系】' in system_prompt
+    assert '油纸包饼 (item) / 持有者=主角 / 状态=saved / 可见性=private' in system_prompt
+    assert '【召回的12轮外历史】' not in system_prompt
+
+
 def test_summary_chunk_actor_only_pressure_is_not_recalled_for_quiet_turn():
     chunks = [{
         'chunk_id': 'chunk_0001',
@@ -442,6 +466,41 @@ def test_narrator_prompt_injects_active_scene_objective():
     assert '事件：第二轮训练' in system_prompt
     assert '目标：测试学员在资源争夺和规则模糊下的判断能力' in system_prompt
     assert '不要把主轴偏到无关旧风险、随机新威胁或纯心理观察' in system_prompt
+
+
+def test_runtime_player_profile_renders_nested_character_override_fields():
+    profile = normalize_player_profile({
+        'character': {
+            'basic_info': {
+                'name': '测试主角',
+                'courtesyName': '小名',
+                'age': 18,
+                'gender': '女',
+                'identity': '散修',
+            },
+            'cultivation_info': {
+                'realm': '筑基中期',
+                'spirit_root': {'type': '木属性灵根'},
+            },
+            'skills': [
+                {'name': '灵识敏锐', 'detail': '能感知细微灵气波动。'},
+                {'name': '解谜破阵', 'detail': '擅长破解简单阵法。'},
+            ],
+            'personality': [
+                {'trait': '安静内敛', 'detail': '先观察再开口。'},
+            ],
+        }
+    })
+
+    markdown = render_runtime_player_profile_markdown(profile)
+
+    assert '名字：测试主角' in markdown
+    assert '常用称呼：小名' in markdown
+    assert '身份：散修' in markdown
+    assert '灵识敏锐：能感知细微灵气波动。' in markdown
+    assert '境界：筑基中期' in markdown
+    assert '灵根：木属性灵根' in markdown
+    assert '安静内敛：先观察再开口。' in markdown
 
 
 def test_narrator_prompt_omits_resolved_scene_objective():

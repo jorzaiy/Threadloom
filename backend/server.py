@@ -35,7 +35,7 @@ from model_config import (
 from regenerate_turn import regenerate_last_partial
 from session_lifecycle import delete_session, list_sessions, start_new_game
 from paths import DEFAULT_USER_ID, active_character_id, active_user_id, current_session_dir, find_character_session_dir, is_path_within_user_root, normalize_session_id, resolve_session_dir, reset_active_user_id, reset_multi_user_request_context, set_active_user_id, set_multi_user_request_context, slugify
-from player_profile import delete_user_avatar, load_base_player_profile, load_character_player_profile_override, resolve_user_avatar_path, save_base_player_profile, save_character_player_profile_override, save_user_avatar
+from player_profile import base_player_profile_source_path, character_player_profile_override_source_path, delete_user_avatar, legacy_profile_to_unified, load_base_player_profile, load_character_player_profile_override, normalize_profile_text_with_keeper_llm, read_profile_source, render_runtime_player_profile_markdown, resolve_user_avatar_path, save_base_player_profile, save_base_player_profile_source, save_character_player_profile_override, save_character_player_profile_override_source, save_user_avatar, validate_unified_player_profile
 from runtime_store import build_entity_map, build_state_snapshot, filter_committed_history_items, load_character_card_meta, load_history, load_state, resolve_character_cover_path, web_runtime_settings
 from user_manager import (
     admin_has_password, archive_orphan_user_dir, change_own_password, create_user, delete_user, disable_user, enable_user,
@@ -549,15 +549,28 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == '/api/user-profile':
                 profile = load_base_player_profile()
+                try:
+                    profile = validate_unified_player_profile(profile)
+                except ValueError:
+                    profile = legacy_profile_to_unified(profile)
                 return self._send(200, {
                     'profile': profile,
+                    'source_text': read_profile_source(base_player_profile_source_path()),
+                    'prompt_preview': render_runtime_player_profile_markdown(profile),
                     'avatar_url': '/user-avatar' if resolve_user_avatar_path() else None,
                     'web': web_runtime_settings(),
                 })
 
             if parsed.path == '/api/character/profile-override':
+                override = load_character_player_profile_override()
+                try:
+                    override = validate_unified_player_profile(override)
+                except ValueError:
+                    override = legacy_profile_to_unified(override)
                 return self._send(200, {
-                    'override': load_character_player_profile_override(),
+                    'override': override,
+                    'source_text': read_profile_source(character_player_profile_override_source_path()),
+                    'prompt_preview': render_runtime_player_profile_markdown(override),
                     'character_card': load_character_card_meta(),
                     'web': web_runtime_settings(),
                 })
@@ -905,11 +918,50 @@ class Handler(BaseHTTPRequestHandler):
                 override = payload.get('override')
                 if not isinstance(override, dict):
                     return self._invalid_input('override must be an object')
+                try:
+                    override = validate_unified_player_profile(override)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                source_text = str(payload.get('source_text', '') or '')
                 path = save_character_player_profile_override(override)
+                save_character_player_profile_override_source(source_text)
                 return self._send(200, {
                     'ok': True,
                     'path': path.name,
+                    'override': load_character_player_profile_override(),
+                    'source_text': read_profile_source(character_player_profile_override_source_path()),
+                    'prompt_preview': render_runtime_player_profile_markdown(load_character_player_profile_override()),
                     'character_card': load_character_card_meta(),
+                    'web': web_runtime_settings(),
+                })
+
+            if parsed.path in {'/api/user-profile/normalize', '/api/character/profile-override/normalize'}:
+                source_text = str(payload.get('source_text', '') or '')
+                existing = payload.get('profile') if parsed.path == '/api/user-profile/normalize' else payload.get('override')
+                if existing is not None and not isinstance(existing, dict):
+                    return self._invalid_input('existing profile must be an object')
+                try:
+                    profile, diagnostics = normalize_profile_text_with_keeper_llm(source_text, existing_profile=existing if isinstance(existing, dict) else None)
+                except Exception as err:
+                    return self._invalid_input(f'profile normalization failed: {err}')
+                return self._send(200, {
+                    'profile': profile,
+                    'override': profile,
+                    'prompt_preview': render_runtime_player_profile_markdown(profile),
+                    'diagnostics': diagnostics,
+                    'web': web_runtime_settings(),
+                })
+
+            if parsed.path in {'/api/user-profile/preview', '/api/character/profile-override/preview'}:
+                profile = payload.get('profile') if parsed.path == '/api/user-profile/preview' else payload.get('override')
+                if not isinstance(profile, dict):
+                    return self._invalid_input('profile must be an object')
+                try:
+                    profile = validate_unified_player_profile(profile)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                return self._send(200, {
+                    'prompt_preview': render_runtime_player_profile_markdown(profile),
                     'web': web_runtime_settings(),
                 })
 
@@ -917,11 +969,19 @@ class Handler(BaseHTTPRequestHandler):
                 profile = payload.get('profile')
                 if not isinstance(profile, dict):
                     return self._invalid_input('profile must be an object')
+                try:
+                    profile = validate_unified_player_profile(profile)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                source_text = str(payload.get('source_text', '') or '')
                 path = save_base_player_profile(profile)
+                save_base_player_profile_source(source_text)
                 return self._send(200, {
                     'ok': True,
                     'path': path.name,
                     'profile': load_base_player_profile(),
+                    'source_text': read_profile_source(base_player_profile_source_path()),
+                    'prompt_preview': render_runtime_player_profile_markdown(load_base_player_profile()),
                     'avatar_url': '/user-avatar' if resolve_user_avatar_path() else None,
                     'web': web_runtime_settings(),
                 })
