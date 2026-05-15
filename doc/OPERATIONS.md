@@ -64,11 +64,15 @@ repair 报告里的常见 `changes[].action`：
 当前主角档案建议：
 
 - 用户级基础档案：`runtime-data/<user>/profile/player-profile.base.json`
+- 用户级自然语言源文本：`runtime-data/<user>/profile/player-profile.source.md`
 - 角色卡特化覆盖：`runtime-data/<user>/characters/<character_id>/source/player-profile.override.json`
+- 角色卡特化自然语言源文本：`runtime-data/<user>/characters/<character_id>/source/player-profile.override.source.md`
 - runtime 会先读基础档案，再叠加当前角色卡覆盖
 - `USER.md` 不再进入 RP narrator 主链，只保留给通用协作备注
 - narrator 运行时只消费一份收短后的玩家档案摘要，完整档案继续保留在 JSON 真相源中
-- `player-profile.json` / `player-profile.md` 当前保留为兼容副本与可读导出
+- `player-profile.json` / `player-profile.md` 当前保留为旧版兼容副本与可读导出
+- 设置页玩家设定编辑器分三块：自然语言设定、结构化 JSON、最终注入预览。普通用户只需要写自然语言并点击“整理成结构化 JSON”；高级用户可以编辑 JSON 字段值和数组项，但不要改字段名或字段类型。
+- 整理 JSON 使用设置页中的 State Keeper 模型。若模型未配置、返回空 JSON 或 schema 校验失败，后端会返回错误并保留旧档案。
 
 当前 narrator prompt 分层：
 
@@ -419,7 +423,8 @@ server {
   - fallback event summary 当前已不再优先抓天气/氛围句，开始更像阶段事件压缩；后续若继续打磨，主方向应是 clue/risk 的结构化质量，而不是继续扩大窗口
 - NPC / object / clue registry 当前已改为批量刷新：默认累计到至少 3 个新的对话对后才触发一次 sidecar 更新，不再每轮都检查一次 gemma
 - entity candidate judge 当前已收成单一入口：保留 `state_updater.py` 中的判定，移除 `state_bridge.py` 中的重复 judge，减少每轮额外 gemma 调用
-- 调试面板当前会优先显示 `event_summary_count / event_hits / inject_summary / latest event summary`，用于观察双层检索是否真的在工作
+- 调试面板当前展示本轮注入和写回诊断，而不是完整记忆表。重点包括：`Prompt Blocks`、世界书 / NPC 候选注入概览、`Event Memory`、selector `event_hits / summary_chunk_hits / inject_summary`、最新 event summary、`state_keeper_diagnostics`、arbiter 结果和 completion / finish reason。
+- 调试时判断世界书实际注入体量，应优先看 `selected_summary_chars / source_hit_chars / index_hit_chars / foundation_chars / effective_total_chars`，不要只看旧 `total_chars`。
 - 轻量物件状态层已接入：
   - `tracked_objects`
   - `possession_state`
@@ -431,9 +436,10 @@ server {
   - `纸条 / 短刀` 这类动作物件已可在 live 验证中进入 `tracked_objects`
 - 当前物件层额外约束：
   - 只记录具有可持续物理状态的物件
+  - 只有仍可行动的物件保留在 active `tracked_objects`，例如被携带、保存、放在可交互位置、转交或证物化
   - 不把短语残片或动作词片段误识别成物件
   - 一次性付款、零散货币、临时消耗品默认不进入物件列表，除非后续会被持续追踪
-  - 已进入列表的低价值临时物件，若后续几轮都没有再次出现，且没有持有/可见性/关键类型锚点，也会自动降级移除
+  - 已吃完、丢失、销毁或归档的物件会退出 active 列表，进入 `graveyard_objects`，避免后续被旧摘要幻觉复活
 - 若 `state_keeper` 失败，当前会先走 `fragment-baseline`，再让 heuristic fallback 在其上补细节
 - `state_keeper` 不可达时，物件状态 fallback 已不会再因为正则模板格式化错误而崩掉；此时仍可正常产出 turn trace
 - fallback `state_updater` 现在更偏保守继承，不轻易覆盖已有高信号字段
@@ -445,9 +451,12 @@ server {
 - 当前浮动状态面板是 v1.0 结构状态视图：
   - 时间 / 地点硬锚点
   - 主要事件
-  - 在场 / 相关 / 重要 NPC
-  - 关键物件
-  - 活跃线程
+  - 当前事件目标 `scene_objective`
+  - 下一步 `immediate_goal`
+  - 延续信号 `carryover_signals`
+  - NPC 列表：优先使用后端返回的 actor registry / `onstage_entities` / `relevant_entities` / `scene_entities` 展示结构
+  - 关键物件：`tracked_objects / possession_state / object_visibility`
+- `active_threads` 当前只作为 state/debug 辅助层保留，不再作为默认用户可见主面板项目，也不再作为 narrator / selector 的主要 steering 来源
 - `onstage_npcs` 当前已开始收向 `scene_entities` 的投影结果：keeper 更偏先维护 `scene_entities`，再由状态归一化层根据 `scene_entities[].onstage` 投影当前在场名字列表，减少双写漂移
 - 前端默认会话选择已切到“最近更新的活动会话优先”，不再固化到 `story-live`
 - 角色卡管理已改到设置面板中，支持读取角色卡元数据和缩略封面图
@@ -491,6 +500,9 @@ server {
 - 直接看 `sessions/<session_id>/turn-trace/turn-XXXX.json`，确认本轮 pre-turn / narrator / keeper / post-turn 是否符合预期
 - 若当前环境下 narrator / keeper 模型不可达，可先手动跑一轮拿到 `NARRATOR_UNAVAILABLE` trace，重点检查 `narrator.retry_trace / prompt_block_stats / selector`，再用单回合回放调 `threads / important_npcs / persona / summary`
 - 看调试区里的：
+  - `prompt_block_stats`
+  - `selector.event_hits / selector.summary_chunk_hits / selector.inject_summary`
+  - `event_summary_count`
   - `arbiter_analysis`
   - `arbiter_results`
   - `state_keeper_diagnostics`

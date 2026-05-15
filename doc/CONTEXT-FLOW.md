@@ -59,7 +59,11 @@ web input
 - 低压用户动作不会自动把旧压力召回成当前主轴。selector 会降低 pressure-only / actor-only 旧 chunk 的权重，arbiter 的弱 stealth 信号写入 clue 而不是 immediate risk，narrator 也不能为了制造戏剧性给休息/看书场景硬塞新威胁。
 - summary chunk 召回需要当前 turn 的强锚点支持：弱 token、泛化动作残片、称呼碎片或旧情报账本的模糊重叠只能作为辅助，不能单独把 12 轮外摘要带回 narrator。长期回忆应由当前地点、事件、人物、物件或关系线的直接相关性触发，而不是靠历史里的高频碎片粘住。
 - 主角档案会拆成公开身份与私密身份边界。公开伪装、可见外貌和场内身份可作为 NPC 当前判断依据；真实性别、隐藏身份、伪装底细等私密事实属于 knowledge boundary，只有当对应 NPC 在结构化知情层里明确知情时，才能被其称呼、对白或判断使用。
+- 主角档案的用户入口是自然语言源文本，但 runtime 输入不是原文全文。保存前会整理成固定统一 JSON，JSON 经 schema 校验后再渲染为短 `【玩家档案】`。这让新用户不必手写 JSON，同时避免每张角色卡的任意嵌套格式直接进入 prompt。
 - 当前事件目标由 keeper fill 轻量维护：缺失时补上，明确任务/场景主轴切换时替换，目标达成/失败/被叫停时标记结束。普通对话、观察、移动或心理变化不应新开事件，避免 narrator 每轮换主轴。
+- 长 session 稳定性采用减法式收口：header/date/location 只作 metadata，不写入 `main_event`；full keeper fill 不能用局部 patch 降级 fragment/skeleton 已固定的核心场景字段；普通日常物件只有在仍可行动时才留在 active object 层，吃完/丢失/归档后退出 active tracker。
+- selector 对日常物件词保持克制：没有 active tracked object 时，普通“吃/喝/拿/买”等弱物件查询不应单独触发旧 event / summary 大量注入；有 active tracked object 时，优先通过物件账本给 narrator 证据，而不是扩大 summary recall。
+- narrator 对物件细节遵守证据边界：来源、剩余量、当前位置和谁知情只能来自最近正文、本轮输入或已注入物件/知识证据；无证据时只模糊承接。
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。

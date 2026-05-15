@@ -12,6 +12,7 @@
 - `runtime-rules`
 - active preset
 - 当前角色卡核心与世界约束字段
+- 统一 JSON 玩家档案渲染出的短 `【玩家档案】`；自然语言源文本只用于设置页整理和审计，不直接进入 narrator
 - `state`
 - `scene persona seeds`
 - 最近窗口：默认读取 `12` 对 complete history，其中靠近当前的 `6` 对以完整正文进入 narrator，前段回合以逐回合 event outline 承接
@@ -152,7 +153,7 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 输入源包括：
 - 当前 scene facts
 - 当前角色卡核心与 `世界设定锁`
-- 主角公开身份 / 私密身份边界：公开伪装和可见外貌可被场内 NPC 判断；真实性别、隐藏身份或伪装底细只有对应 NPC 已知情时才可用于其称呼与对白
+- 主角档案：由固定统一 JSON schema 渲染，包含身份、外貌锚点、稳定能力、性格、偏好、背景、心理/剧情、世界适配和私密边界；公开伪装和可见外貌可被场内 NPC 判断，真实性别、隐藏身份或伪装底细只有对应 NPC 已知情时才可用于其称呼与对白
 - 当前 onstage / relevant NPC
 - persona hooks
 - selector 命中的 NPC profile；当 source profile 缺失时，可由 session persona seed 兜底生成轻量 profile
@@ -366,6 +367,19 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
 - `actor_registry / state_bridge / persona_updater / selector / summary_chunks` 共用更严格的人物名质量门槛，抽象话题、栏目名、时间概念、标题残片和地点/物件碎片不能创建 actor、scene entity、persona seed、NPC profile target 或 summary chunk actor metadata。
 - `onstage_npcs` 不再因为 actor registry、important NPC 或旧 thread 存在就自动保留。场景已切换或当前 hard anchor 没有本轮人物证据时，旧核心 NPC 会从 onstage 清掉；keeper validation 允许有新 location/main_event 信号的空 onstage 结果。
 - event actor attribution 只在 summary/clue 文本当前确实提到该人物时写入，不再无条件把 state 里的 onstage NPC 贴到每个事件摘要上。
+
+## 2026-05-15 Subtractive Long-session Stability
+
+本轮修复目标是减轻 keeper 和 selector 对长 session 的放大效应，而不是增加新的长期记忆层或角色卡/session 专属关键词。
+
+- header / event 分离：markdown header、日期、时间、地点行只作为 metadata。即使是非公历风格的纪年，只要没有具体动作，也不能写成 `main_event`；归一化会优先保留上一条有效事件或后续动作句。
+- current-turn participant 保留：skeleton/current-turn `onstage_npcs` 是当前回合人物证据，必须能穿过 skeleton-only 与 full keeper baseline；最终持久化 state 会移除私有 `_current_turn_onstage_npcs` marker。
+- keeper fill 减权：full keeper 只补 `scene_objective / signals / objects / knowledge_scope` 等增量 patch，不应覆盖 `time / location / main_event / onstage_npcs / immediate_goal` 这些已由 fragment/skeleton 固定的核心场景字段。
+- active object lifecycle 收窄：只有仍可行动的物件留在 `tracked_objects`，例如被携带、收起、放在可交互位置、部分消耗后保存、转交给他人或作为证物/工具继续存在。一次性吃完、花掉、背景描写里出现但没有持有/落点的普通物件不进入 active tracker；退出追踪的物件写入 `graveyard_objects`。
+- selector 对日常物件召回降噪：普通“吃饼/拿水/买东西”这类弱日常物件词不会单独触发 12 轮外 event / summary 大量注入。若存在 active tracked object，优先通过 `【重要物件与持有关系】` 进入 narrator；否则依赖最近完整正文和本轮输入，不靠旧摘要猜来源或数量。
+- narrator 物件细节约束：物件来源、剩余数量、当前位置、谁看见过/知道它，必须来自最近正文、本轮用户输入或注入的物件/知情证据；没有证据时只能模糊承接，不得编造购买地点、食用进度、存放位置或旁观者知情。
+
+调试面板对应观察点：看 `Prompt Blocks` 是否有 `【重要物件与持有关系】` 或 `【召回的12轮外历史】`，看 selector 的 `event_hits / summary_chunk_hits / inject_summary` 是否被当前强锚点触发，不能只因为普通物件名出现就判定应该召回旧历史。
 
 ## 当前 persona 门槛
 
