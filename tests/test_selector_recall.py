@@ -203,6 +203,40 @@ class SelectorRecallTests(unittest.TestCase):
         self.assertIn('教官甲', decision['npc_profile_targets'])
         self.assertEqual(decision['event_hits'][0]['event_id'], 'evt_0025')
 
+    def test_common_mundane_object_does_not_trigger_broad_old_event_recall(self):
+        decision = build_selector_decision(
+            state_json={
+                'location': '客栈后院',
+                'main_event': '主角坐在后院休息。',
+                'onstage_npcs': [],
+                'relevant_npcs': [],
+                'tracked_objects': [],
+            },
+            recent_history=[{'role': 'assistant', 'content': '主角在后院坐下。'}],
+            keeper_records={'records': []},
+            active_threads=[],
+            important_npcs=[],
+            onstage=[],
+            relevant=[],
+            lorebook_entries=[],
+            system_npc_candidates=[],
+            lorebook_npc_candidates=[],
+            event_summaries=[
+                {'event_id': 'evt_0001', 'turn_id': 'turn-0001', 'summary': '主角在集市买过一张饼。', 'keywords': ['饼', '集市']},
+                {'event_id': 'evt_0002', 'turn_id': 'turn-0002', 'summary': '路边摊有人吃饼闲聊。', 'keywords': ['饼', '路边摊']},
+            ],
+            summary_text='',
+            summary_chunks=[
+                {'chunk_id': 'chunk_0001', 'dense_summary': ['主角在集市买过一张饼。'], 'keywords': ['饼', '集市']},
+                {'chunk_id': 'chunk_0002', 'dense_summary': ['路边摊有人吃饼闲聊。'], 'keywords': ['饼', '路边摊']},
+            ],
+            user_text='吃饼',
+        )
+
+        self.assertEqual(decision['event_hits'], [])
+        self.assertEqual(decision['summary_chunk_hits'], [])
+        self.assertFalse(decision['inject_summary'])
+
 
 if __name__ == '__main__':
     unittest.main()

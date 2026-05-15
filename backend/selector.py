@@ -21,6 +21,7 @@ WEAK_RECALL_TOKENS = {
 }
 WEAK_RECALL_SUFFIXES = ('的', '地')
 WEAK_RECALL_PARTS = ('呼吸', '脚步', '声音', '目光', '视线')
+WEAK_MUNDANE_RECALL_HINTS = ('吃', '喝', '拿', '放', '买', '卖', '穿', '用')
 
 PRESSURE_TOKENS = {
     '风险', '危险', '威胁', '暴露', '怀疑', '审查', '盘问', '追踪', '追捕', '封锁', '惩罚', '倒计时',
@@ -87,6 +88,16 @@ def _strong_keywords(items: list[str]) -> list[str]:
             continue
         out.append(token)
     return out
+
+
+def _looks_like_weak_mundane_query(text: str) -> bool:
+    value = str(text or '').strip()
+    if not value:
+        return False
+    tokens = _topic_tokens(value)
+    if len(tokens) > 2:
+        return False
+    return any(hint in value for hint in WEAK_MUNDANE_RECALL_HINTS)
 
 
 def _knowledge_record_overlap(chunk_text: str, knowledge_texts: list[str]) -> list[str]:
@@ -182,6 +193,7 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
     recent_tokens = _topic_tokens(recent_text)
     location_tokens = _topic_tokens(str(state_json.get('location', '') or ''))
     carryover_tokens = _topic_tokens(carryover_text)
+    weak_mundane_query = _looks_like_weak_mundane_query(user_text)
     recent_events = [item for item in event_summaries[-20:] if isinstance(item, dict)]
     repeated_counts = _repeated_token_counts(recent_events)
     latest_turn = max((_turn_index(item, idx + 1) for idx, item in enumerate(recent_events)), default=0)
@@ -202,6 +214,8 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
             if str(name or '').strip() and str(name).strip() in actor_context_text:
                 actor_bonus += 1
         event_text = _event_text(item)
+        if weak_mundane_query and actor_bonus == 0 and not current_shared and not location_shared and not carryover_shared:
+            continue
         event_sensitive = _sensitive_tokens(event_text)
         user_sensitive = _sensitive_tokens(user_text)
         explicit_user_overlap = bool(_topic_tokens(str(user_text or '')) & event_tokens)
@@ -356,6 +370,7 @@ def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict]
     query_text = '\n'.join([recent_text, str(user_text or '')])
     object_labels = [str(item.get('label', '') or '').strip() for item in (tracked_objects or []) if isinstance(item, dict) and str(item.get('label', '') or '').strip()]
     knowledge_texts = [str(item.get('text', '') or '').strip() for item in (knowledge_records or []) if isinstance(item, dict) and str(item.get('text', '') or '').strip()]
+    weak_mundane_query = _looks_like_weak_mundane_query(user_text)
     hits = []
     for item in summary_chunks[-12:]:
         if not isinstance(item, dict):
@@ -385,6 +400,8 @@ def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict]
             reason.append('keyword_overlap')
         if not keyword_overlap and not actor_overlap and not object_overlap and not clue_overlap:
             shared_topics = _topic_tokens(chunk_text) & _topic_tokens(query_text)
+            if weak_mundane_query:
+                shared_topics = set()
             if len(shared_topics) >= 2:
                 score += min(3, len(shared_topics))
                 reason.append('topic_overlap')
