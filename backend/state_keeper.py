@@ -122,6 +122,7 @@ time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架�
   }
   ```
   规则：
+  - 如果当前固定骨架状态里没有 active scene_objective，但本轮正文存在清楚的事件主轴，必须输出一个 active scene_objective；只有正文确实没有事件主轴时才省略。
   - 普通对话、观察、移动、短暂心理变化不是新事件；宁可沿用，不要频繁新开。
   - 新事件必须有新目标；如果说不出新的 objective，就不要输出新 scene_objective。
   - 结束必须有明确证据，如目标达成/失败、训练叫停、任务切换、用户离开并不再处理该事件。
@@ -322,6 +323,8 @@ def _skeleton_user_prompt(prev_state: dict, state_fragment: dict, narrator_reply
 
 def _fill_user_prompt(baseline_state: dict, narrator_reply: str, user_text: str = '') -> str:
     baseline = _slim_state_for_model(baseline_state)
+    scene_objective = baseline.get('scene_objective', {}) if isinstance(baseline.get('scene_objective', {}), dict) else {}
+    has_active_objective = bool(scene_objective.get('objective')) and str(scene_objective.get('status', 'active') or 'active').strip().lower() == 'active'
     sections = [f"""当前固定骨架状态：
 {json.dumps(baseline, ensure_ascii=False, indent=2)}
 
@@ -332,6 +335,8 @@ def _fill_user_prompt(baseline_state: dict, narrator_reply: str, user_text: str 
         sections.append(f"""本轮玩家输入：
 {user_text.strip()}
 """)
+    if not has_active_objective:
+        sections.append("""当前固定骨架状态缺少 active scene_objective。若本轮叙事正文存在清楚的事件主轴，请必须输出 scene_objective；只有正文确实没有事件主轴时才省略。""")
     sections.append("""请只输出需要补充或纠正的 JSON 字段；若骨架字段没有被正文明确推翻，就不要重复输出。输出必须以 { 开头、以 } 结尾，禁止解释、分析过程、Markdown 代码块。""")
     return '\n'.join(sections)
 
@@ -1009,6 +1014,22 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
     return merged
 
 
+def _restore_current_turn_onstage_marker(baseline_state: dict, state_fragment: dict) -> dict:
+    marker = []
+    if isinstance(state_fragment, dict):
+        for item in state_fragment.get('_current_turn_onstage_npcs', []) or []:
+            name = str(item or '').strip()
+            if name and name not in marker:
+                marker.append(name)
+            if len(marker) >= 6:
+                break
+    if not marker:
+        return baseline_state
+    restored = dict(baseline_state or {})
+    restored['_current_turn_onstage_npcs'] = marker
+    return restored
+
+
 def call_skeleton_keeper(prev_state: dict, state_fragment: dict, narrator_reply: str, *, return_trace: bool = False):
     reply_text, usage = call_role_llm('state_keeper_candidate', SKELETON_KEEPER_SYSTEM, _skeleton_user_prompt(prev_state, state_fragment, narrator_reply))
     if not isinstance(usage, dict):
@@ -1632,6 +1653,7 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
     prev_state = load_state(session_id) or seed_default_state(session_id)
     state_fragment = state_fragment if isinstance(state_fragment, dict) else {}
     baseline_state = build_state_from_fragment(prev_state, state_fragment, session_id)
+    baseline_state = _restore_current_turn_onstage_marker(baseline_state, state_fragment)
     user_prompt = _fill_user_prompt(baseline_state, narrator_reply, user_text=user_text)
 
     reply_text = ''

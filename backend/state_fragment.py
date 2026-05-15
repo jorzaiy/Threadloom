@@ -28,6 +28,32 @@ def _dedupe_names(items, limit: int = 6) -> list[str]:
     return out
 
 
+def _looks_like_header_only_sentence(value: str) -> bool:
+    text = re.sub(r'\s+', '', str(value or '')).strip('。！？!?*_`#>【】[]（）()')
+    if not text:
+        return True
+    parts = [part for part in re.split(r'[，,、]', text) if part]
+    if len(parts) < 2:
+        return False
+    has_time_anchor = any(_looks_like_date_or_time_anchor(part) for part in parts)
+    locationish = sum(1 for part in parts if part.endswith(('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '院', '厅', '阁', '府', '宫', '殿', '街', '巷', '亭', '轩', '井', '墙', '山', '旁', '边', '口', '内', '外', '前', '后', '终点', '入口', '出口')))
+    action_verbs = ('说', '问', '答', '看', '望', '盯', '走', '跑', '冲', '停', '站', '坐', '拿', '递', '接', '推', '拉', '拦', '追', '躲', '示意', '宣布', '要求', '决定', '发现', '听见')
+    action_text = text.replace('跑道', '')
+    has_action = any(verb in action_text for verb in action_verbs)
+    return bool(has_time_anchor and locationish >= 1 and not has_action)
+
+
+def _looks_like_date_or_time_anchor(value: str) -> bool:
+    text = str(value or '').strip()
+    if not text:
+        return False
+    if re.search(r'\d{2,4}年\d{1,2}月\d{1,2}日', text):
+        return True
+    if re.search(r'[\u4e00-\u9fff]{1,8}[一二三四五六七八九十百千万\d]{1,4}年(?:[一二三四五六七八九十冬腊正\d]{1,3}月)?(?:初?[一二三四五六七八九十廿卅\d]{1,3})?', text):
+        return True
+    return any(marker in text for marker in ('凌晨', '清晨', '早晨', '上午', '中午', '午后', '下午', '傍晚', '黄昏', '晚上', '夜里', '深夜'))
+
+
 def _goal(scene_facts: dict, prev_state: dict) -> str:
     raw = scene_facts.get('immediate_goal')
     if isinstance(raw, list) and raw:
@@ -172,7 +198,7 @@ def extract_reply_skeleton(narrator_reply: str) -> dict:
         sentence_match = re.match(r'(.{8,120}?[。！？!?])', first)
         if sentence_match:
             main_event = sentence_match.group(1).strip()
-            if main_event:
+            if main_event and not _looks_like_header_only_sentence(main_event):
                 skeleton['main_event'] = main_event
     return skeleton
 
@@ -194,6 +220,7 @@ def merge_state_skeleton(state_fragment: dict, skeleton_fragment: dict) -> dict:
     onstage = _dedupe_names(skeleton.get('onstage_npcs', []), limit=6)
     if onstage:
         fragment['onstage_npcs'] = onstage
+        fragment['_current_turn_onstage_npcs'] = onstage
         scene_entities = fragment.get('scene_entities')
         if isinstance(scene_entities, list):
             onstage_names = set(onstage)

@@ -317,12 +317,55 @@ def _current_turn_person_evidence_text(current: dict[str, Any]) -> str:
     return ' '.join(part for part in parts if part)
 
 
+def _looks_like_header_only_event(value: str) -> bool:
+    text = re.sub(r'\s+', '', str(value or '')).strip('。！？!?*_`#>【】[]（）()')
+    if not text:
+        return True
+    parts = [part for part in re.split(r'[，,、]', text) if part]
+    if len(parts) < 2:
+        return False
+    has_time_anchor = any(_looks_like_date_or_time_anchor(part) for part in parts)
+    locationish = sum(1 for part in parts if part.endswith(('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '院', '厅', '阁', '府', '宫', '殿', '街', '巷', '亭', '轩', '井', '墙', '山', '旁', '边', '口', '内', '外', '前', '后', '终点', '入口', '出口')))
+    action_verbs = ('说', '问', '答', '看', '望', '盯', '走', '跑', '冲', '停', '站', '坐', '拿', '递', '接', '推', '拉', '拦', '追', '躲', '示意', '宣布', '要求', '决定', '发现', '听见')
+    action_text = text.replace('跑道', '')
+    has_action = any(verb in action_text for verb in action_verbs)
+    return bool(has_time_anchor and locationish >= 1 and not has_action)
+
+
+def _looks_like_date_or_time_anchor(value: str) -> bool:
+    text = str(value or '').strip()
+    if not text:
+        return False
+    if re.search(r'\d{2,4}年\d{1,2}月\d{1,2}日', text):
+        return True
+    if re.search(r'[\u4e00-\u9fff]{1,8}[一二三四五六七八九十百千万\d]{1,4}年(?:[一二三四五六七八九十冬腊正\d]{1,3}月)?(?:初?[一二三四五六七八九十廿卅\d]{1,3})?', text):
+        return True
+    return any(marker in text for marker in ('凌晨', '清晨', '早晨', '上午', '中午', '午后', '下午', '傍晚', '黄昏', '晚上', '夜里', '深夜'))
+
+
 def _has_current_turn_person_evidence(name: str, current: dict[str, Any]) -> bool:
     label = sanitize_runtime_name(name)
     if not label:
         return False
+    current_turn_onstage = {
+        name
+        for item in (current.get('_current_turn_onstage_npcs', []) or [])
+        for name in [sanitize_runtime_name(item), *_actor_surface_variants(str(item or ''))]
+        if name
+    }
+    if label in current_turn_onstage:
+        return True
     text = _current_turn_person_evidence_text(current)
     return bool(label in text or _person_action_evidence(label, text))
+
+
+def _current_turn_onstage_name_pool(current: dict[str, Any]) -> set[str]:
+    return {
+        name
+        for item in (current.get('_current_turn_onstage_npcs', []) or [])
+        for name in [sanitize_runtime_name(item), *_actor_surface_variants(str(item or ''))]
+        if name
+    }
 
 
 def _needs_current_turn_person_evidence(name: str, current: dict[str, Any], prev: dict[str, Any]) -> bool:
@@ -404,6 +447,8 @@ def _has_positive_person_evidence(name: str, item: dict[str, Any] | None, curren
     label = sanitize_runtime_name(name)
     if not label or is_protagonist_name(label) or looks_like_bad_entity_fragment(label):
         return False
+    if label in _current_turn_onstage_name_pool(current):
+        return True
     if label in _actor_name_pool(current, prev):
         return True
     important_names = _important_name_pool(current.get('important_npcs', prev.get('important_npcs', []))) | _important_name_pool(prev.get('important_npcs', []))
@@ -1111,9 +1156,21 @@ def _should_decay_tracked_object(item: dict, possession_ids: set[str], visibilit
         return False
     if kind in {'document', 'key_item', 'weapon', 'container', 'tool'}:
         return False
-    if recent_text and label in recent_text:
+    if recent_text and label in recent_text and _recent_text_keeps_object_actionable(label, recent_text):
         return False
     return True
+
+
+def _recent_text_keeps_object_actionable(label: str, recent_text: str) -> bool:
+    if not label or not recent_text:
+        return False
+    action_pattern = r'(?:收起|塞回|放进|揣进|藏进|留着|带着|拎着|握着|拿着|抱着|背着|挂着|放在|搁在|摆在|递给|交给|转交|剩下|半|未吃完|没吃完)'
+    for match in re.finditer(re.escape(label), recent_text):
+        start = max(0, match.start() - 12)
+        end = min(len(recent_text), match.end() + 12)
+        if re.search(action_pattern, recent_text[start:end]):
+            return True
+    return False
 
 
 def _looks_like_bad_object_label(label: str) -> bool:
@@ -1945,6 +2002,8 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             return True
         if field != 'main_event' and field != 'immediate_goal' and len(text) > 42:
             return True
+        if field == 'main_event' and _looks_like_header_only_event(text):
+            return True
         if '→' in text:
             return True
         if text.count('：') + text.count(':') >= 1 and len(text) <= 20:
@@ -2106,7 +2165,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
                 actor_name = sanitize_runtime_name(raw_name)
                 if actor_name:
                     actor_name_lookup[actor_name] = str(actor_id)
-    valid_holders = set(current['onstage_npcs']) | set(current['relevant_npcs']) | protagonist_names() | set(early_holder_lookup.keys()) | set(actor_name_lookup.keys())
+    valid_holders = set(current['onstage_npcs']) | set(current['relevant_npcs']) | protagonist_names() | {'主角'} | set(early_holder_lookup.keys()) | set(actor_name_lookup.keys())
     possession_by_object: dict[str, dict] = {}
     for item in possession_state:
         if not isinstance(item, dict):
@@ -2319,6 +2378,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     current['knowledge_scope'] = _coerce_knowledge_scope_delta(current.get('knowledge_scope', {}))
 
     current = _apply_object_entity_bindings(current)
+    current.pop('_current_turn_onstage_npcs', None)
 
     return current
 

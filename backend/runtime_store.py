@@ -466,6 +466,7 @@ def build_state_snapshot(state: dict) -> dict:
         'important_npcs': state.get('important_npcs', []),
         'onstage_npcs': state.get('onstage_npcs', []),
         'relevant_npcs': state.get('relevant_npcs', []),
+        'scene_objective': state.get('scene_objective', {}),
         'immediate_goal': state.get('immediate_goal', '待确认'),
         'carryover_signals': state.get('carryover_signals', []),
         'immediate_risks': state.get('immediate_risks', []),

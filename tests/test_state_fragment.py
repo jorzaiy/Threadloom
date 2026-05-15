@@ -15,12 +15,13 @@ from backend.state_bridge import normalize_state_dict
 from backend.thread_tracker import apply_thread_tracker
 from backend.actor_registry import update_actor_registry
 from backend.arbiter_state import merge_arbiter_state
-from backend.state_keeper import _call_state_keeper_llm, _merge_keeper_fill, _parse_fill_payload
+from backend.state_keeper import _call_state_keeper_llm, _fill_user_prompt, _merge_keeper_fill, _parse_fill_payload, _restore_current_turn_onstage_marker
 from backend.state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, normalize_carryover_signals, normalize_keeper_object_label
 from backend.handler_message import _add_lightweight_knowledge_delta, _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _store_turn_audit
 from backend.summary_chunks import _fallback_chunk, _normalize_chunk
 from backend.memory_maintenance import actor_alias_map, canonicalize_event_summaries, canonicalize_state_memory, resolve_stale_state_threads
 from backend.name_sanitizer import looks_like_non_person_alias_fragment, looks_like_low_quality_signal_fragment
+from backend.runtime_store import build_state_snapshot
 
 
 class StateFragmentTest(unittest.TestCase):
@@ -113,6 +114,191 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['scene_objective']['label'], '体能测试')
         self.assertEqual(normalized['scene_objective']['objective'], '测试学员基础体能')
         self.assertEqual(normalized['scene_objective']['status'], 'active')
+
+    def test_state_snapshot_exposes_scene_objective_for_ui(self):
+        snapshot = build_state_snapshot({
+            'time': '中午',
+            'location': '训练场',
+            'main_event': '主角继续谈判。',
+            'scene_objective': {
+                'label': '第二轮训练',
+                'objective': '测试资源争夺和规则判断',
+                'status': 'active',
+            },
+        })
+
+        self.assertEqual(snapshot['scene_objective']['label'], '第二轮训练')
+        self.assertEqual(snapshot['scene_objective']['objective'], '测试资源争夺和规则判断')
+        self.assertEqual(snapshot['scene_objective']['status'], 'active')
+
+    def test_keeper_fill_prompt_requires_missing_scene_objective(self):
+        prompt = _fill_user_prompt(
+            {
+                'time': '清晨',
+                'location': '训练场跑道',
+                'main_event': '学员正在进行体能测试。',
+                'immediate_goal': '观察学员完成最后一圈。',
+            },
+            '一个学员在最后一圈体力见底，仍试图跑完全程。',
+        )
+
+        self.assertIn('缺少 active scene_objective', prompt)
+        self.assertIn('必须输出 scene_objective', prompt)
+
+    def test_current_turn_skeleton_onstage_survives_normalization(self):
+        fragment = merge_state_skeleton(
+            {
+                'time': '清晨',
+                'location': '训练场',
+                'main_event': '矮个子学员在长跑最后阶段体力见底。',
+                'immediate_goal': '观察他是否能完成最后一圈。',
+            },
+            {'onstage_npcs': ['严教官']},
+        )
+        actors = {'npc_001': {'kind': 'npc', 'name': '严教官', 'aliases': []}}
+
+        normalized = normalize_state_dict({**fragment, 'actors': actors}, prev_state={'actors': actors})
+
+        self.assertEqual(normalized['onstage_npcs'], ['严教官'])
+        self.assertNotIn('_current_turn_onstage_npcs', normalized)
+
+    def test_current_turn_skeleton_onstage_survives_before_actor_registration(self):
+        fragment = merge_state_skeleton(
+            {
+                'time': '清晨',
+                'location': '训练场跑道',
+                'main_event': '主角以计算过的节奏冲过终点线，并受到教官注意。',
+                'immediate_goal': '前往起点线集合。',
+            },
+            {
+                'main_event': '主角以计算过的节奏冲过终点线，并受到严教官注意。',
+                'onstage_npcs': ['严教官'],
+            },
+        )
+
+        normalized = normalize_state_dict(fragment, prev_state={})
+
+        self.assertEqual(normalized['onstage_npcs'], ['严教官'])
+        self.assertNotIn('_current_turn_onstage_npcs', normalized)
+
+    def test_keeper_baseline_restores_current_turn_skeleton_marker(self):
+        baseline = normalize_state_dict(
+            {
+                'time': '清晨',
+                'location': '训练场跑道',
+                'main_event': '主角按自己的节奏继续跑步。',
+                'immediate_goal': '维持节奏跑完本圈。',
+                'onstage_npcs': ['严教官', '记分员老周'],
+                '_current_turn_onstage_npcs': ['严教官', '记分员老周'],
+            },
+            prev_state={},
+        )
+        self.assertNotIn('_current_turn_onstage_npcs', baseline)
+
+        restored = _restore_current_turn_onstage_marker(
+            baseline,
+            {'_current_turn_onstage_npcs': ['严教官', '记分员老周']},
+        )
+        normalized = normalize_state_dict(restored, prev_state={})
+
+        self.assertEqual(normalized['onstage_npcs'], ['严教官', '记分员老周'])
+        self.assertNotIn('_current_turn_onstage_npcs', normalized)
+
+    def test_header_only_reply_sentence_does_not_replace_main_event(self):
+        reply = '**2003年9月1日，清晨，训练场跑道终点。**\n\n矮个子学员踉跄着越过终点线。'
+
+        skeleton = extract_reply_skeleton(reply)
+        normalized = normalize_state_dict(
+            {
+                'time': '清晨',
+                'location': '训练场跑道终点',
+                'main_event': '**2003年9月1日，清晨，训练场跑道终点。',
+                'immediate_goal': '记录学员完成情况。',
+            },
+            prev_state={
+                'main_event': '矮个子学员在长跑最后阶段体力见底。',
+                'immediate_goal': '观察他是否能完成最后一圈。',
+            },
+        )
+
+        self.assertNotIn('main_event', skeleton)
+        self.assertEqual(normalized['main_event'], '矮个子学员在长跑最后阶段体力见底。')
+
+    def test_non_gregorian_header_only_event_does_not_replace_main_event(self):
+        normalized = normalize_state_dict(
+            {
+                'time': '午后',
+                'location': '山门前',
+                'main_event': '**景和三年冬月初七，午后，山门前。**',
+                'immediate_goal': '等待守门人回应。',
+            },
+            prev_state={
+                'main_event': '主角在山门前向守门人递上拜帖。',
+                'immediate_goal': '等待守门人回应。',
+            },
+        )
+
+        self.assertEqual(normalized['main_event'], '主角在山门前向守门人递上拜帖。')
+
+    def test_partial_keeper_fill_cannot_overwrite_core_scene_fields(self):
+        baseline = {
+            'time': '午后',
+            'location': '茶棚',
+            'main_event': '主角在茶棚向老汉打听渡口消息。',
+            'onstage_npcs': ['老汉'],
+            'immediate_goal': '判断是否继续追问渡口消息。',
+        }
+        payload = {
+            'time': '待确认',
+            'location': '某处',
+            'main_event': '闲聊。',
+            'immediate_goal': '继续。',
+            'carryover_signals': [{'type': 'clue', 'text': '渡口有人换班'}],
+        }
+
+        merged = _merge_keeper_fill(baseline, payload)
+
+        self.assertEqual(merged['time'], '午后')
+        self.assertEqual(merged['location'], '茶棚')
+        self.assertEqual(merged['main_event'], '主角在茶棚向老汉打听渡口消息。')
+        self.assertEqual(merged['immediate_goal'], '判断是否继续追问渡口消息。')
+        self.assertEqual(merged['carryover_signals'], [{'type': 'clue', 'text': '渡口有人换班'}])
+
+    def test_saved_half_consumed_mundane_object_remains_active(self):
+        state = {
+            'time': '午后',
+            'location': '茶棚外',
+            'main_event': '主角吃了半块饼后把剩下的油纸包收进怀里。',
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '油纸包饼', 'kind': 'item', 'story_relevant': True}],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '主角', 'status': 'saved', 'location': '怀里'}],
+            'object_visibility': [{'object_id': 'obj_01', 'visibility': 'private', 'known_to': ['主角']}],
+        }
+
+        normalized = normalize_state_dict(state, prev_state={})
+
+        self.assertEqual(normalized['tracked_objects'][0]['label'], '油纸包饼')
+        self.assertEqual(normalized['possession_state'][0]['status'], 'saved')
+        self.assertEqual(normalized['object_visibility'][0]['visibility'], 'private')
+
+    def test_consumed_mundane_object_moves_to_graveyard_not_active(self):
+        prev = {
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '油纸包饼', 'kind': 'item', 'story_relevant': True}],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '主角', 'status': 'saved'}],
+            'object_visibility': [{'object_id': 'obj_01', 'visibility': 'private', 'known_to': ['主角']}],
+        }
+        state = {
+            **prev,
+            'main_event': '主角把剩下的饼吃完，将油纸揉成一团丢进火盆。',
+            'tracked_objects': [{'object_id': 'obj_01', 'label': '油纸包饼', 'kind': 'item', 'story_relevant': True, 'lifecycle_status': 'consumed'}],
+        }
+
+        normalized = normalize_state_dict(state, prev_state=prev)
+
+        self.assertEqual(normalized['tracked_objects'], [])
+        self.assertEqual(normalized['possession_state'], [])
+        self.assertEqual(normalized['object_visibility'], [])
+        self.assertEqual(normalized['graveyard_objects'][0]['object_id'], 'obj_01')
+        self.assertEqual(normalized['graveyard_objects'][0]['lifecycle_status'], 'consumed')
 
     def test_memory_maintenance_canonicalizes_actor_alias_layers(self):
         state = {
