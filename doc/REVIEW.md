@@ -99,6 +99,8 @@
 - `frontend/app.js` 在切换 session、刷新、新游戏、删除后会重置 entity/detail/debug 侧栏，避免残留旧会话信息
 - state snapshot 现在由后端直接提供 `onstage_entities / relevant_entities`，前端不再用名字反查 `entity_id`
 - `frontend/app.js` 对同名实体采取保守策略：若存在多个同名实体，前端不再给出可能错误的详情入口
+- 调试浮动面板已更新为展示 prompt block、selector/event recall、state keeper diagnostics、世界书注入体量和状态快照侧的 NPC / active object / signal 层；`active_threads` 不再作为默认用户可见主面板项目
+- 玩家设定已改为“自然语言源文本 -> State Keeper 模型整理 -> 固定统一 JSON -> prompt preview”的编辑流程；高级用户仍可改 JSON 内容，但 schema 结构由后端校验保护
 - `state_keeper.py` 现在已加入低信号拒收和相对上一轮 state 的回归检查
 - `state_updater.py` 现在更偏保守继承，减少弱推断覆盖强状态
 - `state_fragment` 已前移到主链，并在 `state_keeper` 失败时形成 `fragment-baseline -> heuristic fallback` 的双层兜底
@@ -166,8 +168,8 @@
 - 但还没有真正的同名实体区分交互
 
 结论：
-- 这是小问题，但会持续影响可观察性
-- 后续应让 state snapshot 直接给前端可展示的 `entity_id + display_name + short role` 列表，而不是前端再拿名字回查
+- state snapshot 已直接提供前端可展示的实体列表，名字反查问题已基本解决
+- 剩余问题是同名实体的交互式 disambiguation 仍不完整；当前策略是保守展示、不给可能错误的详情入口
 
 ### 5. web 配置到 UI 的映射已基本打通
 
