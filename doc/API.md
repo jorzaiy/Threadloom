@@ -344,7 +344,17 @@ partial 相关行为：
     "relevant_entities": [],
     "active_threads": [],
     "important_npcs": [],
-    "actors": {},
+    "actors": {
+      "npc_001": {
+        "kind": "npc",
+        "name": "严教官",
+        "relationship_to_protagonist": {
+          "label": "队友",
+          "evidence": "并肩完成夜巡",
+          "updated_turn": 7
+        }
+      }
+    },
     "actor_context_index": {},
     "onstage_npcs": ["师兄", "皂衣人"],
     "relevant_npcs": ["少年"],
@@ -412,6 +422,7 @@ partial 相关行为：
 - `state_snapshot` 是前端右侧状态栏可直接消费的精简快照
 - `scene_objective` 是当前事件/场景段目标；`immediate_goal` 是主角下一拍目标，二者不要混用
 - `carryover_signals` 是当前统一信号层，旧 `immediate_risks / carryover_clues` 仍为兼容展示字段
+- `actors.*.relationship_to_protagonist` 是 Keeper 从 narrator 正文证据沉淀出的 NPC 与主角关系标签；它只绑定到既有 NPC actor，不代表玩家可以在输入中直接指定关系成立
 - 调试面板中的 selector / prompt / lorebook 统计用于解释“本轮为什么注入这些上下文”，不是事实编辑入口
 - `turn_id` 由 backend 生成
 - 当前后端对同一 `session_id` 已做串行化处理，避免同一会话并发请求互相覆盖
@@ -462,7 +473,17 @@ partial 相关行为：
     "relevant_entities": [],
     "active_threads": [],
     "important_npcs": [],
-    "actors": {},
+    "actors": {
+      "npc_001": {
+        "kind": "npc",
+        "name": "严教官",
+        "relationship_to_protagonist": {
+          "label": "队友",
+          "evidence": "并肩完成夜巡",
+          "updated_turn": 7
+        }
+      }
+    },
     "actor_context_index": {},
     "onstage_npcs": ["..."],
     "relevant_npcs": ["..."],
@@ -485,6 +506,7 @@ partial 相关行为：
 - 前端不应再自行用名字反查 `entity_id`
 - `tracked_objects / possession_state / object_visibility` 是轻量物件状态层
 - 这三层当前用于记录剧情相关物件、当前持有关系，以及该持有关系的可见性
+- `actors.*.relationship_to_protagonist` 当前用于展示 NPC 与主角的长期关系标签，例如 `初识 / 相知 / 好友 / 队友`；该字段由 keeper 增量和 actor registry 绑定产生，不接受前端直接编辑
 - 当前默认只记录“可持续追踪”的物件：
   - 有明确持有、展示、转移、搜出、收起、放下、遗失或证物化后果
   - 不会把短语残片、动作词片段或一次性货币默认塞进物件列表
