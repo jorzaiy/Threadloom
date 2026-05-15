@@ -59,6 +59,20 @@ body {
     "opsz" 24;
 }
 
+.profile-editor-tools {
+  margin: -4px 0 10px;
+}
+
+.profile-source-field textarea,
+.profile-preview-field textarea {
+  min-height: 160px;
+}
+
+.profile-preview-field textarea {
+  background: rgba(248, 244, 237, 0.72);
+  color: var(--text-muted);
+}
+
 .app {
   display: grid;
   grid-template-columns: 1fr;

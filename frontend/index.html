@@ -395,9 +395,21 @@
         </button>
       </div>
       <div class="settings-body">
+        <label class="field field-wide profile-source-field">
+          <span>自然语言设定</span>
+          <textarea id="profileEditorSourceInput" rows="8" spellcheck="false" placeholder="可以随便写：外貌、性格、能力、喜好、背景、当前角色卡适配……"></textarea>
+        </label>
+        <div class="settings-actions profile-editor-tools">
+          <button id="profileEditorNormalizeBtn" type="button" class="subtle-btn">整理成结构化 JSON</button>
+          <button id="profileEditorPreviewBtn" type="button" class="subtle-btn">刷新注入预览</button>
+        </div>
         <label class="field field-wide">
-          <span id="profileEditorLabel">JSON</span>
+          <span id="profileEditorLabel">结构化 JSON（字段名和类型不可改）</span>
           <textarea id="profileEditorInput" rows="18" spellcheck="false"></textarea>
+        </label>
+        <label class="field field-wide profile-preview-field">
+          <span>最终注入预览</span>
+          <textarea id="profileEditorPreviewInput" rows="10" spellcheck="false" readonly></textarea>
         </label>
         <div class="settings-actions">
           <button id="profileEditorSaveBtn" type="button">保存</button>

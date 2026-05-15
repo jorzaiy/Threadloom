@@ -87,7 +87,11 @@ const profileEditorBackdrop = document.getElementById('profileEditorBackdrop');
 const profileEditorPanel = document.getElementById('profileEditorPanel');
 const profileEditorTitle = document.getElementById('profileEditorTitle');
 const profileEditorLabel = document.getElementById('profileEditorLabel');
+const profileEditorSourceInput = document.getElementById('profileEditorSourceInput');
 const profileEditorInput = document.getElementById('profileEditorInput');
+const profileEditorPreviewInput = document.getElementById('profileEditorPreviewInput');
+const profileEditorNormalizeBtn = document.getElementById('profileEditorNormalizeBtn');
+const profileEditorPreviewBtn = document.getElementById('profileEditorPreviewBtn');
 const profileEditorSaveBtn = document.getElementById('profileEditorSaveBtn');
 const profileEditorCancelBtn = document.getElementById('profileEditorCancelBtn');
 const profileEditorCloseBtn = document.getElementById('profileEditorCloseBtn');
@@ -102,7 +106,6 @@ let historyHasMore = false;
 let historyNextBefore = null;
 let isLoadingEarlierHistory = false;
 let historyRevealAllowed = false;
-let inlineHistoryVisible = false;
 let currentSessionId = '';
 let sessionItems = [];
 let webConfig = {
@@ -136,8 +139,12 @@ let modelConfig = {
 };
 let characterItems = [];
 let userProfile = {};
+let userProfileSourceText = '';
+let userProfilePromptPreview = '';
 let userAvatarUrl = null;
 let currentCharacterProfileOverride = {};
+let currentCharacterProfileOverrideSourceText = '';
+let currentCharacterProfileOverridePromptPreview = '';
 let profileEditorMode = '';
 let presetEditorId = '';
 let _chatImportContentB64 = null;
@@ -185,8 +192,11 @@ async function saveCharacterProfileDraft() {
   const data = await apiJson('/api/characters/profile-override', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({override}),
+    body: JSON.stringify({override, source_text: profileEditorMode === 'override' ? (profileEditorSourceInput?.value || '') : ''}),
   });
+  currentCharacterProfileOverride = data.override || currentCharacterProfileOverride;
+  currentCharacterProfileOverrideSourceText = data.source_text || currentCharacterProfileOverrideSourceText;
+  currentCharacterProfileOverridePromptPreview = data.prompt_preview || currentCharacterProfileOverridePromptPreview;
   renderCharacterCard(data.character_card || lastCharacterCard);
   if (characterProfileDraftNote) {
     characterProfileDraftNote.textContent = '角色卡主角设定已保存并应用。';
@@ -264,10 +274,6 @@ function updateHistoryToolbarVisibility() {
   if (historyToolbar) {
     historyToolbar.hidden = !(historyHasMore && historyRevealAllowed && nearTop && !shouldStickToBottom);
   }
-}
-
-function shouldShowInlineLoadEarlier() {
-  return Boolean(historyHasMore && historyRevealAllowed && messagesEl && messagesEl.scrollTop <= 24 && !shouldStickToBottom);
 }
 
 function sessionId() {
@@ -838,7 +844,8 @@ async function deleteSelectedNarratorPreset() {
 }
 
 function currentUserDisplayName() {
-  const name = String(userProfile?.name || userProfile?.courtesyName || '').trim();
+  const identity = userProfile?.identity || {};
+  const name = String(identity.name || identity.courtesyName || userProfile?.name || userProfile?.courtesyName || '').trim();
   return name || 'user';
 }
 
@@ -849,11 +856,63 @@ function currentCharacterDisplayName() {
 function renderUserProfileEditor() {
 }
 
-function openProfileEditor(mode, title, label, payload) {
+function profileEditorPayloadKey() {
+  return profileEditorMode === 'override' ? 'override' : 'profile';
+}
+
+function parseProfileEditorJson() {
+  try {
+    return JSON.parse(profileEditorInput?.value || '{}');
+  } catch (err) {
+    throw new Error(`结构化 JSON 解析失败：${err.message}`);
+  }
+}
+
+async function refreshProfilePromptPreview() {
+  if (!profileEditorPreviewInput || profileEditorMode === 'preset') return;
+  const payloadKey = profileEditorPayloadKey();
+  const profile = parseProfileEditorJson();
+  const path = profileEditorMode === 'override' ? '/api/character/profile-override/preview' : '/api/user-profile/preview';
+  const data = await apiJson(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({[payloadKey]: profile}),
+  });
+  profileEditorPreviewInput.value = data.prompt_preview || '';
+}
+
+async function normalizeProfileSourceText() {
+  if (profileEditorMode === 'preset') return;
+  const payloadKey = profileEditorPayloadKey();
+  const sourceText = profileEditorSourceInput?.value || '';
+  const existing = parseProfileEditorJson();
+  const path = profileEditorMode === 'override' ? '/api/character/profile-override/normalize' : '/api/user-profile/normalize';
+  const data = await apiJson(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({source_text: sourceText, [payloadKey]: existing}),
+  });
+  const nextProfile = data[payloadKey] || data.profile || {};
+  if (profileEditorInput) profileEditorInput.value = JSON.stringify(nextProfile, null, 2);
+  if (profileEditorPreviewInput) profileEditorPreviewInput.value = data.prompt_preview || '';
+}
+
+function openProfileEditor(mode, title, label, payload, options = {}) {
   profileEditorMode = mode;
   if (profileEditorTitle) profileEditorTitle.textContent = title;
   if (profileEditorLabel) profileEditorLabel.textContent = label;
   if (profileEditorInput) profileEditorInput.value = JSON.stringify(payload || {}, null, 2);
+  const isProfileMode = mode === 'base' || mode === 'override';
+  if (profileEditorSourceInput) {
+    profileEditorSourceInput.value = options.sourceText || '';
+    profileEditorSourceInput.closest('.field')?.toggleAttribute('hidden', !isProfileMode);
+  }
+  if (profileEditorPreviewInput) {
+    profileEditorPreviewInput.value = options.promptPreview || '';
+    profileEditorPreviewInput.closest('.field')?.toggleAttribute('hidden', !isProfileMode);
+  }
+  if (profileEditorNormalizeBtn) profileEditorNormalizeBtn.hidden = !isProfileMode;
+  if (profileEditorPreviewBtn) profileEditorPreviewBtn.hidden = !isProfileMode;
   if (profileEditorNote) {
     profileEditorNote.textContent = '';
     profileEditorNote.dataset.kind = '';
@@ -1053,6 +1112,8 @@ function renderCharacterManageGrid() {
 async function loadUserProfile() {
   const data = await apiJson('/api/user-profile');
   userProfile = data.profile || {};
+  userProfileSourceText = data.source_text || '';
+  userProfilePromptPreview = data.prompt_preview || '';
   userAvatarUrl = data.avatar_url || null;
   renderUserProfileEditor();
   renderTopbarContext();
@@ -1061,21 +1122,20 @@ async function loadUserProfile() {
 async function loadCharacterProfileOverride() {
   const data = await apiJson('/api/character/profile-override');
   currentCharacterProfileOverride = data.override || {};
+  currentCharacterProfileOverrideSourceText = data.source_text || '';
+  currentCharacterProfileOverridePromptPreview = data.prompt_preview || '';
 }
 
 async function saveUserProfile() {
-  let profile;
-  try {
-    profile = JSON.parse(profileEditorInput?.value || '{}');
-  } catch (err) {
-    throw new Error(`用户设定 JSON 解析失败：${err.message}`);
-  }
+  const profile = parseProfileEditorJson();
   const data = await apiJson('/api/user-profile', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({profile}),
+    body: JSON.stringify({profile, source_text: profileEditorSourceInput?.value || ''}),
   });
   userProfile = data.profile || {};
+  userProfileSourceText = data.source_text || '';
+  userProfilePromptPreview = data.prompt_preview || '';
   userAvatarUrl = data.avatar_url || userAvatarUrl;
 }
 
@@ -1108,25 +1168,6 @@ async function deleteUserAvatar() {
 function renderMessages(items) {
   lastHistoryItems = items;
   messagesEl.innerHTML = '';
-  const shouldShowLoadEarlierInline = shouldShowInlineLoadEarlier();
-  inlineHistoryVisible = shouldShowLoadEarlierInline;
-
-  if (shouldShowLoadEarlierInline && loadEarlierBtn) {
-    const wrap = document.createElement('div');
-    wrap.className = 'history-inline-wrap';
-    const inlineBtn = loadEarlierBtn.cloneNode(true);
-    inlineBtn.disabled = isLoadingEarlierHistory;
-    inlineBtn.textContent = isLoadingEarlierHistory ? '加载中...' : '加载更早记录';
-    inlineBtn.addEventListener('click', async () => {
-      try {
-        await loadEarlierHistory();
-      } catch (err) {
-        setStatus(`错误：${err.message}`, 'error');
-      }
-    });
-    wrap.appendChild(inlineBtn);
-    messagesEl.appendChild(wrap);
-  }
 
   const allItems = [...items];
   if (pendingUserMessage) {
@@ -1292,7 +1333,6 @@ function focusLatestAssistant(options = {}) {
 function jumpToConversationEnd() {
   shouldStickToBottom = true;
   historyRevealAllowed = false;
-  inlineHistoryVisible = false;
   focusLatestAssistant({ smooth: false });
   requestAnimationFrame(updateHistoryToolbarVisibility);
 }
@@ -1337,6 +1377,21 @@ function renderState(state) {
     summaryLine.className = 'state-summary-line';
     summaryLine.innerHTML = '<strong>主要事件</strong>';
     const _span1 = document.createElement('span'); _span1.textContent = state.main_event; summaryLine.appendChild(_span1);
+    summaryWrap.appendChild(summaryLine);
+  }
+
+  const sceneObjective = state.scene_objective && typeof state.scene_objective === 'object' ? state.scene_objective : null;
+  if (sceneObjective && sceneObjective.status !== 'resolved' && sceneObjective.objective) {
+    const summaryLine = document.createElement('div');
+    summaryLine.className = 'state-summary-line';
+    summaryLine.innerHTML = '<strong>事件目标</strong>';
+    const objectiveParts = [];
+    if (sceneObjective.label) objectiveParts.push(sceneObjective.label);
+    objectiveParts.push(sceneObjective.objective);
+    if (sceneObjective.completion_hint) objectiveParts.push(`边界：${sceneObjective.completion_hint}`);
+    const objectiveSpan = document.createElement('span');
+    objectiveSpan.textContent = objectiveParts.join(' / ');
+    summaryLine.appendChild(objectiveSpan);
     summaryWrap.appendChild(summaryLine);
   }
 
@@ -1923,11 +1978,6 @@ messagesEl.addEventListener('scroll', () => {
   if (!shouldStickToBottom && messagesEl.scrollTop <= 24) {
     historyRevealAllowed = true;
   }
-  const nextInlineVisible = shouldShowInlineLoadEarlier();
-  if (nextInlineVisible !== inlineHistoryVisible) {
-    renderMessages(lastHistoryItems);
-    return;
-  }
   updateHistoryToolbarVisibility();
 });
 
@@ -2076,13 +2126,19 @@ narratorPresetSelect?.addEventListener('change', () => {
 });
 
 editBaseUserProfileBtn?.addEventListener('click', () => {
-  openProfileEditor('base', '维护基础设定', '当前用户基础设定（JSON）', userProfile);
+  openProfileEditor('base', '维护基础设定', '当前用户基础设定（统一 JSON）', userProfile, {
+    sourceText: userProfileSourceText,
+    promptPreview: userProfilePromptPreview,
+  });
 });
 
 editCharacterProfileOverrideBtn?.addEventListener('click', async () => {
   try {
     await loadCharacterProfileOverride();
-    openProfileEditor('override', '维护当前角色卡强化设定', '当前角色卡强化设定（JSON）', currentCharacterProfileOverride);
+    openProfileEditor('override', '维护当前角色卡强化设定', '当前角色卡强化设定（统一 JSON）', currentCharacterProfileOverride, {
+      sourceText: currentCharacterProfileOverrideSourceText,
+      promptPreview: currentCharacterProfileOverridePromptPreview,
+    });
   } catch (err) {
     if (userProfileNote) {
       userProfileNote.textContent = err.message;
@@ -2206,6 +2262,43 @@ profileEditorSaveBtn?.addEventListener('click', async () => {
 profileEditorCancelBtn?.addEventListener('click', closeProfileEditor);
 profileEditorCloseBtn?.addEventListener('click', closeProfileEditor);
 profileEditorBackdrop?.addEventListener('click', closeProfileEditor);
+
+profileEditorNormalizeBtn?.addEventListener('click', async () => {
+  try {
+    profileEditorNormalizeBtn.disabled = true;
+    if (profileEditorNote) {
+      profileEditorNote.textContent = '正在调用状态提取模型整理设定...';
+      profileEditorNote.dataset.kind = '';
+    }
+    await normalizeProfileSourceText();
+    if (profileEditorNote) {
+      profileEditorNote.textContent = '已整理为统一 JSON，请检查后保存。';
+      profileEditorNote.dataset.kind = 'ok';
+    }
+  } catch (err) {
+    if (profileEditorNote) {
+      profileEditorNote.textContent = err.message;
+      profileEditorNote.dataset.kind = 'error';
+    }
+  } finally {
+    profileEditorNormalizeBtn.disabled = false;
+  }
+});
+
+profileEditorPreviewBtn?.addEventListener('click', async () => {
+  try {
+    await refreshProfilePromptPreview();
+    if (profileEditorNote) {
+      profileEditorNote.textContent = '注入预览已刷新。';
+      profileEditorNote.dataset.kind = 'ok';
+    }
+  } catch (err) {
+    if (profileEditorNote) {
+      profileEditorNote.textContent = err.message;
+      profileEditorNote.dataset.kind = 'error';
+    }
+  }
+});
 
 charWizardStartBtn?.addEventListener('click', () => {
   if (charWizardStep1) charWizardStep1.hidden = true;
@@ -2456,7 +2549,6 @@ function clearClientUserState() {
   historyNextBefore = null;
   isLoadingEarlierHistory = false;
   historyRevealAllowed = false;
-  inlineHistoryVisible = false;
   currentSessionId = '';
   sessionItems = [];
   coverLoadToken += 1;
@@ -2464,8 +2556,12 @@ function clearClientUserState() {
   lastCharacterCoverUrl = null;
   characterItems = [];
   userProfile = {};
+  userProfileSourceText = '';
+  userProfilePromptPreview = '';
   userAvatarUrl = null;
   currentCharacterProfileOverride = {};
+  currentCharacterProfileOverrideSourceText = '';
+  currentCharacterProfileOverridePromptPreview = '';
   profileEditorMode = '';
   presetEditorId = '';
   _chatImportContentB64 = null;
@@ -2474,6 +2570,8 @@ function clearClientUserState() {
   renderState({});
   updateSessionIndicator();
   if (profileEditorInput) profileEditorInput.value = '';
+  if (profileEditorSourceInput) profileEditorSourceInput.value = '';
+  if (profileEditorPreviewInput) profileEditorPreviewInput.value = '';
   if (profileEditorNote) profileEditorNote.textContent = '';
   closeProfileEditor();
   if (chatImportPreview) {
