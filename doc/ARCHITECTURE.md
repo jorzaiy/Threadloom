@@ -81,6 +81,7 @@
 - 桌面端把状态/调试面板作为右侧抽屉呈现，保持主阅读区纵向空间
 - 移动端保留输入区状态栏旁的 session 向上箭头入口，上拉显示最近会话菜单；状态面板仍作为底部弹层
 - 状态面板当前跟踪 `main_event / immediate_goal / carryover_signals / scene_entities / tracked_objects / possession_state / object_visibility`，不再把 `active_threads` 作为默认用户可见主面板项目
+- 玩家设定编辑器默认接受自然语言输入，可调用 State Keeper 模型整理为统一 JSON；同时展示最终注入 narrator 的玩家档案预览，方便确认系统实际读取了什么
 
 不负责：
 - prompt 拼装
@@ -189,15 +190,25 @@
 当前 RP 主角档案建议分两层：
 
 - 用户级基础档案：`runtime-data/<user>/profile/player-profile.base.json`
+- 用户级自然语言源文本：`runtime-data/<user>/profile/player-profile.source.md`
 - 角色卡特化覆盖：`runtime-data/<user>/characters/<character_id>/source/player-profile.override.json`
+- 角色卡特化自然语言源文本：`runtime-data/<user>/characters/<character_id>/source/player-profile.override.source.md`
 
 运行时会先读取基础档案，再叠加当前角色卡覆盖，形成当前 narrator / state 主链消费的主角档案。
+
+当前主角档案的产品入口采用三层：
+
+1. 用户编辑自然语言设定，适合新用户和跨角色卡迁移。
+2. 后端用 State Keeper 模型整理为固定统一 JSON schema。
+3. runtime 只消费统一 JSON 渲染出的短 `【玩家档案】` prompt block。
+
+统一 JSON 只允许固定字段：`identity` 对象和 `appearance / abilities / personality / preferences / background / psychology / worldAdaptation / privateBoundaries` 字符串数组。高级用户可以编辑字段内容和数组项，但不能新增未知字段或改变字段类型。旧版嵌套角色卡 profile 会在读取时兼容转换，避免继续为每张角色卡扩展任意 JSON alias。
 
 补充说明：
 
 - `USER.md` 不再作为 RP narrator 主链输入
 - narrator 运行时只消费一份收短后的玩家档案摘要，避免完整人物设定每轮过度挤占上下文
-- `player-profile.json` / `player-profile.md` 当前主要作为兼容副本与可读导出
+- `player-profile.json` / `player-profile.md` 当前主要作为旧版兼容副本与可读导出；新的写入路径以 `player-profile.base.json`、`player-profile.override.json` 和对应 `.source.md` 为准
 
 ## 外部记忆层评估：mem0
 
@@ -369,11 +380,16 @@ mem0 的定位是 AI agent 的通用长期记忆层：从对话中自动提取�
 - 第一版不提供任何人工编辑按钮。
 
 ### 折叠调试区
-- Scene Entities
-- Carryover Clues
-- 当前 persona seeds
-- 当前 preset
-- 最近一次裁定结果
+
+调试浮动面板当前不是事实编辑器，而是展示本轮 runtime 注入和写回诊断。内容应与 `frontend/app.js -> renderDebug()` 保持一致：
+
+- Prompt Blocks：narrator prompt 各大块字符数，用于确认 recent window、物件、世界书、召回摘要等实际入 prompt 的体量。
+- Lorebook / NPC Candidate 注入概览：系统级 NPC 候选数、世界书 NPC 候选数，以及世界书候选/回源/foundation 的注入字符统计。实际 prompt 体量以 `lorebook_injection.effective_total_chars` 类字段为准，避免只看旧 `total_chars` 误判。
+- Event Memory：`event_summary_count`、selector 是否 `inject_summary`、`event_hits` 及最新 event summary。普通日常物件词不应单独造成旧 event / summary 大量回流；应优先由 active tracked object 和最近窗口提供证据。
+- Diagnostics JSON：`arbiter_analysis / arbiter_results / state_keeper_diagnostics / selector / retained_threads / retained_entities / completion_status / finish_reason / state_error / model_error`。
+- State 面板侧的状态/调试内容：`main_event / scene_objective / immediate_goal / carryover_signals / actor registry + scene_entities / tracked_objects + possession_state + object_visibility`。`active_threads` 保留为 state/debug 辅助，不再作为默认用户可见主面板项目。
+
+调试面板读取的是 backend 返回的 debug snapshot 和 state snapshot；它只解释本轮为什么注入了某些上下文、keeper 是否 fallback、selector 召回了什么，不允许直接改写 state、actor、物件或知识记录。
 
 ## NPC 详情查看
 

@@ -13,6 +13,7 @@
 - `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed；summary chunk 只在当前 turn 有足够直接锚点时回流
 - `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及 recent window 前段 event outline + 近端完整正文
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
+- `player_profile.py`：玩家档案路径、统一 JSON schema 校验、旧格式兼容转换、State Keeper 模型自然语言整理、prompt preview 渲染；保存时固定 schema，避免任意嵌套 JSON 继续扩散到 runtime
 - `server.py` 当前默认绑定 `127.0.0.1:8765`，可通过 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）；调用方必须显式提供 `base_url` 与 `model`，不再内置旧本地模型默认值
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
@@ -49,6 +50,7 @@
 - 新 session 会继承 root `canon / summary / state`
 - state / summary / persona / threads / important NPC / actor registry 都已接入 session-local 写回
 - narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / scene_objective / items / knowledge / keeper archive hits / recent window 前段提纲 / 最近完整正文 / user input`
+- `player_profile` 当前由统一 JSON schema 渲染为短 prompt block；用户自然语言源文本只用于整理和审计，不直接进入 narrator prompt
 - `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近完整正文 + 前段提纲 + 本轮输入为准
 - `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回
 - 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
@@ -76,6 +78,7 @@
 - actor registry 创建新 actor 时会读取最近 1~3 对 turn，因此上一轮 actor registry LLM 失败后，下一轮仍可从 recent window 补建，不需要依赖脏 fallback
 - actor registry 已内置 `protagonist`，物品持有和情报记录可统一绑定到 `actor_id`；`possession_state` 会补 `holder_actor_id`，`object_visibility` 会补 `known_to_actor_ids`，本轮 `knowledge_scope` 会派生长期 `knowledge_records`
 - protagonist actor 会把玩家档案拆成 `public_identity`、`private_identity`、`knowledge_boundary` 与 `appearance`：公开伪装、可见外貌和他人可观察身份可进入 NPC 判断；真实性别、隐藏身份、伪装底细等私密事实只有在 `knowledge_records` / 本轮 `knowledge_scope` 明确证明对应 NPC 知情时，才能被 NPC 对白、称呼或判断承接
+- 玩家档案 API 当前返回自然语言源文本、统一 JSON 和 prompt preview。`/api/user-profile/normalize` 与 `/api/character/profile-override/normalize` 使用 State Keeper 模型把自然语言整理为固定 JSON；`/preview` 路径只校验并渲染，不保存。保存接口会拒绝未知字段和错误类型，失败时不会覆盖旧 JSON。
 - 12 轮未被正文提及的 actor 会进入 `actor_context_index.archived_actor_ids`，只影响后续上下文注入，不修改 actor 基础设定；再次被正文提及时会回到 active
 - 每满 12 个完整 user/assistant pair 生成一个不可变 dense summary chunk，保存到 `memory/summary_chunks.json`；chunk 覆盖固定区间，不重叠、不滚动覆盖
 - opening-choice 分支现在不再“只生成正文然后直接返回”；首轮开局正文会进入 `state_fragment -> skeleton keeper -> fill keeper -> thread/important_npc` 写回链，避免正文与 state 从第一轮开始分叉。当前这条链通常能落下 `time/location/main_event/onstage/immediate_risks/carryover_clues`，但 `immediate_goal` 仍可能偏保守
@@ -135,6 +138,23 @@
   - index 命中后的原始世界书回源片段 `source_hits`
   - `【世界书基础规则】` / `【情境世界书】` 总字符数
   - prompt 各大区块字符占比
+
+### 调试面板与长 session 稳定性口径
+
+调试浮动面板展示的是本轮注入和写回诊断，而不是完整记忆表。当前应重点看这些块：
+
+- `Prompt Blocks`：确认 `【重要物件与持有关系】`、`【召回的12轮外历史】`、`【keeper archive 命中】`、世界书块等是否真实进入 prompt，以及各自字符数。
+- `Lorebook Injection`：普通回合可能只注入 foundation / index / source 命中的小块。判断实际体量时优先看 `selected_summary_chars / source_hit_chars / index_hit_chars / foundation_chars / effective_total_chars`，不要把旧 `total_chars` 当作最终入 prompt 总量。
+- `Event Memory`：显示事件摘要数量、selector 是否注入 summary、`event_hits` 和最新事件摘要。selector 现在要求当前 turn 强锚点；普通日常物件词或弱 topic overlap 不应单独把旧 event / summary 拉回。
+- `Diagnostics`：保留 `state_keeper_diagnostics`、selector 完整决策、arbiter 结果、completion / finish reason、state/model error 等排错字段。
+
+与这次长 session 修复相关的调试解释：
+
+- header/date/location 是 metadata，不应作为 `main_event`。若调试中看到 `main_event` 被纯日期/地点 header 污染，应看 state normalization 是否回退到上一条有效事件或后续动作句。
+- current-turn `onstage_npcs` 来自 skeleton/current marker，是短期参与者证据；最终 state snapshot 不应保留私有 `_current_turn_onstage_npcs`。
+- `scene_objective` 是当前事件目标，`immediate_goal` 是主角下一拍；调试面板同时显示二者，便于判断 keeper 是否把宏观目标和下一步动作混在一起。
+- `tracked_objects / possession_state / object_visibility` 只表示仍可行动的 active 物件。已吃完、丢失、销毁或归档的普通物件退出 active 列表，进入 `graveyard_objects` 防止幻觉复活。
+- 具体物件来源、剩余量、当前位置和谁知情，必须来自最近正文、本轮输入或已注入物件/知情证据；narrator prompt 已明确禁止无证据具体化这些细节。
 
 ## 当前配置边界
 

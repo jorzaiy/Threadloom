@@ -30,8 +30,12 @@
 - `POST /api/character/rebuild-lorebook`
 - `GET /api/user-profile`
 - `POST /api/user-profile`
+- `POST /api/user-profile/normalize`
+- `POST /api/user-profile/preview`
 - `GET /api/character/profile-override`
 - `POST /api/character/profile-override`
+- `POST /api/character/profile-override/normalize`
+- `POST /api/character/profile-override/preview`
 - `POST /api/characters/profile-override`（兼容别名）
 - `POST /api/user-avatar`
 - `POST /api/user-avatar/delete`
@@ -141,6 +145,99 @@
 - `temperature` 与 `max_output_tokens` 当前不再由普通用户在前端设置
 - 这两个参数统一来自 `config/runtime.json -> model_defaults`
 
+## Player profile API
+
+玩家设定采用“自然语言源文本 + 统一 JSON + prompt 预览”的三层结构。前端默认让用户编辑自然语言，调用 State Keeper 模型整理成固定 JSON；高级用户可直接编辑 JSON 的字段值和数组项，但不能改 schema 结构。
+
+统一 JSON schema：
+
+```json
+{
+  "schemaVersion": 1,
+  "identity": {
+    "name": "",
+    "courtesyName": "",
+    "gender": "",
+    "age": "",
+    "origin": "",
+    "status": ""
+  },
+  "appearance": [],
+  "abilities": [],
+  "personality": [],
+  "preferences": [],
+  "background": [],
+  "psychology": [],
+  "worldAdaptation": [],
+  "privateBoundaries": []
+}
+```
+
+规则：
+
+- `identity` 只能包含上述 6 个字符串字段。
+- 其他字段必须是字符串数组；用户可以增删数组项，但不能把数组改成对象或字符串。
+- 后端会拒绝未知顶层字段、未知 identity 字段和错误类型；校验失败不会覆盖旧档案。
+- 旧版嵌套 profile 会在读取 API 中转换为统一格式，runtime prompt 只消费统一 JSON 渲染后的 `【玩家档案】`。
+
+### GET /api/user-profile
+
+返回用户级基础档案、自然语言源文本和最终注入预览。
+
+```json
+{
+  "profile": {"schemaVersion": 1, "identity": {"name": "陆小环"}},
+  "source_text": "自然语言设定原文",
+  "prompt_preview": "# 玩家档案\n...",
+  "avatar_url": "/user-avatar"
+}
+```
+
+### POST /api/user-profile
+
+保存用户级基础档案。请求体：
+
+```json
+{
+  "profile": {"schemaVersion": 1, "identity": {"name": "陆小环"}},
+  "source_text": "自然语言设定原文"
+}
+```
+
+### POST /api/user-profile/normalize
+
+用 State Keeper 模型把自然语言整理成统一 JSON。不会自动保存，前端应展示 JSON 和 prompt preview 给用户确认。
+
+```json
+{
+  "source_text": "陆小环，女，散修，灵识敏锐……",
+  "profile": {"schemaVersion": 1, "identity": {}}
+}
+```
+
+返回：
+
+```json
+{
+  "profile": {"schemaVersion": 1, "identity": {"name": "陆小环"}},
+  "prompt_preview": "# 玩家档案\n...",
+  "diagnostics": {"provider_used": "llm"}
+}
+```
+
+### POST /api/user-profile/preview
+
+校验传入 JSON 并返回最终 `【玩家档案】` 预览，不保存。
+
+当前角色卡专属覆盖使用同一 schema：
+
+- `GET /api/character/profile-override`
+- `POST /api/character/profile-override`
+- `POST /api/character/profile-override/normalize`
+- `POST /api/character/profile-override/preview`
+
+字段名分别使用 `override` 替代 `profile`。兼容别名 `POST /api/characters/profile-override` 仍可保存当前角色卡覆盖。
+
 ## GET /api/health
 
 用于确认 backend 是否已监听。
@@ -247,14 +344,36 @@ partial 相关行为：
     "relevant_entities": [],
     "active_threads": [],
     "important_npcs": [],
+    "actors": {},
+    "actor_context_index": {},
     "onstage_npcs": ["师兄", "皂衣人"],
     "relevant_npcs": ["少年"],
+    "scene_objective": {
+      "label": "林中休整",
+      "objective": "让主角完成短暂补给并决定下一步路线",
+      "status": "active"
+    },
     "immediate_goal": "先安顿与恢复，再决定下一步行动。",
+    "carryover_signals": [
+      {"type": "clue", "text": "林外仍有追索痕迹"}
+    ],
     "immediate_risks": ["外部追索仍可能回到前台。"],
     "carryover_clues": ["前一场景留下的环境后果仍可能存在。"],
-    "tracked_objects": [],
-    "possession_state": [],
-    "object_visibility": []
+    "tracked_objects": [
+      {
+        "object_id": "obj_01",
+        "label": "油纸包饼",
+        "kind": "item",
+        "story_relevant": true
+      }
+    ],
+    "possession_state": [
+      {"object_id": "obj_01", "holder": "主角", "status": "saved", "location": "怀里"}
+    ],
+    "object_visibility": [
+      {"object_id": "obj_01", "visibility": "private", "known_to": ["主角"]}
+    ],
+    "graveyard_objects": []
   },
   "debug": {
     "scene_mode": "runtime-loaded",
@@ -265,6 +384,21 @@ partial 相关行为：
     "active_persona": ["师兄"],
     "loaded_preset": "world-sim-core",
     "loaded_onstage": ["师兄", "皂衣人"],
+    "prompt_block_stats": [],
+    "event_summary_count": 12,
+    "selector": {
+      "event_hits": [],
+      "summary_chunk_hits": [],
+      "inject_summary": false
+    },
+    "event_summary_item": {},
+    "lorebook_injection": {
+      "selected_summary_chars": 0,
+      "source_hit_chars": 0,
+      "index_hit_chars": 0,
+      "foundation_chars": 0,
+      "effective_total_chars": 0
+    },
     "state_keeper_diagnostics": {},
     "retained_threads": [],
     "retained_entities": []
@@ -276,6 +410,9 @@ partial 相关行为：
 
 - `reply` 只包含用户可见正文
 - `state_snapshot` 是前端右侧状态栏可直接消费的精简快照
+- `scene_objective` 是当前事件/场景段目标；`immediate_goal` 是主角下一拍目标，二者不要混用
+- `carryover_signals` 是当前统一信号层，旧 `immediate_risks / carryover_clues` 仍为兼容展示字段
+- 调试面板中的 selector / prompt / lorebook 统计用于解释“本轮为什么注入这些上下文”，不是事实编辑入口
 - `turn_id` 由 backend 生成
 - 当前后端对同一 `session_id` 已做串行化处理，避免同一会话并发请求互相覆盖
 - 幂等缓存键是 `(session_id, client_turn_id)`
@@ -325,14 +462,19 @@ partial 相关行为：
     "relevant_entities": [],
     "active_threads": [],
     "important_npcs": [],
+    "actors": {},
+    "actor_context_index": {},
     "onstage_npcs": ["..."],
     "relevant_npcs": ["..."],
+    "scene_objective": {},
     "immediate_goal": "...",
+    "carryover_signals": [],
     "immediate_risks": ["..."],
     "carryover_clues": ["..."],
     "tracked_objects": [],
     "possession_state": [],
-    "object_visibility": []
+    "object_visibility": [],
+    "graveyard_objects": []
   }
 }
 ```
@@ -346,6 +488,8 @@ partial 相关行为：
 - 当前默认只记录“可持续追踪”的物件：
   - 有明确持有、展示、转移、搜出、收起、放下、遗失或证物化后果
   - 不会把短语残片、动作词片段或一次性货币默认塞进物件列表
+- 已消耗、销毁、遗失或归档的物件会退出 active `tracked_objects / possession_state / object_visibility`，并可在 `graveyard_objects` 中保留生命周期标记
+- `active_threads` 仍可能随 state 返回给调试使用，但不是默认用户可见主面板项目，也不作为 narrator 当前事实源
 
 ## GET /api/history
 
