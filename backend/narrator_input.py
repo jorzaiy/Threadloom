@@ -152,6 +152,13 @@ def _format_actor_registry(actors: dict, context_index: dict, limit: int = 8) ->
         knowledge_boundary = str(actor.get('knowledge_boundary', '') or '').strip()
         personality = str(actor.get('personality', '') or '').strip()
         appearance = str(actor.get('appearance', '') or '').strip()
+        relationship = actor.get('relationship_to_protagonist', {})
+        if isinstance(relationship, dict):
+            relationship_label = str(relationship.get('label', '') or '').strip()
+            relationship_evidence = str(relationship.get('evidence', '') or '').strip()
+        else:
+            relationship_label = str(relationship or '').strip()
+            relationship_evidence = ''
         if public_identity:
             parts.append(f"公开身份={public_identity}")
         if private_identity:
@@ -164,6 +171,11 @@ def _format_actor_registry(actors: dict, context_index: dict, limit: int = 8) ->
             parts.append(f"性格={personality}")
         if appearance:
             parts.append(f"外貌={appearance}")
+        if relationship_label:
+            relationship_text = relationship_label
+            if relationship_evidence:
+                relationship_text += f"（依据：{relationship_evidence}）"
+            parts.append(f"与主角关系={relationship_text}")
         if aliases:
             parts.append(f"别称={' / '.join(aliases)}")
         suffix = '；'.join(parts) if parts else '基础设定未补全'

@@ -18,12 +18,14 @@ class KeeperContractTests(unittest.TestCase):
         self.assertIn('collective_group', summary['entity_types'])
         self.assertIn('risk', summary['signal_types'])
         self.assertIn('public', summary['object_visibility'])
+        self.assertEqual(summary['relationships'], ['npc_relationships'])
 
     def test_unknown_keeper_state_fields(self):
         unknown = unknown_keeper_state_fields({
             'time': '上午',
             'location': '茶摊',
             'main_event': '主角观察茶摊',
+            'npc_relationships': [{'npc': '老汉', 'label': '初识'}],
             'scene_core': 'legacy field',
             'card_specific_magic': True,
         })

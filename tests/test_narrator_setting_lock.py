@@ -147,3 +147,32 @@ def test_narrator_prompt_includes_npc_expression_persona_boundary():
     assert '不能覆盖角色注册表' in system_prompt
     assert '外貌、说话方式、习惯动作或性格表现' in system_prompt
     assert '不要输出 JSON、人物卡、标签清单' in system_prompt
+
+
+def test_narrator_prompt_includes_actor_relationship_to_protagonist():
+    system_prompt, _user_prompt = build_narrator_input(
+        {
+            'runtime_rules': 'runtime',
+            'character_core': {'name': '维克托'},
+            'scene_facts': {
+                'actors': {
+                    'protagonist': {'kind': 'protagonist', 'name': '主角', 'aliases': ['你']},
+                    'npc_001': {
+                        'kind': 'npc',
+                        'name': '严教官',
+                        'aliases': [],
+                        'identity': '训练教官',
+                        'relationship_to_protagonist': {'label': '队友', 'evidence': '并肩完成夜巡'},
+                    },
+                },
+                'actor_context_index': {'active_actor_ids': ['protagonist', 'npc_001']},
+            },
+            'recent_history': [],
+            'active_preset': {},
+        },
+        '继续',
+    )
+
+    assert '【角色注册表】' in system_prompt
+    assert '严教官' in system_prompt
+    assert '与主角关系=队友（依据：并肩完成夜巡）' in system_prompt

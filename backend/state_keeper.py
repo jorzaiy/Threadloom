@@ -102,7 +102,8 @@ scene_objective,
 carryover_signals,
 resolved_signals,
 tracked_objects, possession_state, object_visibility,
-knowledge_scope。
+knowledge_scope,
+npc_relationships。
 
 不要维护 NPC 基础设定；姓名、别称、性格、外貌、身份由 actor registry 创建后锁定。
 不要记录短期人物状态；人物的临时处境、在场关系、行动阶段和当前位置只由最近窗口承载。
@@ -171,6 +172,18 @@ time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架�
   - 不要推测、不要编造；"可能知道"不算
   - 主角和NPC的信息获取必须分开；主角看到的不等于NPC也看到
   - 如果本轮无新信息获取，或只是再次提及已知信息，必须省略整个字段
+- npc_relationships（数组，每项为对象，最多4项）：本轮正文明确改变或确认的 NPC 与主角关系标签。
+  格式：
+  ```
+  [
+    {"npc": "NPC稳定称呼", "label": "初识|相知|好友|队友|盟友|敌对|戒备", "evidence": "短证据"}
+  ]
+  ```
+  规则：
+  - 只根据本轮叙事正文中的可见互动、明确承诺、共同经历或冲突结果更新；不要根据玩家单方面声称关系成立。
+  - `npc` 必须是当前场景或角色注册表里已经存在的人物称呼；不要为关系创建新人。
+  - `label` 使用自然短标签，优先用：初识、相知、好友、队友、盟友、敌对、戒备。不要输出好感度分数。
+  - `evidence` 控制在 30 字以内，只写导致关系判断的事实。
 
 规则：
 1. 若字段无需修改，直接省略，不要输出空话。
@@ -255,6 +268,23 @@ def _slim_state_for_model(state: dict) -> dict:
         entities.append(entity)
     if entities:
         out['scene_entities'] = entities
+    known_npcs = []
+    actors = state.get('actors', {}) if isinstance(state.get('actors', {}), dict) else {}
+    for actor_id, actor in actors.items():
+        if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
+            continue
+        name = str(actor.get('name', '') or '').strip()
+        if not name:
+            continue
+        item = {'actor_id': str(actor_id), 'name': name}
+        relationship = actor.get('relationship_to_protagonist', {})
+        if isinstance(relationship, dict) and relationship.get('label'):
+            item['relationship_to_protagonist'] = str(relationship.get('label', '') or '').strip()
+        known_npcs.append(item)
+        if len(known_npcs) >= 8:
+            break
+    if known_npcs:
+        out['known_npcs'] = known_npcs
     if isinstance(state.get('tracked_objects', []), list) and state.get('tracked_objects'):
         out['tracked_objects'] = state.get('tracked_objects', [])[:6]
     if isinstance(state.get('possession_state', []), list) and state.get('possession_state'):
@@ -455,6 +485,9 @@ def _parse_fill_payload(text: str) -> dict:
         scene_objective = _extract_json_field_value(text, 'scene_objective')
         if isinstance(scene_objective, (dict, str)):
             fallback['scene_objective'] = scene_objective
+        relationships = _extract_json_field_value(text, 'npc_relationships')
+        if isinstance(relationships, list) and relationships:
+            fallback['npc_relationships'] = relationships
         if fallback:
             return fallback
         raise
@@ -876,6 +909,41 @@ def _normalize_resolved_signals(value) -> list[str]:
     return out
 
 
+def _coerce_npc_relationship_item(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    npc = sanitize_runtime_name(item.get('npc', item.get('name', item.get('actor', ''))))
+    label = str(item.get('label', item.get('relationship', item.get('status', ''))) or '').strip()
+    evidence = str(item.get('evidence', '') or '').strip()
+    if not npc or not label:
+        return None
+    out = {'npc': npc, 'label': label[:20]}
+    if evidence:
+        out['evidence'] = evidence[:30]
+    return out
+
+
+def _coerce_npc_relationships(value) -> list[dict]:
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in value:
+        relationship = _coerce_npc_relationship_item(item)
+        if not relationship:
+            continue
+        key = relationship['npc']
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(relationship)
+        if len(out) >= 4:
+            break
+    return out
+
+
 def _signal_text_matches(left: str, right: str) -> bool:
     left_text = str(left or '').strip().strip('，、；;：:。.!！?？ ')
     right_text = str(right or '').strip().strip('，、；;：:。.!！?？ ')
@@ -987,6 +1055,10 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
                 merged['scene_objective'] = {**baseline_objective, **objective}
             elif objective.get('objective'):
                 merged['scene_objective'] = objective
+
+    relationships = _coerce_npc_relationships(payload.get('npc_relationships'))
+    if relationships:
+        merged['npc_relationships'] = relationships
 
     for field in ('tracked_objects', 'possession_state', 'object_visibility'):
         if field in payload and isinstance(payload.get(field), list) and payload.get(field):
@@ -1116,9 +1188,27 @@ def _validate_knowledge_scope(payload: dict) -> None:
             learned = data.get('learned', [])
             if learned is not None and not isinstance(learned, list):
                 raise ValueError(f'knowledge_scope.npc_local.{name}.learned must be a list')
-            for idx, item in enumerate(learned or []):
-                if not isinstance(item, str):
-                    raise ValueError(f'knowledge_scope.npc_local.{name}.learned[{idx}] must be a string')
+        for idx, item in enumerate(learned or []):
+            if not isinstance(item, str):
+                raise ValueError(f'knowledge_scope.npc_local.{name}.learned[{idx}] must be a string')
+
+
+def _validate_npc_relationships(payload: dict) -> None:
+    value = payload.get('npc_relationships')
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise ValueError('state field npc_relationships must be a list')
+    for idx, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f'npc_relationships[{idx}] must be an object')
+        for key in ('npc', 'label'):
+            value_text = item.get(key)
+            if not isinstance(value_text, str) or not value_text.strip():
+                raise ValueError(f'npc_relationships[{idx}].{key} must be a non-empty string')
+        evidence = item.get('evidence')
+        if evidence is not None and not isinstance(evidence, str):
+            raise ValueError(f'npc_relationships[{idx}].evidence must be a string')
 
 
 def _coerce_scene_entity_item(item, idx: int) -> dict | None:
@@ -1184,6 +1274,8 @@ def _coerce_state_payload(payload: dict, baseline_state: dict | None = None) -> 
         normalized['knowledge_scope'] = _coerce_knowledge_scope(normalized.get('knowledge_scope'))
     if 'scene_objective' in normalized:
         normalized['scene_objective'] = _coerce_scene_objective(normalized.get('scene_objective'))
+    if 'npc_relationships' in normalized:
+        normalized['npc_relationships'] = _coerce_npc_relationships(normalized.get('npc_relationships'))
     return _coerce_object_layers(normalized, baseline_state)
 
 
@@ -1587,6 +1679,9 @@ def validate_state_payload(payload: dict, prev_state: dict | None = None) -> Non
     if 'knowledge_scope' in payload:
         recognized += 1
         _validate_knowledge_scope(payload)
+    if 'npc_relationships' in payload:
+        recognized += 1
+        _validate_npc_relationships(payload)
 
     if recognized < 5:
         raise ValueError('state payload contains too few recognized fields')

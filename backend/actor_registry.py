@@ -764,6 +764,28 @@ def _bind_actor_ids(state: dict, actors: dict, *, turn_number: int) -> None:
             merged.append({'holder_actor_id': key[0], 'text': key[1], 'source_turn': int(source_turn or turn_number)})
         state['knowledge_records'] = merged[-80:]
 
+    for item in state.get('npc_relationships', []) or []:
+        if not isinstance(item, dict):
+            continue
+        actor_id = _find_actor_id_by_name(actors, item.get('npc', ''))
+        if not actor_id or actor_id == 'protagonist':
+            continue
+        label = _clean_text(item.get('label', ''), 40)
+        if not label:
+            continue
+        actor = actors.get(actor_id, {})
+        if not isinstance(actor, dict):
+            continue
+        relationship = {
+            'label': label,
+            'updated_turn': int(turn_number or 1),
+        }
+        evidence = _clean_text(item.get('evidence', ''), 80)
+        if evidence:
+            relationship['evidence'] = evidence
+        actor['relationship_to_protagonist'] = relationship
+    state.pop('npc_relationships', None)
+
 
 def update_actor_registry(state: dict, *, narrator_reply: str, turn_number: int, player_name: str = '', user_text: str = '', recent_pairs: list[tuple[str, str]] | None = None, use_llm: bool = True) -> dict:
     current = deepcopy(state or {})

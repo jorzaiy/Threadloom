@@ -90,6 +90,47 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(merged['scene_objective']['objective'], '测试学员在资源争夺和规则模糊下的判断能力')
         self.assertEqual(merged['scene_objective']['status'], 'active')
 
+    def test_keeper_fill_accepts_npc_relationship_delta(self):
+        baseline = {
+            'time': '中午',
+            'location': '训练场',
+            'main_event': '主角和严教官完成一轮协作。',
+            'immediate_goal': '等待严教官点评。',
+        }
+
+        merged = _merge_keeper_fill(baseline, {
+            'npc_relationships': [
+                {'npc': '严教官', 'label': '相知', 'evidence': '共同完成训练复盘'},
+                {'npc': '主角', 'label': '好友'},
+            ]
+        })
+
+        self.assertEqual(merged['npc_relationships'], [
+            {'npc': '严教官', 'label': '相知', 'evidence': '共同完成训练复盘'},
+            {'npc': '主角', 'label': '好友'},
+        ])
+
+    def test_actor_registry_applies_relationship_delta_to_existing_npc(self):
+        state = {
+            'actors': {
+                'protagonist': {'actor_id': 'protagonist', 'kind': 'protagonist', 'name': '主角', 'aliases': ['你', '主角']},
+                'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '严教官', 'aliases': [], 'identity': '教官'},
+            },
+            'npc_relationships': [
+                {'npc': '严教官', 'label': '队友', 'evidence': '并肩完成夜巡'},
+                {'npc': '不存在的人', 'label': '好友'},
+            ],
+        }
+
+        updated = update_actor_registry(state, narrator_reply='严教官点头认可。', turn_number=7, use_llm=False)
+
+        relationship = updated['actors']['npc_001']['relationship_to_protagonist']
+        self.assertEqual(relationship['label'], '队友')
+        self.assertEqual(relationship['evidence'], '并肩完成夜巡')
+        self.assertEqual(relationship['updated_turn'], 7)
+        self.assertNotIn('npc_relationships', updated)
+        self.assertNotIn('relationship_to_protagonist', updated['actors']['protagonist'])
+
     def test_normalize_state_preserves_scene_objective_across_turns(self):
         prev = {
             'time': '上午',
