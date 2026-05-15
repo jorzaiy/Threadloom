@@ -18,7 +18,7 @@
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）；调用方必须显式提供 `base_url` 与 `model`，不再内置旧本地模型默认值
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
 - `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、当前时间粗时段归一化、抽象/非人物 entity 过滤、onstage 当前证据校验、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
-- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报与信号，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
+- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报、信号，以及有正文证据的 `npc_relationships` 增量，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
 - `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；`actors_mentioned` 会过滤非人物/抽象话题，避免 selector 以后按伪 actor 召回
@@ -27,7 +27,7 @@
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档；最终 actor 索引由 state normalization 对齐和剪枝
-- `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；内置 protagonist 会从玩家档案沉淀公开身份、私密身份、外貌与知情边界；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重；LLM candidate 在创建前会再过人物性/抽象名校验
+- `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；内置 protagonist 会从玩家档案沉淀公开身份、私密身份、外貌与知情边界；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重；Keeper 输出的 `npc_relationships` 会在这里绑定到既有 NPC actor 的 `relationship_to_protagonist`；LLM candidate 在创建前会再过人物性/抽象名校验
 - `memory_maintenance.py`：长期记忆维护层；按 actor registry 的精确 alias 做跨 state / event / summary chunk / keeper archive canonicalization，并清理“人物已在场但旧风险仍称其在门外等待”的 stale signal/thread。该层只做确定性维护，不通过正文推断新人物等价关系
 - `event_ledger.py`：事件账本；产出阶段事件摘要，不再负责人物短期状态写回
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
@@ -73,6 +73,7 @@
 - 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补物品、情报与信号；默认每 2 轮运行一次，不再接管 `time / location / main_event / onstage_npcs / immediate_goal` 这类当前硬锚点
 - actor registry 当前在每个完整 narrator 回复后运行：narrator 后处理只允许创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份视为锁定，不允许后续覆盖；持续承担行动链、关系压力或信息承载功能的匿名个体也可用正文稳定称呼建 actor；LLM 失败时不从旧 `scene_entities` fallback 建 actor，避免把旧污染写成不可变设定
 - actor registry 对“实名揭示”有窄口径例外：若已有 generic actor 后续在 narrator 正文中明确自报姓名或被点名，且上下文能唯一绑定到该 generic actor，则只追加实名到 `aliases` 并更新 mention turn，不改写原 `name / personality / appearance / identity`
+- actor registry 会接收 fill keeper 的 `npc_relationships` 临时 patch，把“初识 / 相知 / 好友 / 队友 / 盟友 / 敌对 / 戒备”等自然标签写入既有 NPC actor 的 `relationship_to_protagonist`。关系标签是长期关系面，不改写 NPC 基础设定；必须有本轮 narrator 正文证据，不能从玩家单方面声明直接成立。
 - memory maintenance 会在 actor registry 后运行，把已知 exact alias 迁移到 canonical actor name；冲突 alias 会被跳过，避免两个不同 actor 因同一称呼被自动合并
 - actor / persona / selector / summary chunk 共享非人物名防线：时间、空间、规则、栏目、盲区、题目等抽象或结构标签不能因 LLM 附带“外貌/身份”字段就被固化为 NPC。
 - actor registry 创建新 actor 时会读取最近 1~3 对 turn，因此上一轮 actor registry LLM 失败后，下一轮仍可从 recent window 补建，不需要依赖脏 fallback
@@ -192,7 +193,7 @@
   - `skeleton keeper`（继承 State Keeper 模型）→ 最小骨架
   - `fill keeper`（State Keeper 模型）→ 补物品、情报与信号
   - `heuristic fallback` → 最终兜底
-- `fill keeper` 当前按增量 patch 思路运行：已有 NPC / 物件默认沿用，只在明确新增或明确变化时输出，避免低质量后抽取覆盖高质量旧状态
+- `fill keeper` 当前按增量 patch 思路运行：已有 NPC / 物件默认沿用，只在明确新增或明确变化时输出，避免低质量后抽取覆盖高质量旧状态。`npc_relationships` 只输出本轮关系增量，最终由 actor registry 绑定后移出顶层 patch。
 - NPC 与物件绑定当前由 `possession_state` 驱动：标准化层会把 holder 对齐到稳定 NPC 主名，并自动写回 `tracked_objects[].owner / bound_entity_id` 与 `scene_entities[].owned_objects`；新 holder 必须来自当前人物、scene entity、actor registry 或 protagonist aliases，非法 holder 不覆盖旧合法归属
 - object 层支持 `lifecycle_status: active | consumed | destroyed | lost | archived`；非 active 物件会从 active `tracked_objects / possession_state / object_visibility` 退出，并写入 `graveyard_objects` 防止后续幻觉复活
 - turn_analyzer 可在 narrator 不变前提下评估是否跟着切本地
