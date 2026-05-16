@@ -17,11 +17,11 @@
 - `server.py` 当前默认绑定 `127.0.0.1:8765`，可通过 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）；调用方必须显式提供 `base_url` 与 `model`，不再内置旧本地模型默认值
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
-- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、当前时间粗时段归一化、抽象/非人物 entity 过滤、onstage 当前证据校验、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
+- `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、当前时间粗时段归一化、抽象/非人物 entity 过滤、onstage 当前证据校验、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖、当前场景物件 stale guard 与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
 - `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报、信号，以及有正文证据的 `npc_relationships` 增量，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
-- `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；`actors_mentioned` 会过滤非人物/抽象话题，避免 selector 以后按伪 actor 召回
+- `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；`actors_mentioned` 会过滤非人物/抽象话题，并对源窗口中已知的主角名做保守一致性修复，避免 selector 以后按伪 actor 或主角错字召回
 - `lorebook_distiller.py`：角色卡导入 / 手动重建时把 `lorebook.json` 固化为 `lorebook-foundation.json` 与 `lorebook-index.json`
 - `persona_updater.py` / `persona_runtime.py`：session-local persona 流转、重要度计数、近期观察沉淀与展示骨架；observation 只来自 assistant 叙事中与 NPC 相关的短片段，不把用户 prompt 原文固化为 NPC 事实；抽象话题和结构标签不会生成 persona seed
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
@@ -193,9 +193,10 @@
   - `skeleton keeper`（继承 State Keeper 模型）→ 最小骨架
   - `fill keeper`（State Keeper 模型）→ 补物品、情报与信号
   - `heuristic fallback` → 最终兜底
-- `fill keeper` 当前按增量 patch 思路运行：已有 NPC / 物件默认沿用，只在明确新增或明确变化时输出，避免低质量后抽取覆盖高质量旧状态。`npc_relationships` 只输出本轮关系增量，最终由 actor registry 绑定后移出顶层 patch。
+- `fill keeper` 当前按增量 patch 思路运行：已有 NPC / 物件默认沿用，只在明确新增或明确变化时输出；若本轮改变已有物件的位置、持有或物理状态，必须用同一 `object_id` 输出完整最新 `possession_state`，由归一化层覆盖旧状态。`npc_relationships` 只输出本轮关系增量，最终由 actor registry 绑定后移出顶层 patch。
 - NPC 与物件绑定当前由 `possession_state` 驱动：标准化层会把 holder 对齐到稳定 NPC 主名，并自动写回 `tracked_objects[].owner / bound_entity_id` 与 `scene_entities[].owned_objects`；新 holder 必须来自当前人物、scene entity、actor registry 或 protagonist aliases，非法 holder 不覆盖旧合法归属
 - object 层支持 `lifecycle_status: active | consumed | destroyed | lost | archived`；非 active 物件会从 active `tracked_objects / possession_state / object_visibility` 退出，并写入 `graveyard_objects` 防止后续幻觉复活
+- object 层还有确定性 stale guard：当当前 `main_event / location / signal` 已经表明主角带着或收起某物，而旧 `possession_state` 仍写着溪水中、桌上、床边等过期场景落点时，归一化会清掉旧落点并降级旧状态为通用 carried，等待下一次 keeper 明确写入新位置。
 - turn_analyzer 可在 narrator 不变前提下评估是否跟着切本地
 
 ## 多用户后端安全边界
