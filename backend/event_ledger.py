@@ -8,6 +8,11 @@ from model_client import call_model
 from local_model_client import parse_json_response
 from model_config import resolve_provider_model
 
+try:
+    from state_bridge import _looks_like_header_only_event
+except ImportError:
+    from .state_bridge import _looks_like_header_only_event
+
 
 def _split_sentences(text: str) -> list[str]:
     raw = str(text or '').replace('\r', '\n')
@@ -23,6 +28,47 @@ def _split_sentences(text: str) -> list[str]:
 
 def _normalize(text: str) -> str:
     return ' '.join(str(text or '').split()).strip()
+
+
+def _looks_like_time_text(text: str) -> bool:
+    value = str(text or '').strip()
+    if not value:
+        return False
+    if re.search(r'\d{2,4}年\d{1,2}月\d{1,2}日', value):
+        return True
+    if re.search(r'[\u4e00-\u9fff]{1,8}[一二三四五六七八九十百千万\d]{1,4}年', value):
+        return True
+    return any(marker in value for marker in ('凌晨', '清晨', '早晨', '上午', '中午', '午后', '下午', '傍晚', '黄昏', '晚上', '夜里', '深夜'))
+
+
+def _split_scene_header(text: str) -> tuple[str, str]:
+    value = str(text or '').strip()
+    if not value:
+        return '', ''
+    first_line = next((line.strip() for line in value.splitlines() if line.strip()), '')
+    first_line = first_line.strip('*_`#>【】[]（）() ')
+    candidate = re.split(r'[。！？!?]', first_line, 1)[0].strip(' ，、；：')
+    if not candidate:
+        return '', ''
+    parts = [part.strip() for part in re.split(r'[，,、]', candidate) if part.strip()]
+    if len(parts) < 2 or not any(_looks_like_time_text(part) for part in parts):
+        return '', ''
+    location = parts[-1]
+    time_anchor = '，'.join(parts[:-1]).strip()
+    if not time_anchor:
+        return '', ''
+    return time_anchor, location
+
+
+def extract_time_location_anchor(text: str, *, fallback_time: str = '', fallback_location: str = '') -> tuple[str, str]:
+    time_anchor, location_anchor = _split_scene_header(text)
+    if not time_anchor:
+        clean_time = _normalize(fallback_time)
+        time_anchor = clean_time if clean_time and clean_time != '待确认' else ''
+    if not location_anchor:
+        clean_location = _normalize(fallback_location)
+        location_anchor = clean_location if clean_location and clean_location != '待确认' else ''
+    return time_anchor, location_anchor
 
 
 def _recent_turn_pairs(history_items: list[dict], limit_pairs: int = 3) -> list[tuple[str, str]]:
@@ -365,10 +411,12 @@ def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_sta
         return fallback
 
 
-def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[str], tracked_objects: list[dict] | None = None, carryover_clues: list[str] | None = None) -> dict:
+def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[str], tracked_objects: list[dict] | None = None, carryover_clues: list[str] | None = None, time_anchor: str = '', location_anchor: str = '') -> dict:
     summary = _normalize(str(ledger.get('summary_text', '') or ''))
+    if _looks_like_header_only_event(summary):
+        summary = ''
     if not summary:
-        main_text = next((item.get('text', '') for item in (ledger.get('main_event_candidates', []) or []) if isinstance(item, dict) and item.get('text')), '')
+        main_text = next((item.get('text', '') for item in (ledger.get('main_event_candidates', []) or []) if isinstance(item, dict) and item.get('text') and not _looks_like_header_only_event(str(item.get('text', '') or ''))), '')
         summary = _normalize(main_text)
     summary = summary[:150]
 
@@ -394,6 +442,8 @@ def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[
         'event_id': f'evt_{turn_id[-4:]}',
         'turn_id': turn_id,
         'summary': summary,
+        'time_anchor': _normalize(time_anchor),
+        'location_anchor': _normalize(location_anchor),
         'actors': actors,
         'objects': [str(item.get('label', '') or '').strip() for item in (tracked_objects or [])[:2] if isinstance(item, dict) and str(item.get('label', '') or '').strip()],
         'clues': normalized_clues,

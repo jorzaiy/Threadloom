@@ -27,7 +27,7 @@ try:
     from .state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from .persona_updater import update_persona
     from .state_fragment import merge_state_skeleton
-    from .event_ledger import build_event_ledger_with_llm, build_event_summary_item
+    from .event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
     from .memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
 except ImportError:
     from arbiter_runtime import run_arbiter
@@ -52,7 +52,7 @@ except ImportError:
     from state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
     from persona_updater import update_persona
     from state_fragment import merge_state_skeleton
-    from event_ledger import build_event_ledger_with_llm, build_event_summary_item
+    from event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
     from memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
 
 
@@ -1084,12 +1084,19 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         recent_pairs=recent_pairs,
         current_state=state,
     )
+    time_anchor, location_anchor = extract_time_location_anchor(
+        reply,
+        fallback_time=str(state.get('time', '') or ''),
+        fallback_location=str(state.get('location', '') or ''),
+    )
     event_summary_item = build_event_summary_item(
         turn_id=turn_id,
         ledger=event_ledger,
         onstage_names=state.get('onstage_npcs', []),
         tracked_objects=state.get('tracked_objects', []),
         carryover_clues=state.get('carryover_clues', []),
+        time_anchor=time_anchor,
+        location_anchor=location_anchor,
     )
     if event_summary_item.get('summary'):
         append_event_summary(session_id, event_summary_item)
