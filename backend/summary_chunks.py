@@ -9,11 +9,13 @@ try:
     from .local_model_client import parse_json_response
     from .runtime_store import is_complete_assistant_item, load_history, load_summary_chunks, save_summary_chunks
     from .name_sanitizer import looks_like_bad_entity_fragment, protagonist_names
+    from .event_ledger import extract_time_location_anchor
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
     from runtime_store import is_complete_assistant_item, load_history, load_summary_chunks, save_summary_chunks
     from name_sanitizer import looks_like_bad_entity_fragment, protagonist_names
+    from event_ledger import extract_time_location_anchor
 
 
 SUMMARY_CHUNK_SIZE = 12
@@ -28,6 +30,8 @@ SUMMARY_CHUNK_SYSTEM = """你是 RP 历史分段整理器。
 输出格式：
 {
   "dense_summary": ["按时间顺序，每轮或每个连续动作一条，保留地点、人物、物品、台词要点、发现、误会、未解问题"],
+  "time_start": "本段开始时的叙事时间锚点，如无则空字符串",
+  "time_end": "本段结束时的叙事时间锚点，如无则空字符串",
   "key_events": ["这一段最关键的事件事实"],
   "unresolved": ["这一段结束后仍未解决的问题"],
   "locations": ["出现过的地点"],
@@ -163,16 +167,30 @@ def _extract_chunk_metadata(text: str) -> dict[str, list[str]]:
     }
 
 
+def _chunk_time_range(pairs: list[tuple[str, str]]) -> tuple[str, str]:
+    anchors = []
+    for _user_text, assistant_text in pairs or []:
+        time_anchor, _location_anchor = extract_time_location_anchor(assistant_text)
+        if time_anchor:
+            anchors.append(time_anchor)
+    if not anchors:
+        return '', ''
+    return anchors[0], anchors[-1]
+
+
 def _fallback_chunk(*, chunk_id: str, turn_start: int, turn_end: int, pairs: list[tuple[str, str]], provider: str = 'heuristic') -> dict:
     dense = []
     for idx, (user_text, assistant_text) in enumerate(pairs, start=turn_start):
         dense.append(f'第{idx}轮：用户动作：{_compact(user_text, 90)}；世界反馈：{_compact(assistant_text, 180)}')
     text = '\n'.join(' '.join(pair) for pair in pairs)
     extracted = _extract_chunk_metadata(text)
+    time_start, time_end = _chunk_time_range(pairs)
     return {
         'chunk_id': chunk_id,
         'turn_start': turn_start,
         'turn_end': turn_end,
+        'time_start': time_start,
+        'time_end': time_end,
         'dense_summary': dense[:18],
         'key_events': dense[:6],
         'unresolved': [],
@@ -190,6 +208,10 @@ def _normalize_chunk(payload: dict, *, chunk_id: str, turn_start: int, turn_end:
         return fallback
     out = dict(fallback)
     source_protagonist_names = _source_protagonist_names(pairs)
+    for field in ('time_start', 'time_end'):
+        value = _compact(str(payload.get(field, '') or ''), 40)
+        if value:
+            out[field] = value
     for field, limit in (
         ('dense_summary', 18),
         ('key_events', 10),

@@ -190,7 +190,10 @@ def _format_summary_chunks(chunks: list[dict], limit: int = 2) -> str:
     for chunk in chunks[:limit]:
         if not isinstance(chunk, dict):
             continue
-        lines = [f"### {chunk.get('chunk_id', 'chunk')} / turn {chunk.get('turn_start', '?')}-{chunk.get('turn_end', '?')}"]
+        time_start = str(chunk.get('time_start', '') or '').strip()
+        time_end = str(chunk.get('time_end', '') or '').strip()
+        time_text = f" / 时间 {time_start}-{time_end}" if time_start or time_end else ''
+        lines = [f"### {chunk.get('chunk_id', 'chunk')} / turn {chunk.get('turn_start', '?')}-{chunk.get('turn_end', '?')}{time_text}"]
         dense = chunk.get('dense_summary', []) if isinstance(chunk.get('dense_summary', []), list) else []
         for item in dense[:18]:
             text = str(item or '').strip()
@@ -331,7 +334,28 @@ def _format_recent_outline(event_summaries: list[dict], recent_history: list[dic
         if clues:
             extras.append('线索=' + '、'.join(clues))
         suffix = f"（{'；'.join(extras)}）" if extras else ''
-        lines.append(f"- {turn_id}: {summary}{suffix}")
+        time_anchor = str(item.get('time_anchor', '') or '').strip()
+        prefix = f"{turn_id}"
+        if time_anchor:
+            prefix += f" / 时间={time_anchor}"
+        lines.append(f"- {prefix}: {summary}{suffix}")
+    return '\n'.join(lines) if lines else '暂无'
+
+
+def _format_event_timeline(event_summaries: list[dict], limit: int = 8) -> str:
+    if not isinstance(event_summaries, list):
+        return '暂无'
+    items = [item for item in event_summaries if isinstance(item, dict) and str(item.get('summary', '') or '').strip()]
+    lines = []
+    for item in items[-limit:]:
+        turn_id = str(item.get('turn_id', '') or item.get('event_id', '') or '?').strip()
+        time_anchor = str(item.get('time_anchor', '') or '').strip() or '未记录'
+        location_anchor = str(item.get('location_anchor', '') or '').strip()
+        summary = str(item.get('summary', '') or '').strip()
+        if len(summary) > 120:
+            summary = summary[:117] + '...'
+        place = f" / 地点={location_anchor}" if location_anchor else ''
+        lines.append(f"- {turn_id} / 时间={time_anchor}{place}: {summary}")
     return '\n'.join(lines) if lines else '暂无'
 
 
@@ -568,6 +592,15 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     except (TypeError, ValueError):
         recent_full_pairs = 6
     recent_outline_text = _format_recent_outline(context.get('event_summaries', []), recent_history, full_pairs=recent_full_pairs)
+    event_timeline_text = _format_event_timeline(context.get('event_summaries', []))
+    if event_timeline_text != '暂无':
+        blocks.append(
+            '【事件时间轴】\n'
+            '本块是最近事件发生时间的结构化锚点，用来避免把旧事件误写成昨天、今天、刚才或更近的事。'
+            '事件时间以条目中的“时间=”为准；若条目时间为“未记录”，只能按 turn 顺序承接，不要自行补成相对日期。'
+            '除非最近完整正文或本轮用户输入明确推进时间，否则不要改写既有事件的发生日期/时段。\n'
+            + event_timeline_text
+        )
     if recent_outline_text != '暂无':
         blocks.append(
             '【最近窗口前段提纲】\n'
