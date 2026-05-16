@@ -1605,6 +1605,47 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(merged['object_visibility'][0]['visibility'], 'public')
         self.assertEqual(merged['object_visibility'][0]['note'], '亮在桌面')
 
+    def test_keeper_fill_payload_overrides_baseline_possession_location(self):
+        baseline = {
+            'possession_state': [
+                {'object_id': 'obj_01', 'holder': '主角', 'status': '浸在溪水中', 'location': '溪水中/掌心'},
+            ],
+        }
+        payload = {
+            'possession_state': [
+                {'object_id': 'obj_01', 'holder': '主角', 'status': '重新包好带着', 'location': '怀里'},
+            ],
+        }
+
+        merged = _merge_keeper_fill(baseline, payload)
+
+        self.assertEqual(merged['possession_state'], payload['possession_state'])
+
+    def test_normalize_state_clears_stale_scene_location_for_carried_object(self):
+        prev: dict[str, Any] = {
+            'tracked_objects': [{'object_id': 'big_spirit', 'label': '大灵物', 'kind': 'item', 'story_relevant': True}],
+            'possession_state': [
+                {
+                    'object_id': 'big_spirit',
+                    'holder': '主角',
+                    'status': '双手捧着浸在溪水中，吸水后恢复拳头大小',
+                    'location': '溪水中/掌心',
+                },
+            ],
+        }
+        current = {
+            **prev,
+            'time': '上午',
+            'location': '驿站门口',
+            'main_event': '主角将大灵物重新用布包好，带着鼓囊布包走到驿站门口。',
+            'immediate_goal': '向驿卒询问路线。',
+        }
+
+        normalized = normalize_state_dict(current, prev_state=prev)
+
+        self.assertEqual(normalized['possession_state'][0]['status'], 'carried')
+        self.assertEqual(normalized['possession_state'][0]['location'], '')
+
     def test_keeper_fill_merges_knowledge_scope_with_baseline(self):
         # P1.2 regression: keeper output replaced the baseline scope outright,
         # so an opening turn's scope that hadn't been folded into knowledge_records
@@ -1858,6 +1899,25 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['objects_mentioned'], ['铜牌'])
         self.assertNotIn('护具（护胸、', normalized['keywords'])
         self.assertNotIn('维克托在', normalized['keywords'])
+
+    def test_summary_chunk_repairs_protagonist_name_drift(self):
+        pairs = [
+            ('继续观察', '陆小环把铜牌收回袖中，沿着旧渡口往前走。'),
+        ]
+
+        with patch('backend.summary_chunks.protagonist_names', return_value={'陆小环'}):
+            normalized = _normalize_chunk({
+                'dense_summary': ['陆小盘把铜牌收回袖中。'],
+                'key_events': ['陆小盘保管铜牌。'],
+                'actors_mentioned': ['陆小盘'],
+                'keywords': ['陆小盘', '铜牌'],
+            }, chunk_id='chunk_0001', turn_start=1, turn_end=1, pairs=pairs, provider='llm')
+
+        self.assertEqual(normalized['dense_summary'], ['陆小环把铜牌收回袖中。'])
+        self.assertEqual(normalized['key_events'], ['陆小环保管铜牌。'])
+        self.assertEqual(normalized['actors_mentioned'], ['陆小环'])
+        self.assertIn('陆小环', normalized['keywords'])
+        self.assertNotIn('陆小盘', normalized['keywords'])
 
     def test_extract_reply_skeleton_skips_main_event_without_terminal_punctuation(self):
         # P3.8 regression: previously the first paragraph was sliced to 100 chars

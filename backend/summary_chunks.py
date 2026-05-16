@@ -8,12 +8,12 @@ try:
     from .llm_manager import call_role_llm
     from .local_model_client import parse_json_response
     from .runtime_store import is_complete_assistant_item, load_history, load_summary_chunks, save_summary_chunks
-    from .name_sanitizer import looks_like_bad_entity_fragment
+    from .name_sanitizer import looks_like_bad_entity_fragment, protagonist_names
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
     from runtime_store import is_complete_assistant_item, load_history, load_summary_chunks, save_summary_chunks
-    from name_sanitizer import looks_like_bad_entity_fragment
+    from name_sanitizer import looks_like_bad_entity_fragment, protagonist_names
 
 
 SUMMARY_CHUNK_SIZE = 12
@@ -107,6 +107,27 @@ def _dedupe_keywords(candidates: list[str], limit: int = 30) -> list[str]:
     return out
 
 
+def _one_char_different(left: str, right: str) -> bool:
+    return len(left) == len(right) and sum(1 for a, b in zip(left, right) if a != b) == 1
+
+
+def _source_protagonist_names(pairs: list[tuple[str, str]]) -> list[str]:
+    source_text = '\n'.join(' '.join(pair) for pair in pairs)
+    return [name for name in protagonist_names() if name and name in source_text and len(name) >= 2]
+
+
+def _repair_protagonist_drift(text: str, source_names: list[str]) -> str:
+    repaired = str(text or '')
+    for name in source_names:
+        width = len(name)
+        for segment in re.findall(r'[\u4e00-\u9fff]+', repaired):
+            for idx in range(0, max(0, len(segment) - width) + 1):
+                token = segment[idx:idx + width]
+                if _one_char_different(token, name):
+                    repaired = repaired.replace(token, name)
+    return repaired
+
+
 def _metadata_keywords(payload: dict, fallback: dict) -> list[str]:
     candidates: list[str] = []
     for field in ('actors_mentioned', 'locations', 'objects_mentioned'):
@@ -168,6 +189,7 @@ def _normalize_chunk(payload: dict, *, chunk_id: str, turn_start: int, turn_end:
     if not isinstance(payload, dict):
         return fallback
     out = dict(fallback)
+    source_protagonist_names = _source_protagonist_names(pairs)
     for field, limit in (
         ('dense_summary', 18),
         ('key_events', 10),
@@ -184,7 +206,8 @@ def _normalize_chunk(payload: dict, *, chunk_id: str, turn_start: int, turn_end:
             continue
         cleaned = []
         for item in values:
-            text = _compact(str(item or ''), 180 if field in {'dense_summary', 'key_events', 'unresolved'} else 40)
+            text = _repair_protagonist_drift(str(item or ''), source_protagonist_names)
+            text = _compact(text, 180 if field in {'dense_summary', 'key_events', 'unresolved'} else 40)
             if field == 'actors_mentioned' and looks_like_bad_entity_fragment(text):
                 continue
             if text and text not in cleaned:
@@ -198,7 +221,14 @@ def _normalize_chunk(payload: dict, *, chunk_id: str, turn_start: int, turn_end:
         if not out.get(field):
             out[field] = extracted[field]
     out['provider'] = provider
-    out['keywords'] = _structured_keywords(payload, out, pairs, limit=30) or out.get('keywords', [])
+    repaired_payload = dict(payload)
+    for field in ('dense_summary', 'key_events', 'unresolved', 'actors_mentioned', 'keywords'):
+        values = repaired_payload.get(field, [])
+        if isinstance(values, str):
+            values = [values]
+        if isinstance(values, list):
+            repaired_payload[field] = [_repair_protagonist_drift(str(item or ''), source_protagonist_names) for item in values]
+    out['keywords'] = _structured_keywords(repaired_payload, out, pairs, limit=30) or out.get('keywords', [])
     return out
 
 

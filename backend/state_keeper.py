@@ -202,6 +202,7 @@ time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架�
 14. 一次性付款、零散货币、临时消耗品，默认不要进入 `tracked_objects`；只有当它们变成明确证物、持续持有物、关键交易物或后续还会被追踪时，才写入物件层。
 15. 若物件既没有明确持有者，也没有明确场景落点（如桌上、柜台上、地上、床边、窗边、桶里、门后），默认不要写入物件层。
 16. 若物件被明确消耗、摧毁、遗失或退出追踪，在 tracked_objects 中输出原 object_id/label，并写 lifecycle_status: consumed|destroyed|lost|archived；不要直接删除。
+17. 若本轮明确改变了已有物件的持有、位置或物理状态，必须输出同一 object_id 的完整最新 `possession_state`；本轮事实优先覆盖旧状态，不要沿用已经过期的位置描述。
 """
 
 

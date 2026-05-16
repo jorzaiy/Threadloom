@@ -1223,6 +1223,54 @@ def _prefer_stable_object_kind(candidate: Any, previous: Any) -> str:
     return current
 
 
+SCENE_LOCATION_MARKERS = (
+    '溪', '河', '湖', '井', '潭', '池', '水', '岸', '坡', '路', '街', '巷', '门', '院', '屋', '房',
+    '桌', '床', '柜', '架', '地', '墙', '窗', '车', '船', '庙', '馆', '店', '厅', '堂', '站',
+)
+
+CARRIED_OBJECT_MARKERS = (
+    '怀里', '袖', '袖中', '袖口', '袋', '包', '包好', '包住', '包着', '裹', '裹好', '收起',
+    '揣', '拿着', '捧着', '抱着', '提着', '拎着', '带着', '塞进', '放进', '藏起', '贴身',
+)
+
+
+def _current_object_support_text(current: dict) -> str:
+    parts = [
+        str(current.get('location', '') or ''),
+        str(current.get('main_event', '') or ''),
+        str(current.get('immediate_goal', '') or ''),
+    ]
+    parts.extend(str(item or '') for item in (current.get('immediate_risks', []) or []))
+    parts.extend(str(item or '') for item in (current.get('carryover_clues', []) or []))
+    for item in current.get('carryover_signals', []) or []:
+        if isinstance(item, dict):
+            parts.append(str(item.get('text', '') or ''))
+    return ' '.join(part for part in parts if part)
+
+
+def _has_scene_location_marker(text: str) -> bool:
+    value = str(text or '').strip()
+    return bool(value and any(marker in value for marker in SCENE_LOCATION_MARKERS))
+
+
+def _stale_protagonist_possession_item(item: dict, object_label: str, support_text: str) -> dict:
+    holder = sanitize_runtime_name(item.get('holder', ''))
+    if not (is_protagonist_name(holder) or holder == '主角'):
+        return item
+    label = str(object_label or '').strip()
+    location = str(item.get('location', '') or '').strip()
+    status = str(item.get('status', '') or '').strip()
+    current_text = str(support_text or '')
+    carried_now = any(marker in current_text for marker in CARRIED_OBJECT_MARKERS)
+    label_supported = bool(label and label in current_text)
+    updated = dict(item)
+    if location and _has_scene_location_marker(location) and location not in current_text and carried_now:
+        updated['location'] = ''
+    if status and label_supported and carried_now and status not in current_text and _has_scene_location_marker(status):
+        updated['status'] = 'carried'
+    return updated
+
+
 def _merge_tracked_objects(prev_objects: list[dict], candidate_objects: list[dict]) -> list[dict]:
     prev_items = [item for item in (prev_objects or []) if isinstance(item, dict)]
     candidate_items = [item for item in (candidate_objects or []) if isinstance(item, dict)]
@@ -2192,11 +2240,12 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         if holder_actor_id:
             normalized_item['holder_actor_id'] = holder_actor_id
         possession_by_object[object_id] = normalized_item
+    object_support_text = _current_object_support_text(current)
     for object_id, item in possession_by_object.items():
         if object_id in seen_possession:
             continue
         seen_possession.add(object_id)
-        normalized_possession.append(item)
+        normalized_possession.append(_stale_protagonist_possession_item(item, object_index.get(object_id, {}).get('label', ''), object_support_text))
     current['possession_state'] = normalized_possession
 
     object_visibility = current.get('object_visibility', prev.get('object_visibility', []))
