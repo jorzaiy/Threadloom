@@ -11,7 +11,7 @@
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照
 - `bootstrap_session.py`：新 session bootstrap
 - `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed；summary chunk 只在当前 turn 有足够直接锚点时回流
-- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及 recent window 前段 event outline + 近端完整正文
+- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及事件时间轴、recent window 前段 event outline + 近端完整正文
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `player_profile.py`：玩家档案路径、统一 JSON schema 校验、旧格式兼容转换、State Keeper 模型自然语言整理、prompt preview 渲染；保存时固定 schema，避免任意嵌套 JSON 继续扩散到 runtime
 - `server.py` 当前默认绑定 `127.0.0.1:8765`，可通过 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
@@ -21,7 +21,7 @@
 - `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报、信号，以及有正文证据的 `npc_relationships` 增量，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
-- `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；`actors_mentioned` 会过滤非人物/抽象话题，并对源窗口中已知的主角名做保守一致性修复，避免 selector 以后按伪 actor 或主角错字召回
+- `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；chunk 保存 `time_start/time_end` 作为窗口时间范围；`actors_mentioned` 会过滤非人物/抽象话题，并对源窗口中已知的主角名做保守一致性修复，避免 selector 以后按伪 actor 或主角错字召回
 - `lorebook_distiller.py`：角色卡导入 / 手动重建时把 `lorebook.json` 固化为 `lorebook-foundation.json` 与 `lorebook-index.json`
 - `persona_updater.py` / `persona_runtime.py`：session-local persona 流转、重要度计数、近期观察沉淀与展示骨架；observation 只来自 assistant 叙事中与 NPC 相关的短片段，不把用户 prompt 原文固化为 NPC 事实；抽象话题和结构标签不会生成 persona seed
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
@@ -29,7 +29,7 @@
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档；最终 actor 索引由 state normalization 对齐和剪枝
 - `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；内置 protagonist 会从玩家档案沉淀公开身份、私密身份、外貌与知情边界；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重；Keeper 输出的 `npc_relationships` 会在这里绑定到既有 NPC actor 的 `relationship_to_protagonist`；LLM candidate 在创建前会再过人物性/抽象名校验
 - `memory_maintenance.py`：长期记忆维护层；按 actor registry 的精确 alias 做跨 state / event / summary chunk / keeper archive canonicalization，并清理“人物已在场但旧风险仍称其在门外等待”的 stale signal/thread。该层只做确定性维护，不通过正文推断新人物等价关系
-- `event_ledger.py`：事件账本；产出阶段事件摘要，不再负责人物短期状态写回
+- `event_ledger.py`：事件账本；产出阶段事件摘要并保存 `time_anchor/location_anchor`，不再负责人物短期状态写回
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
 - `opening.py`：opening 菜单与开局状态机；其 state 写入是阶段 checkpoint，最终 turn state 仍由 `handler_message.py` 统一提交
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
@@ -52,7 +52,7 @@
 - narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / scene_objective / items / knowledge / keeper archive hits / recent window 前段提纲 / 最近完整正文 / user input`
 - `player_profile` 当前由统一 JSON schema 渲染为短 prompt block；用户自然语言源文本只用于整理和审计，不直接进入 narrator prompt
 - `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近完整正文 + 前段提纲 + 本轮输入为准
-- `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回
+- `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲和事件时间轴进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回
 - 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
 - `state_keeper` 优先，`state_updater` 兜底
 - arbiter 已接入主链，不再只是文档占位

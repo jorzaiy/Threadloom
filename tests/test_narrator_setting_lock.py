@@ -93,7 +93,7 @@ def test_narrator_prompt_splits_recent_outline_and_full_prose():
             {'role': 'user', 'content': f'用户动作{idx}'},
             {'role': 'assistant', 'content': f'叙事正文{idx}', 'completion_status': 'complete'},
         ])
-        event_summaries.append({'turn_id': f'turn-{idx:04d}', 'summary': f'第{idx}轮提纲'})
+        event_summaries.append({'turn_id': f'turn-{idx:04d}', 'summary': f'第{idx}轮提纲', 'time_anchor': f'第{idx}日上午', 'location_anchor': '训练场'})
 
     system_prompt, _user_prompt = build_narrator_input(
         {
@@ -109,9 +109,13 @@ def test_narrator_prompt_splits_recent_outline_and_full_prose():
     )
 
     assert '【最近窗口前段提纲】' in system_prompt
-    assert 'turn-0001: 第1轮提纲' in system_prompt
-    assert 'turn-0002: 第2轮提纲' in system_prompt
-    assert '第3轮提纲' not in system_prompt
+    assert '【事件时间轴】' in system_prompt
+    assert 'turn-0001 / 时间=第1日上午: 第1轮提纲' in system_prompt
+    assert 'turn-0002 / 时间=第2日上午: 第2轮提纲' in system_prompt
+    assert 'turn-0008 / 时间=第8日上午 / 地点=训练场: 第8轮提纲' in system_prompt
+    assert '不要自行补成相对日期' in system_prompt
+    assert 'turn-0003 / 时间=第3日上午: 第3轮提纲' not in system_prompt
+    assert 'turn-0003 / 时间=第3日上午 / 地点=训练场: 第3轮提纲' in system_prompt
     assert '【最近6轮完整上下文】' in system_prompt
     assert '用户动作2' not in system_prompt
     assert '用户动作3' in system_prompt

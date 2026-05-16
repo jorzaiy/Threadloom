@@ -162,6 +162,7 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 - available cast / 可调入世界书人物
 - 最近完整正文窗口（默认 6 对 user/assistant）
 - 同一 recent window 前段逐回合提纲（来自 `event_summaries`，只用于连续性桥接，不要求逐条复述）
+- 最近事件时间轴（来自 `event_summaries[].time_anchor/location_anchor`），用于约束旧事件的发生日期/时段，避免 narrator 把前天、昨天、今早、刚才等相对时间混写
 - correction rules
 - 当前用户输入
 
@@ -194,8 +195,8 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 - **skeleton keeper**：每轮提取 5 个核心字段（time/location/main_event/onstage_npcs/goal）。在 fill 轮次（合并轮/首轮/bootstrap/物件密集轮）自动跳过，因为 fill keeper 的输出已覆盖所有 skeleton 字段。
 - **state keeper fill**：每 N 轮（默认 3）做一次完整状态提取，补充 scene_objective、signals、objects、knowledge_scope，以及有正文证据的 NPC 与主角关系标签。
 - **actor registry**：每轮从叙事中提取新角色候选。
-- **event ledger**：每轮生成事件摘要。在 fill 轮次直接复用 state_keeper 的 signal 输出（main_event/risks/clues），跳过独立 LLM 调用。
-- **summary chunks**：每 12 轮生成历史分块摘要。
+- **event ledger**：每轮生成事件摘要，并从 narrator 回复头或当前 state 记录 `time_anchor/location_anchor`。在 fill 轮次直接复用 state_keeper 的 signal 输出（main_event/risks/clues），跳过独立 LLM 调用。
+- **summary chunks**：每 12 轮生成历史分块摘要，并记录该固定窗口的 `time_start/time_end`，让长程召回保留事件时间范围。
 
 名称规范化只在 actor_registry 绑定后由 `memory_maintenance` 统一执行一次，state_keeper 内部不再做独立的 semantic_cleanup。
 
@@ -204,6 +205,8 @@ Persona 写回的职责边界：`persona_updater` 负责人物 seed 的 scene/ar
 NPC 与主角关系由 fill keeper 通过 `npc_relationships` 只输出本轮增量，如 `初识 / 相知 / 好友 / 队友 / 盟友 / 敌对 / 戒备`。该增量必须来自 narrator 正文里的可见互动、明确承诺、共同经历或冲突结果，不能因为玩家单方面声称关系成立就写入。提交阶段由 actor registry 把合法关系绑定到既有 NPC actor 的 `relationship_to_protagonist`，再由 narrator 的 `【角色注册表】` 注入；顶层 `npc_relationships` 只是临时 patch，不作为长期 state 列表保留。
 
 物件状态采用“本轮明确事实覆盖旧账本”的口径。fill keeper 若看到已有物件被重新包好、放下、转交、收起或换位置，应输出同一 `object_id` 的最新 `possession_state`；归一化层会按 `object_id` 合并，并在当前场景已经显示主角携带/收起某物时，清掉明显过期的旧场景落点（如仍写在水里、桌上、床边），避免旧位置继续污染下一轮。
+
+事件时间轴不是新的剧情事实来源，只把已经出现在 narrator 回复头或当前 state 中的时间/地点结构化保存。`event_summaries[].time_anchor` 用于 narrator prompt 的 `【事件时间轴】`，提醒模型按事件自身时间承接旧事；缺失时间只表示未记录，不允许模型自行补成“昨天/刚才”。`summary_chunks[].time_start/time_end` 记录固定 12 轮窗口的起止叙事时间，供远期摘要召回时维持时间顺序。
 
 `scene_objective` 是当前事件/场景段的稳定目标，区别于每轮可变的 `immediate_goal`。它回答“这一段事件为什么存在、围绕什么测试或推进”，例如训练段的资源争夺、规则理解或风险控制；`immediate_goal` 仍只表示主角下一拍要处理的事。fill keeper 只在目标缺失、明确新事件开启或旧事件明确结束时更新；普通对白、观察、移动和短暂心理变化应沿用当前目标。narrator 只读取 active objective，用它约束本轮不要偏离事件主轴。
 

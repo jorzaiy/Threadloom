@@ -55,7 +55,7 @@ web input
 - 实名迁移只允许 exact alias map。若两个 actor 都声明了同一个 alias，或某个 alias 与另一个 actor 的 canonical name 冲突，该 alias 不参与迁移，宁可保留重复称呼，也不做高风险自动合并。
 - `active_threads[].actors` 是 thread 自身的辅助索引，不是长期人物事实源。归一化时会把 alias 对齐到 actor canonical name，并只保留 thread 文本或当前 `main_event / immediate_risks / carryover_clues / carryover_signals` 明确支持的人物，避免旧场景 NPC 在 watch/cooling thread 中继续粘住。
 - `relevant_npcs` 只保留有正向人物证据、且当前信号层仍明确提到的非 onstage 人物；当前风险/线索点名的 offstage actor 可继续保留给 selector，但不能再从地点、标题残片或 active thread 文本反推虚假 NPC。
-- `state.time` 只表示当前场景的粗时段，如清晨、上午、中午、下午、傍晚、晚上、夜里；精确钟点属于预约、截止、倒计时或课程安排，应留在 `immediate_goal / carryover_signals / active_threads` 等剧情约束层，不作为每轮滚动的当前时间戳。
+- `state.time` 只表示当前场景的粗时段，如清晨、上午、中午、下午、傍晚、晚上、夜里；精确钟点属于预约、截止、倒计时或课程安排，应留在 `immediate_goal / carryover_signals / active_threads` 等剧情约束层，不作为每轮滚动的当前时间戳。事件发生时间由 event timeline 记录：每轮 `event_summaries` 保存 `time_anchor/location_anchor`，每个固定 summary chunk 保存 `time_start/time_end`，用于防止 narrator 把旧事件改写成“昨天/刚才”等错误相对时间。
 - NPC 抽取现在有跨层人物性校验：抽象概念、时间/空间/答案等连续性话题、栏目/盲区/标题等结构标签，即使 LLM 给出外貌或身份，也不能进入 actor registry、scene entity、persona seed、selector profile target 或 summary chunk actor metadata。
 - 低压用户动作不会自动把旧压力召回成当前主轴。selector 会降低 pressure-only / actor-only 旧 chunk 的权重，arbiter 的弱 stealth 信号写入 clue 而不是 immediate risk，narrator 也不能为了制造戏剧性给休息/看书场景硬塞新威胁。
 - summary chunk 召回需要当前 turn 的强锚点支持：弱 token、泛化动作残片、称呼碎片或旧情报账本的模糊重叠只能作为辅助，不能单独把 12 轮外摘要带回 narrator。长期回忆应由当前地点、事件、人物、物件或关系线的直接相关性触发，而不是靠历史里的高频碎片粘住。
@@ -91,7 +91,7 @@ web input
 - maintenance 负责“已知结构之间保持一致”：把 actor canonical name 传播到 derived memory、剪掉明确过期的 signal/thread、过滤 keeper archive 派生缓存里的坏 digest。它不生成新剧情事实，也不替代 keeper / selector / narrator 的判断。
 - onstage 是当前镜头事实，不是人物重要度。重要 NPC、actor registry 或旧 thread 只能证明人物存在过，不能单独证明仍在场；归一化必须看到本轮 hard anchor / signal 的人物证据才保留 onstage。
 - keeper archive 的中程 digest 应优先从窗口正文自身提取时间、地点、持续人物、持续事件和物件，而不是复用当前 state 的硬锚点。窗口中可用的 NPC registry 名字会参与稳定人物识别，避免 archive 只留下“围绕某地持续演化”这类低密度事件句。
-- 当前 event 链已开始按这个方向实现：事件总结默认读取最近 `1~3` 对 turn 窗口，并在 narrator recent window 中作为“前段提纲”承接完整正文之外的较早回合；selector 仍可把它作为 recall / summary 的前置材料使用。
+- 当前 event 链已开始按这个方向实现：事件总结默认读取最近 `1~3` 对 turn 窗口，并在 narrator recent window 中作为“前段提纲”承接完整正文之外的较早回合；每条事件同时带结构化时间/地点锚点，narrator 会收到最近事件时间轴；selector 仍可把 event 作为 recall / summary 的前置材料使用。
 - 当前 selector 的 event recall 会优先 current-scene 命中和较新事件；同 NPC、同旧 clue 只能作为弱辅助信号，不能长期压过当前地点/动作/主事件。
 - lorebook audit 分为候选摘要、source hit、index hit、foundation 和 effective total 五类字符统计。调试时应看 `effective_total_chars` 判断实际入 prompt 体量，而不是只看 `total_chars`。
 

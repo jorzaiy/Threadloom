@@ -22,6 +22,7 @@ from backend.summary_chunks import _fallback_chunk, _normalize_chunk
 from backend.memory_maintenance import actor_alias_map, canonicalize_event_summaries, canonicalize_state_memory, resolve_stale_state_threads
 from backend.name_sanitizer import looks_like_non_person_alias_fragment, looks_like_low_quality_signal_fragment
 from backend.runtime_store import build_state_snapshot
+from backend.event_ledger import build_event_summary_item, extract_time_location_anchor
 
 
 class StateFragmentTest(unittest.TestCase):
@@ -280,6 +281,55 @@ class StateFragmentTest(unittest.TestCase):
         )
 
         self.assertEqual(normalized['main_event'], '主角在山门前向守门人递上拜帖。')
+
+    def test_header_only_event_with_station_house_does_not_replace_main_event(self):
+        normalized = normalize_state_dict(
+            {
+                'time': '上午',
+                'location': '北岭驿站堂屋',
+                'main_event': '景和三年四月初四，上午，北岭驿站堂屋。',
+                'immediate_goal': '等待驿卒回应。',
+            },
+            prev_state={
+                'main_event': '主角在驿站向驿卒询问渡口车马。',
+                'immediate_goal': '等待驿卒回应。',
+            },
+        )
+
+        self.assertEqual(normalized['main_event'], '主角在驿站向驿卒询问渡口车马。')
+
+    def test_event_summary_item_rejects_header_only_summary(self):
+        item = build_event_summary_item(
+            turn_id='turn-0012',
+            ledger={
+                'provider': 'llm',
+                'summary_text': '景和三年四月初四，上午，北岭驿站堂屋。',
+                'main_event_candidates': [{'text': '景和三年四月初四，上午，北岭驿站堂屋。'}],
+                'scene_shift': {'changed': False},
+            },
+            onstage_names=[],
+        )
+
+        self.assertEqual(item['summary'], '')
+
+    def test_event_summary_item_records_time_and_location_anchor(self):
+        time_anchor, location_anchor = extract_time_location_anchor(
+            '景和三年四月初四，上午，北岭驿站堂屋。\n主角向驿卒询问渡口车马。',
+        )
+        item = build_event_summary_item(
+            turn_id='turn-0013',
+            ledger={
+                'provider': 'llm',
+                'summary_text': '主角向驿卒询问渡口车马。',
+                'scene_shift': {'changed': False},
+            },
+            onstage_names=[],
+            time_anchor=time_anchor,
+            location_anchor=location_anchor,
+        )
+
+        self.assertEqual(item['time_anchor'], '景和三年四月初四，上午')
+        self.assertEqual(item['location_anchor'], '北岭驿站堂屋')
 
     def test_partial_keeper_fill_cannot_overwrite_core_scene_fields(self):
         baseline = {
@@ -1895,8 +1945,12 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(fallback['actors_mentioned'], [])
         self.assertEqual(fallback['objects_mentioned'], [])
         self.assertEqual(fallback['locations'], ['旧渡口库房'])
+        self.assertEqual(fallback['time_start'], '傍晚')
+        self.assertEqual(fallback['time_end'], '傍晚')
         self.assertEqual(normalized['actors_mentioned'], ['林越'])
         self.assertEqual(normalized['objects_mentioned'], ['铜牌'])
+        self.assertEqual(normalized['time_start'], '傍晚')
+        self.assertEqual(normalized['time_end'], '傍晚')
         self.assertNotIn('护具（护胸、', normalized['keywords'])
         self.assertNotIn('维克托在', normalized['keywords'])
 
