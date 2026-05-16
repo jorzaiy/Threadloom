@@ -9,15 +9,22 @@
 - `server.py`：HTTP 服务入口
 - `handler_message.py`：`POST /api/message` 主链入口
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照
+- `paths.py`：三层路径管理（user / character / session 分层路径解析），提供 `active_user_id` / `active_character_id` context var 与 request-local override 机制
+- `atomic_io.py`：原子文件读写原语（写临时文件 → fsync → `os.replace`），供 `runtime_store.py` / `keeper_archive.py` 等写入层统一使用
 - `bootstrap_session.py`：新 session bootstrap
 - `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed；summary chunk 只在当前 turn 有足够直接锚点时回流
+- `selector.py`：NPC 候选召回决策层；根据 onstage / relevant_npcs、active_threads、recent_history 与 important_npcs 信号判断是否注入 NPC profile 候选，并按话题相关度排序
 - `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及事件时间轴、recent window 前段 event outline + 近端完整正文
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
+- `llm_manager.py`：统一 LLM 角色调用管理层；封装 `call_role_llm()`，按角色 key 查找模型配置并调用 `model_client`，供各 agent 统一使用
+- `safe_http.py`：SSRF 安全 HTTP 连接辅助；DNS 预解析 + IP pin，按 `_LOOPBACK_HOSTS` 白名单放行 loopback，拒绝私网/link-local 直连，防止 DNS rebinding 攻击
 - `player_profile.py`：玩家档案路径、统一 JSON schema 校验、旧格式兼容转换、State Keeper 模型自然语言整理、prompt preview 渲染；保存时固定 schema，避免任意嵌套 JSON 继续扩散到 runtime
 - `server.py` 当前默认绑定 `127.0.0.1:8765`，可通过 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）；调用方必须显式提供 `base_url` 与 `model`，不再内置旧本地模型默认值
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
+- `name_sanitizer.py`：实体名清洗与人物性校验；过滤时间、空间、规则、栏目、盲区等抽象/结构标签，提供 `sanitize_runtime_name()` 与 `looks_like_bad_entity_fragment()` 等共享校验函数
 - `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、当前时间粗时段归一化、抽象/非人物 entity 过滤、onstage 当前证据校验、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖、当前场景物件 stale guard 与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
+- `state_fragment.py`：state fragment 构建；以 skeleton keeper 输出与 arbiter 结果为基线生成 `state_fragment`，作为 narrator 与 fill keeper 的结构化锚点；`build_state_from_fragment()` 在非合并轮替代 full fill keeper 做轻量 state 更新
 - `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报、信号，以及有正文证据的 `npc_relationships` 增量，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
 - `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
@@ -28,12 +35,19 @@
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档；最终 actor 索引由 state normalization 对齐和剪枝
 - `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；内置 protagonist 会从玩家档案沉淀公开身份、私密身份、外貌与知情边界；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重；Keeper 输出的 `npc_relationships` 会在这里绑定到既有 NPC actor 的 `relationship_to_protagonist`；LLM candidate 在创建前会再过人物性/抽象名校验
+- `entity_candidate_judge.py`：entity 候选人物性校验统一入口；调用 LLM 判定候选名是否为真实人物角色，过滤时间/空间/规则/结构标签；`state_updater.py` 复用此入口，不再在 `state_bridge.py` 中重复 judge
 - `memory_maintenance.py`：长期记忆维护层；按 actor registry 的精确 alias 做跨 state / event / summary chunk / keeper archive canonicalization，并清理“人物已在场但旧风险仍称其在门外等待”的 stale signal/thread。该层只做确定性维护，不通过正文推断新人物等价关系
+- `memory_agent.py`：跨轮相关记忆召回工具；对历史 turn pair 做 token overlap 评分，选出与当前场景/玩家输入最相关的若干段对话作为 memory bundle
+- `keeper_contract.py`：Keeper 字段常量定义（`SCENE_CORE_FIELDS` 等），供 keeper 系列模块共享
+- `keeper_record_retriever.py`：Keeper 归档记录检索；从 archive 中按 topic / location / query 相关度取回有效记录，供 selector 与 context_builder 使用
+- `mid_context_agent.py`：中段摘要生成 agent；当对话窗口中段需要 keeper archive 刷新时，生成结构化的场景摘要并写入 archive
+- `continuity_hints.py`：连续性提示加载封装；从 `runtime_store` 读取 continuity_hints，供上下文装配层使用
 - `event_ledger.py`：事件账本；产出阶段事件摘要并保存 `time_anchor/location_anchor`，不再负责人物短期状态写回
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
 - `opening.py`：opening 菜单与开局状态机；其 state 写入是阶段 checkpoint，最终 turn state 仍由 `handler_message.py` 统一提交
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
+- `character_manager.py`：角色卡管理 API 处理层；角色卡列表枚举、切换、删除与封面/缩略图读取
 - `session_lifecycle.py`：new game / delete / session list
 - `regenerate_turn.py`：partial 回复回滚与重试
 - `tools/replay_turn_trace.py` / `tools/rebuild_session_from_history.py` / `tools/repair_session_memory.py`：当前调试工具，用于单回合精确回放、从历史重建副本 session，以及对既有 session 运行 deterministic memory repair。`repair_session_memory.py` 默认 dry-run，只有显式 `--apply` 才写回
@@ -343,9 +357,7 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - actor registry 当前只保证基础设定不可覆盖；新 actor 创建质量仍依赖模型抽取，误建一次性 NPC 的风险仍存在，但 LLM 失败时不会从旧 `scene_entities` 自动补建
 - arbiter 仍主要覆盖少数高风险事件类型
 - analyzer / state keeper 虽已分模，但默认配置仍偏实验态
-- ~~主角 runtime 仍未独立落地~~ → 已在 `actors.protagonist` 中作为特殊 actor 落地
-- ~~NPC 间信息隔离仍未独立成结构化 knowledge scope 层~~ → 已补 `knowledge_scope`
-- ~~已解决事件归档层仍未独立落地~~ → 已补 `resolved_events`
+
 
 ## 近期变更
 

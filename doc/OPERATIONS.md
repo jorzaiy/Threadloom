@@ -629,11 +629,8 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
 - 同名实体仍没有完整的 disambiguation 交互，当前只是后端直出实体列表并在歧义时保守展示
 - summary / important NPC / thread tracker 之间仍可能互相放大弱信号
 - 主角目前还没有独立的 runtime 层，observer/主角信息仍需要继续和 NPC 层做强隔离
-- ~~已解决事件还没有独立事件归档层~~ → 已补 `resolved_events`：线程经 `cooling_down` 过渡后归档到 `state.resolved_events[]`（最多 20 条）
-- ~~信息隔离仍主要靠 prompt 约束~~ → 已补 `knowledge_scope`：state 中新增 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，keeper 按回合提取增量，narrator_input 渲染结构化知情边界
 - 物件状态层已经接线完成，但当前真实回合中的抽取强度还不够；链路已通，实际产出仍需要继续调强
 - 当前单回合精确回放已优先覆盖 runtime 主链；opening 菜单态暂不作为主要回放目标
-- `state_updater.py` 当前仍处于主路径重构中；旧 heuristics 已被证明会对异题材记录产生幽灵状态，明天应继续把它们下沉到 legacy fallback
 
 ## 当前配模建议
 
