@@ -38,7 +38,7 @@ web input
 - 更早历史优先收敛成 keeper archive，而不是自由摘要层。
 - 写回时先收口到结构化状态；`summary` 可继续保留为调试/运维产物，但不再主导 narrator。
 - state 写入分三类：opening 只做开局状态机 checkpoint；`handler_message.py` 负责每个完整 turn 的最终权威提交；keeper archive 写入只维护派生缓存。
-- keeper 写回按增量 patch 执行：骨架字段由 skeleton keeper 维护，fill keeper 只补信号、物件、持有关系、可见性、本轮知情 delta 和本轮有证据的 NPC↔主角关系 delta。
+- keeper 写回按增量 patch 执行：骨架字段由 skeleton keeper 维护，fill keeper 只补信号、物件、持有关系、可见性、本轮知情 delta 和本轮有证据的 NPC↔主角关系 delta。已有物件的持有、位置或状态在本轮明确变化时必须用同一 `object_id` 输出最新 `possession_state`，由 state normalization 覆盖旧账本。
 - `knowledge_scope` 是本轮 delta，长期知识落到 `knowledge_records`；物件退出 active 状态通过 `lifecycle_status` 和 `graveyard_objects` 表达。
 - `scene_objective` 是事件级目标锚点，负责稳定当前场景段的主轴；`immediate_goal` 仍是主角下一拍目标，二者不合并。
 - keeper archive 是派生缓存，刷新时会清理超过当前有效 pair index 的未来 records，避免撤回/重试后的旧分支污染召回。
@@ -65,6 +65,8 @@ web input
 - 长 session 稳定性采用减法式收口：header/date/location 只作 metadata，不写入 `main_event`；full keeper fill 不能用局部 patch 降级 fragment/skeleton 已固定的核心场景字段；普通日常物件只有在仍可行动时才留在 active object 层，吃完/丢失/归档后退出 active tracker。
 - selector 对日常物件词保持克制：没有 active tracked object 时，普通“吃/喝/拿/买”等弱物件查询不应单独触发旧 event / summary 大量注入；有 active tracked object 时，优先通过物件账本给 narrator 证据，而不是扩大 summary recall。
 - narrator 对物件细节遵守证据边界：来源、剩余量、当前位置和谁知情只能来自最近正文、本轮输入或已注入物件/知识证据；无证据时只模糊承接。
+- 物件 stale guard 是确定性收口，不是新事实来源：当当前场景文字已经表明主角携带或收起某物，而旧 possession 仍指向上一场景的具体落点，归一化只清掉过期落点或降级为 carried；新的具体位置仍需要 keeper 或最近正文提供证据。
+- summary chunk 生成后会做主角名一致性保护：只对源窗口中已出现的主角名修复一字漂移，防止错字进入长期摘要检索键；它不对 NPC 做模糊改名，也不合并未确认人物。
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。

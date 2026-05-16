@@ -203,6 +203,8 @@ Persona 写回的职责边界：`persona_updater` 负责人物 seed 的 scene/ar
 
 NPC 与主角关系由 fill keeper 通过 `npc_relationships` 只输出本轮增量，如 `初识 / 相知 / 好友 / 队友 / 盟友 / 敌对 / 戒备`。该增量必须来自 narrator 正文里的可见互动、明确承诺、共同经历或冲突结果，不能因为玩家单方面声称关系成立就写入。提交阶段由 actor registry 把合法关系绑定到既有 NPC actor 的 `relationship_to_protagonist`，再由 narrator 的 `【角色注册表】` 注入；顶层 `npc_relationships` 只是临时 patch，不作为长期 state 列表保留。
 
+物件状态采用“本轮明确事实覆盖旧账本”的口径。fill keeper 若看到已有物件被重新包好、放下、转交、收起或换位置，应输出同一 `object_id` 的最新 `possession_state`；归一化层会按 `object_id` 合并，并在当前场景已经显示主角携带/收起某物时，清掉明显过期的旧场景落点（如仍写在水里、桌上、床边），避免旧位置继续污染下一轮。
+
 `scene_objective` 是当前事件/场景段的稳定目标，区别于每轮可变的 `immediate_goal`。它回答“这一段事件为什么存在、围绕什么测试或推进”，例如训练段的资源争夺、规则理解或风险控制；`immediate_goal` 仍只表示主角下一拍要处理的事。fill keeper 只在目标缺失、明确新事件开启或旧事件明确结束时更新；普通对白、观察、移动和短暂心理变化应沿用当前目标。narrator 只读取 active objective，用它约束本轮不要偏离事件主轴。
 
 输出：
@@ -380,6 +382,7 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
 - active object lifecycle 收窄：只有仍可行动的物件留在 `tracked_objects`，例如被携带、收起、放在可交互位置、部分消耗后保存、转交给他人或作为证物/工具继续存在。一次性吃完、花掉、背景描写里出现但没有持有/落点的普通物件不进入 active tracker；退出追踪的物件写入 `graveyard_objects`。
 - selector 对日常物件召回降噪：普通“吃饼/拿水/买东西”这类弱日常物件词不会单独触发 12 轮外 event / summary 大量注入。若存在 active tracked object，优先通过 `【重要物件与持有关系】` 进入 narrator；否则依赖最近完整正文和本轮输入，不靠旧摘要猜来源或数量。
 - narrator 物件细节约束：物件来源、剩余数量、当前位置、谁看见过/知道它，必须来自最近正文、本轮用户输入或注入的物件/知情证据；没有证据时只能模糊承接，不得编造购买地点、食用进度、存放位置或旁观者知情。
+- summary chunk 名称一致性：固定 12 轮摘要在归一化时会用源窗口中出现过的主角名修复一字漂移，避免“主角名错字”被写进 `dense_summary / key_events / actors_mentioned / keywords` 并成为后续召回锚点。
 
 调试面板对应观察点：看 `Prompt Blocks` 是否有 `【重要物件与持有关系】` 或 `【召回的12轮外历史】`，看 selector 的 `event_hits / summary_chunk_hits / inject_summary` 是否被当前强锚点触发，不能只因为普通物件名出现就判定应该召回旧历史。
 
