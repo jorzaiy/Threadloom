@@ -298,6 +298,64 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertEqual(normalized['main_event'], '主角在驿站向驿卒询问渡口车马。')
 
+    def test_location_subject_event_is_not_header_only(self):
+        event = '景和三年四月初四，上午，驿站起火。'
+
+        normalized = normalize_state_dict(
+            {
+                'time': '上午',
+                'location': '北岭驿站',
+                'main_event': event,
+                'immediate_goal': '判断驿站火势。',
+            },
+            prev_state={
+                'main_event': '主角在驿站向驿卒询问渡口车马。',
+                'immediate_goal': '等待驿卒回应。',
+            },
+        )
+        item = build_event_summary_item(
+            turn_id='turn-0014',
+            ledger={
+                'provider': 'llm',
+                'summary_text': event,
+                'main_event_candidates': [{'text': event}],
+                'scene_shift': {'changed': False},
+            },
+            onstage_names=[],
+        )
+
+        self.assertEqual(normalized['main_event'], event)
+        self.assertEqual(item['summary'], event)
+
+    def test_action_clause_ending_with_location_suffix_is_not_header_only(self):
+        event = '景和三年四月初四，上午，驿卒站在院中。'
+
+        normalized = normalize_state_dict(
+            {
+                'time': '上午',
+                'location': '北岭驿站院中',
+                'main_event': event,
+                'immediate_goal': '观察驿卒反应。',
+            },
+            prev_state={
+                'main_event': '主角在驿站向驿卒询问渡口车马。',
+                'immediate_goal': '等待驿卒回应。',
+            },
+        )
+        item = build_event_summary_item(
+            turn_id='turn-0015',
+            ledger={
+                'provider': 'llm',
+                'summary_text': event,
+                'main_event_candidates': [{'text': event}],
+                'scene_shift': {'changed': False},
+            },
+            onstage_names=['驿卒'],
+        )
+
+        self.assertEqual(normalized['main_event'], event)
+        self.assertEqual(item['summary'], event)
+
     def test_event_summary_item_rejects_header_only_summary(self):
         item = build_event_summary_item(
             turn_id='turn-0012',

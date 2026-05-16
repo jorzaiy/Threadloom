@@ -335,11 +335,16 @@ def _looks_like_header_only_event(value: str) -> bool:
                      '官道', '小道', '河边', '溪边', '湖畔', '山脚', '山顶', '洞穴',
                      '营地', '帐篷', '城墙', '城门', '村口', '镇', '城', '寺', '庙')
     _SUBJECT_MARKERS = ('她', '他', '它', '我', '你', '主角', '众人', '对方')
+    _ACTION_MARKERS = ('起火', '燃起', '烧起', '倒塌', '坍塌', '爆炸', '响起', '传来', '出现',
+                       '站在', '坐在', '跪在', '躺在', '走进', '跑进', '冲进', '赶到', '追到',
+                       '抬手', '扣住', '推开', '拉开', '打向', '递给', '问起', '说道', '喊道', '看向', '盯着')
     non_time_parts = [p for p in parts if not _looks_like_date_or_time_anchor(p)]
     if not non_time_parts:
         return True
     for part in non_time_parts:
         if any(subj in part for subj in _SUBJECT_MARKERS):
+            return False
+        if any(marker in part for marker in _ACTION_MARKERS):
             return False
         is_loc = part.endswith(_LOC_SUFFIXES) or any(kw in part for kw in _LOC_KEYWORDS)
         if not is_loc:
