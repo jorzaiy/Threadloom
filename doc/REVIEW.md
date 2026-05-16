@@ -266,3 +266,44 @@
 3. **世界书预算参数暴露到 runtime.example.json** — 让用户可配置
 4. **keeper archive 反向引用** — keeper 决策时参考历史 archive 记录
 5. ~~**knowledge scope 系统**~~ — ✅ 已完成：`knowledge_scope` 字段已落地到 state，含 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`；当前语义为本轮 delta，长期知识由 `knowledge_records` 保存并去重，再由 narrator_input 渲染
+
+## 2026-05-16 header-only main_event 误判修复 + state_keeper 清理
+
+### 问题
+
+session `0a1f32` 中 `main_event` 和 thread label 反复出现"只有时间+地点、没有事件内容"的情况，例如：
+
+```
+景元三百二十七年四月初四，上午，青石驿站院子里。
+```
+
+### 根因
+
+`state_fragment.py` 的 `_looks_like_header_only_sentence()` 和 `state_bridge.py` 的 `_looks_like_header_only_event()` 使用简单子串匹配检测动词，地名中的字（如"驿站"的"站"）被误判为动词"站"，导致函数认为句子包含动作，放行了纯标头句子。
+
+问题传播链：
+1. narrator 回复以场景标头开头
+2. `extract_reply_skeleton()` 提取第一句作为 main_event 候选
+3. `_looks_like_header_only_sentence()` 误判放行
+4. 错误的 main_event 写入 state_fragment → baseline_state
+5. state_keeper fill 模式不覆盖已有 main_event → 错误值保留
+6. `thread_tracker` 用 main_event 覆盖 thread label
+
+### 修复
+
+将两个函数的判断逻辑从反向（"没有动词 → 是 header"）改为正向（"所有非时间 part 都匹配地点模式 → 是 header"），并增加主语代词排除。
+
+### state_keeper.py 清理
+
+同时清理了 `state_keeper.py` 中因反复修改积累的问题：
+
+| 问题 | 修复 |
+|------|------|
+| `_validate_knowledge_scope` 变量作用域 bug：内层 for 循环缩进错误，只验证最后一个 NPC 的 learned | 修正缩进 |
+| `STATE_KEEPER_SYSTEM`（旧版 prompt）完全未被引用 | 删除 |
+| try/except 后不可达 `break` | 删除 |
+| `_descriptor_signature` wrapper 从未被调用 | 删除 |
+| `_coerce_state_payload` 和 `_merge_keeper_fill` 双重 derive signals→risks/clues | 移除冗余 derive |
+| `call_skeleton_keeper` 中 `_skeleton_user_prompt()` 被调用两次 | 存入变量 |
+
+所有 235 个测试通过。

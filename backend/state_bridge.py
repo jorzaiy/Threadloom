@@ -325,13 +325,26 @@ def _looks_like_header_only_event(value: str) -> bool:
     if len(parts) < 2:
         return False
     has_time_anchor = any(_looks_like_date_or_time_anchor(part) for part in parts)
-    locationish = sum(1 for part in parts if part.endswith(('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '屋', '房', '店', '铺', '栈', '站', '院', '厅', '阁', '府', '宫', '殿', '街', '巷', '亭', '轩', '井', '墙', '山', '旁', '边', '口', '内', '外', '前', '后', '终点', '入口', '出口')))
-    action_verbs = ('说', '问', '答', '看', '望', '盯', '走', '跑', '冲', '停', '站', '坐', '拿', '递', '接', '推', '拉', '拦', '追', '躲', '示意', '宣布', '要求', '决定', '发现', '听见')
-    action_text = text
-    for place_word in ('跑道', '驿站', '客栈', '车站'):
-        action_text = action_text.replace(place_word, '')
-    has_action = any(verb in action_text for verb in action_verbs)
-    return bool(has_time_anchor and locationish >= 1 and not has_action)
+    if not has_time_anchor:
+        return False
+    _LOC_SUFFIXES = ('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '屋', '房',
+                     '店', '铺', '栈', '院', '厅', '阁', '府', '宫', '殿', '街', '巷',
+                     '亭', '轩', '井', '墙', '山', '旁', '边', '口', '内', '外', '前',
+                     '后', '里', '中', '上', '下', '终点', '入口', '出口')
+    _LOC_KEYWORDS = ('驿站', '客栈', '酒楼', '茶馆', '码头', '渡口', '集市', '广场',
+                     '官道', '小道', '河边', '溪边', '湖畔', '山脚', '山顶', '洞穴',
+                     '营地', '帐篷', '城墙', '城门', '村口', '镇', '城', '寺', '庙')
+    _SUBJECT_MARKERS = ('她', '他', '它', '我', '你', '主角', '众人', '对方')
+    non_time_parts = [p for p in parts if not _looks_like_date_or_time_anchor(p)]
+    if not non_time_parts:
+        return True
+    for part in non_time_parts:
+        if any(subj in part for subj in _SUBJECT_MARKERS):
+            return False
+        is_loc = part.endswith(_LOC_SUFFIXES) or any(kw in part for kw in _LOC_KEYWORDS)
+        if not is_loc:
+            return False
+    return True
 
 
 def _looks_like_date_or_time_anchor(value: str) -> bool:

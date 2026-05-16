@@ -59,40 +59,6 @@ class StateKeeperCallError(RuntimeError):
 
 
 
-STATE_KEEPER_SYSTEM = """你是 RP 结构化状态提取器，只做事实提取，不写叙事。
-
-只输出 JSON。
-
-核心字段：
-time, location, main_event,
-onstage_npcs, relevant_npcs,
-immediate_goal, carryover_signals。
-
-若输出 candidate_entities，最多输出 3 个，且每个 evidence 不超过 20 个字：
-[
-  {
-    "surface": "文本里出现的称呼或短描述",
-    "entity_type": "character | object | ambient_group",
-    "role_hint": "角色/物件/群体的功能提示",
-    "slot_hint": "conflict_target | pursuer | observer | key_object | ambient_group | unknown",
-    "confidence": 0.0,
-    "onstage": true,
-    "evidence": "触发判断的短证据"
-  }
-]
-
-若你无法稳定产出 candidate_entities，直接退回 scene_entities，不要强行凑满。
-
-规则：
-1. 优先尊重输入里的结构化状态锚点。
-2. 没有明确证据，不要把已有字段改回待确认。
-3. 只在正文明确表明人物存在、地点或时间已经发生变化时才改对应字段。
-4. 不编造新人物、新地点、新事件。
-5. character 才是人物；object 是关键物件；ambient_group 是背景群体。
-6. 如果是人物，优先判断它更接近哪个功能槽位：conflict_target / pursuer / observer。
-"""
-
-
 STATE_KEEPER_FILL_SYSTEM = """你是 RP 结构化状态补全器，只在既有骨架上补字段，不重写整份 state。
 
 只输出一个 JSON 对象，不要代码块，不要解释，不要额外文字。
@@ -1104,10 +1070,11 @@ def _restore_current_turn_onstage_marker(baseline_state: dict, state_fragment: d
 
 
 def call_skeleton_keeper(prev_state: dict, state_fragment: dict, narrator_reply: str, *, return_trace: bool = False):
-    reply_text, usage = call_role_llm('state_keeper_candidate', SKELETON_KEEPER_SYSTEM, _skeleton_user_prompt(prev_state, state_fragment, narrator_reply))
+    user_prompt = _skeleton_user_prompt(prev_state, state_fragment, narrator_reply)
+    reply_text, usage = call_role_llm('state_keeper_candidate', SKELETON_KEEPER_SYSTEM, user_prompt)
     if not isinstance(usage, dict):
         usage = {}
-    usage['prompt_chars'] = len(SKELETON_KEEPER_SYSTEM) + len(_skeleton_user_prompt(prev_state, state_fragment, narrator_reply))
+    usage['prompt_chars'] = len(SKELETON_KEEPER_SYSTEM) + len(user_prompt)
     payload = _normalize_skeleton_payload(parse_json_response(reply_text))
     if return_trace:
         return payload, usage, {
@@ -1189,9 +1156,9 @@ def _validate_knowledge_scope(payload: dict) -> None:
             learned = data.get('learned', [])
             if learned is not None and not isinstance(learned, list):
                 raise ValueError(f'knowledge_scope.npc_local.{name}.learned must be a list')
-        for idx, item in enumerate(learned or []):
-            if not isinstance(item, str):
-                raise ValueError(f'knowledge_scope.npc_local.{name}.learned[{idx}] must be a string')
+            for idx, item in enumerate(learned or []):
+                if not isinstance(item, str):
+                    raise ValueError(f'knowledge_scope.npc_local.{name}.learned[{idx}] must be a string')
 
 
 def _validate_npc_relationships(payload: dict) -> None:
@@ -1265,12 +1232,6 @@ def _coerce_state_payload(payload: dict, baseline_state: dict | None = None) -> 
         normalized['carryover_signals'] = _normalize_carryover_signals(normalized)
     else:
         normalized['carryover_signals'] = _derive_signals_from_legacy_lists(normalized)
-    if normalized.get('carryover_signals'):
-        derived_risks, derived_clues = _derive_risks_clues_from_signals(normalized['carryover_signals'])
-        if derived_risks:
-            normalized['immediate_risks'] = derived_risks
-        if derived_clues:
-            normalized['carryover_clues'] = derived_clues
     if 'knowledge_scope' in normalized:
         normalized['knowledge_scope'] = _coerce_knowledge_scope(normalized.get('knowledge_scope'))
     if 'scene_objective' in normalized:
@@ -1315,10 +1276,6 @@ def _coerce_candidate_entity_item(item) -> dict | None:
         'onstage': bool(item.get('onstage', item.get('present', False))),
         'evidence': str(item.get('evidence', '') or '').strip(),
     }
-
-
-def _descriptor_signature(name: str) -> str:
-    return entity_descriptor_signature(name)
 
 
 def _labels_compatible(left: str, right: str) -> bool:
@@ -1728,7 +1685,6 @@ def _call_state_keeper_llm(user_prompt: str, *, max_attempts: int = 2) -> tuple[
                 logger.warning('State-keeper returned unparsable output; retrying once')
                 prompt = user_prompt + '\n\n上一次输出无法解析。请重新输出严格 JSON 对象；不要解释，不要代码块，不要在 JSON 前后添加文字。'
                 continue
-            break
         if attempt == 1:
             logger.warning('State-keeper returned empty output; retrying once')
     final_usage = usage if isinstance(usage, dict) else {}
