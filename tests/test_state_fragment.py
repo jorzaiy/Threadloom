@@ -162,6 +162,7 @@ class StateFragmentTest(unittest.TestCase):
             'time': '中午',
             'location': '训练场',
             'main_event': '主角继续谈判。',
+            'graveyard_objects': [{'object_id': 'obj_01', 'label': '旧木牌', 'lifecycle_status': 'destroyed'}],
             'scene_objective': {
                 'label': '第二轮训练',
                 'objective': '测试资源争夺和规则判断',
@@ -172,6 +173,7 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(snapshot['scene_objective']['label'], '第二轮训练')
         self.assertEqual(snapshot['scene_objective']['objective'], '测试资源争夺和规则判断')
         self.assertEqual(snapshot['scene_objective']['status'], 'active')
+        self.assertEqual(snapshot['graveyard_objects'][0]['object_id'], 'obj_01')
 
     def test_keeper_fill_prompt_requires_missing_scene_objective(self):
         prompt = _fill_user_prompt(
@@ -468,6 +470,28 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['tracked_objects'][0]['label'], '油纸包饼')
         self.assertEqual(normalized['possession_state'][0]['status'], 'saved')
         self.assertEqual(normalized['object_visibility'][0]['visibility'], 'private')
+
+    def test_tracked_object_aliases_survive_normalization_and_object_heavy_detection(self):
+        state = {
+            'time': '午后',
+            'location': '茶棚外',
+            'main_event': '主角把小青收回怀里。',
+            'tracked_objects': [
+                {
+                    'object_id': 'obj_01',
+                    'label': '青玉小剑',
+                    'aliases': ['小青', '青剑'],
+                    'kind': 'weapon',
+                    'story_relevant': True,
+                },
+            ],
+            'possession_state': [{'object_id': 'obj_01', 'holder': '主角', 'status': 'carried', 'location': '怀里'}],
+        }
+
+        normalized = normalize_state_dict(state, prev_state={})
+
+        self.assertEqual(normalized['tracked_objects'][0]['aliases'], ['小青', '青剑'])
+        self.assertTrue(_is_object_heavy_turn('把小青收起', '主角把小青放进怀里。', normalized))
 
     def test_consumed_mundane_object_moves_to_graveyard_not_active(self):
         prev = {

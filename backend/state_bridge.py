@@ -2194,6 +2194,9 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             'kind': str(item.get('kind', '') or 'item').strip() or 'item',
             'story_relevant': bool(item.get('story_relevant', True)),
         }
+        aliases = [str(alias or '').strip() for alias in (item.get('aliases', []) or []) if str(alias or '').strip()]
+        if aliases:
+            normalized_item['aliases'] = list(dict.fromkeys(aliases))[:8]
         if lifecycle_status in {'consumed', 'destroyed', 'lost', 'archived'}:
             normalized_item['lifecycle_status'] = lifecycle_status
             normalized_item['lifecycle_reason'] = str(item.get('lifecycle_reason', '') or '').strip()

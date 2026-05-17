@@ -472,6 +472,7 @@ def build_state_snapshot(state: dict) -> dict:
         'immediate_risks': state.get('immediate_risks', []),
         'carryover_clues': state.get('carryover_clues', []),
         'tracked_objects': state.get('tracked_objects', []),
+        'graveyard_objects': state.get('graveyard_objects', []),
         'possession_state': state.get('possession_state', []),
         'object_visibility': state.get('object_visibility', []),
         'actors': state.get('actors', {}),
