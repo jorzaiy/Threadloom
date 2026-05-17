@@ -310,6 +310,11 @@ PERSON_ALIAS_SUFFIXES = (
     '教官', '助教', '老师', '教员', '先生', '小姐', '女士', '夫人', '长官', '队长', '主管',
 )
 
+ROLE_FUNCTION_TERMS = (
+    '掌柜', '老板', '老板娘', '店主', '掌柜的', '伙计', '小二', '账房', '管事', '门房', '侍者',
+    '店员', '摊主', '老掌柜', '掌柜娘子', '柜台', '拨算盘', '算盘', '收钱', '结账', '钥匙',
+)
+
 NON_ALIAS_SUFFIXES = (
     '馆', '柜台', '窗口', '日志', '编号', '代码', '排序', '机位', '模块', '组件', '系统', '终端',
     '文件', '文件夹', '文件袋', '地图', '档案', '名单', '公司', '区域', '教室', '楼层', '走廊',
@@ -373,6 +378,43 @@ def _is_descriptive_actor_name(value: str) -> bool:
     if not name:
         return False
     return any(hint in name for hint in GENERIC_ACTOR_HINTS) or any(name.endswith(suffix) for suffix in PERSON_ALIAS_SUFFIXES)
+
+
+def _actor_role_terms(actor: dict, terms: tuple[str, ...]) -> set[str]:
+    text = ' '.join(str(actor.get(key, '') or '') for key in ('name', 'appearance', 'identity'))
+    text += ' ' + ' '.join(str(alias or '') for alias in actor.get('aliases', []) or [])
+    return {term for term in terms if term and term in text}
+
+
+def _actor_function_terms(actor: dict) -> set[str]:
+    terms = _actor_role_terms(actor, ROLE_FUNCTION_TERMS)
+    if '掌柜' in terms:
+        terms.update({'柜台', '账房', '收钱', '结账'})
+    if '老板娘' in terms:
+        terms.update({'老板', '掌柜', '柜台', '收钱', '结账'})
+    if '老板' in terms:
+        terms.update({'掌柜', '柜台', '收钱', '结账'})
+    if '柜台' in terms:
+        terms.update({'账房', '收钱', '结账'})
+    if '拨算盘' in terms or '算盘' in terms:
+        terms.update({'账房', '柜台', '收钱', '结账'})
+    return terms
+
+
+def _descriptive_role_overlap(left: dict, right: dict) -> bool:
+    left_names = _actor_names(left)
+    right_names = _actor_names(right)
+    if not any(_is_descriptive_actor_name(name) for name in left_names | right_names):
+        return False
+    left_functions = _actor_function_terms(left)
+    right_functions = _actor_function_terms(right)
+    if not left_functions or not right_functions:
+        return False
+    if left_functions & right_functions:
+        return True
+    left_text = ' '.join(str(left.get(key, '') or '') for key in ('name', 'appearance', 'identity'))
+    right_text = ' '.join(str(right.get(key, '') or '') for key in ('name', 'appearance', 'identity'))
+    return bool(('柜台' in left_text and '掌柜' in right_text) or ('掌柜' in left_text and '柜台' in right_text))
 
 
 def _clean_actor_aliases(aliases: list[str], actor_name: str = '') -> list[str]:
@@ -606,6 +648,8 @@ def _extract_actor_candidates_with_llm(existing_actors: dict, narrator_reply: st
             'actor_id': actor.get('actor_id'),
             'name': actor.get('name'),
             'aliases': actor.get('aliases', []),
+            'appearance': actor.get('appearance', ''),
+            'identity': actor.get('identity', ''),
         })
     user_prompt = json.dumps({
         'existing_locked_actors': existing[:40],
@@ -650,6 +694,15 @@ def _candidate_overlaps_existing_actor(candidate: dict, actors: dict, state: dic
     for actor in actors.values():
         if isinstance(actor, dict) and any(_actor_name_matches(actor, name) for name in names):
             return True
+        if isinstance(actor, dict):
+            candidate_actor = {
+                'name': candidate.get('name', ''),
+                'aliases': candidate.get('aliases', []),
+                'appearance': candidate.get('appearance', ''),
+                'identity': candidate.get('identity', ''),
+            }
+            if _descriptive_role_overlap(candidate_actor, actor):
+                return True
     for entity in state.get('scene_entities', []) or []:
         if not isinstance(entity, dict):
             continue
