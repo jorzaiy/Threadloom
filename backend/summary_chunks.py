@@ -57,6 +57,21 @@ GENERIC_KEYWORD_TOKENS = {
     '时候', '地方', '位置', '周围', '对方', '什么', '起来', '下来', '过去', '出来', '进去',
 }
 
+WEAK_KEYWORD_EDGES = tuple('在把被将和与及向从对给为于的了着过里中上下前后时')
+
+BAD_KEYWORD_SUBSTRINGS = (
+    '发现', '站在', '看着', '想着', '抓住', '触到', '落进', '没有', '前往', '位于',
+    '朝着', '仍朝', '疑似', '暗示', '打算', '声音', '一触', '那截', '缝里',
+    '角色在', '人影朝', '再次观察', '墙上的', '返回', '正跟', '画占', '朝灵田',
+    '贴了', '内容是',
+)
+
+KEYWORD_ENTITY_PATTERNS = (
+    r'(?:青布短衫人|灰袍散修|灰袍人|提灯人|脚夫|伙计|掌柜|教官)',
+    r'(?:苍梧城|苍梧岭|城主府|茶肆|客栈|灵田|松林|灌木丛|凹地|旧摊|西市)',
+    r'(?:吸灵螺|螺旋壳|病壳|大壳|管壁|短剑|须子|脚印|黑影|泥坑|泥地|榜文|图册|飞行符|隐灵符|镇魂符)',
+)
+
 
 def _turn_pairs(history: list[dict]) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
@@ -83,6 +98,14 @@ def _keyword_quality(value: str) -> bool:
         return False
     if len(text) < 2 or len(text) > 12:
         return False
+    if text[0] in WEAK_KEYWORD_EDGES or text[-1] in WEAK_KEYWORD_EDGES:
+        return False
+    if any(part in text for part in BAD_KEYWORD_SUBSTRINGS):
+        return False
+    if '陆小环' in text and text != '陆小环':
+        return False
+    if any(mark in text for mark in ('着', '把', '被', '将', '给', '与')):
+        return False
     if any(mark in text for mark in ('，', '。', '！', '？', '：', '；', '“', '”', '…')):
         return False
     if any(mark in text for mark in ('（', '）', '(', ')', '、')):
@@ -92,9 +115,11 @@ def _keyword_quality(value: str) -> bool:
 
 def _extract_keyword_candidates(text: str) -> list[str]:
     candidates: list[str] = []
-    for match in re.findall(r'[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?', text):
+    for match in re.findall(r'[《“「『]?([\u4e00-\u9fff]{2,12})(?:[》”」』])', text):
         candidates.append(match)
-    for phrase in re.findall(r'[\u4e00-\u9fff]{2,8}(?:训练|考核|提问|回答|追问|搜查|线索|风险|异常|转场|冲突|观察|检查|调查)[\u4e00-\u9fff]{0,4}', text):
+    for pattern in KEYWORD_ENTITY_PATTERNS:
+        candidates.extend(re.findall(pattern, text))
+    for phrase in re.findall(r'[\u4e00-\u9fff]{2,8}(?:训练|考核|提问|回答|追问|搜查|线索|风险|异常|转场|冲突|观察|检查|调查|探查|救治|喂食|悬赏|逃离|躲避)[\u4e00-\u9fff]{0,4}', text):
         candidates.append(phrase)
     return candidates
 

@@ -329,11 +329,13 @@ def _looks_like_header_only_event(value: str) -> bool:
         return False
     _LOC_SUFFIXES = ('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '屋', '房',
                      '店', '铺', '栈', '院', '厅', '阁', '府', '宫', '殿', '街', '巷',
-                     '亭', '轩', '井', '墙', '山', '旁', '边', '口', '内', '外', '前',
+                     '亭', '轩', '井', '墙', '山', '岭', '坡', '林', '丛', '地', '谷',
+                     '崖', '洞', '坳', '畔', '岸', '旁', '边', '口', '内', '外', '前',
                      '后', '里', '中', '上', '下', '终点', '入口', '出口')
     _LOC_KEYWORDS = ('驿站', '客栈', '酒楼', '茶馆', '码头', '渡口', '集市', '广场',
                      '官道', '小道', '河边', '溪边', '湖畔', '山脚', '山顶', '洞穴',
-                     '营地', '帐篷', '城墙', '城门', '村口', '镇', '城', '寺', '庙')
+                     '营地', '帐篷', '城墙', '城门', '村口', '镇', '城', '寺', '庙',
+                     '人界', '修仙界', '魔界', '妖界', '灌木丛', '松林')
     _SUBJECT_MARKERS = ('她', '他', '它', '我', '你', '主角', '众人', '对方')
     _ACTION_MARKERS = ('起火', '燃起', '烧起', '倒塌', '坍塌', '爆炸', '响起', '传来', '出现',
                        '站在', '坐在', '跪在', '躺在', '走进', '跑进', '冲进', '赶到', '追到',
@@ -1333,6 +1335,12 @@ def _merge_tracked_objects(prev_objects: list[dict], candidate_objects: list[dic
             merged_item['label'] = stable_label
             merged_item['kind'] = _prefer_stable_object_kind(candidate.get('kind'), prev.get('kind'))
             merged_item['story_relevant'] = bool(candidate.get('story_relevant', prev.get('story_relevant', True)))
+            # Merge aliases: combine prev + candidate, dedupe
+            prev_aliases = [str(a).strip() for a in (prev.get('aliases', []) or []) if str(a).strip()]
+            cand_aliases = [str(a).strip() for a in (candidate.get('aliases', []) or []) if str(a).strip()]
+            combined_aliases = list(dict.fromkeys(prev_aliases + cand_aliases))
+            if combined_aliases:
+                merged_item['aliases'] = combined_aliases
             lifecycle_status = str(candidate.get('lifecycle_status', prev.get('lifecycle_status', 'active')) or 'active').strip() or 'active'
             if lifecycle_status in {'consumed', 'destroyed', 'lost', 'archived'}:
                 merged_item['lifecycle_status'] = lifecycle_status

@@ -298,6 +298,46 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertEqual(normalized['main_event'], '主角在驿站向驿卒询问渡口车马。')
 
+    def test_plain_xianxia_scene_header_does_not_replace_main_event(self):
+        reply = '九幽历三千七百二十一年·孟秋初四 清晨，人界·苍梧岭北坡灌木丛。\n\n短剑插下去，剑尖没入泛暗光的泥面。'
+
+        skeleton = extract_reply_skeleton(reply)
+        normalized = normalize_state_dict(
+            {
+                'time': '清晨',
+                'location': '苍梧岭北坡灌木丛',
+                'main_event': '九幽历三千七百二十一年·孟秋初四 清晨，人界·苍梧岭北坡灌木丛。',
+                'immediate_goal': '探查泥土暗光与壳的关联。',
+            },
+            prev_state={
+                'main_event': '主角用短剑试探发光泥地。',
+                'immediate_goal': '探查泥土暗光与壳的关联。',
+            },
+        )
+
+        self.assertEqual(skeleton['time'], '清晨')
+        self.assertEqual(skeleton['location'], '人界·苍梧岭北坡灌木丛')
+        self.assertEqual(skeleton['main_event'], '短剑插下去，剑尖没入泛暗光的泥面。')
+        self.assertEqual(normalized['main_event'], '主角用短剑试探发光泥地。')
+
+    def test_plain_xianxia_action_at_location_is_not_header_only(self):
+        event = '九幽历三千七百二十一年·孟秋初四 清晨，人界·苍梧岭北坡灌木丛中传来脚步声。'
+
+        normalized = normalize_state_dict(
+            {
+                'time': '清晨',
+                'location': '苍梧岭北坡灌木丛',
+                'main_event': event,
+                'immediate_goal': '判断脚步声来源。',
+            },
+            prev_state={
+                'main_event': '主角用短剑试探发光泥地。',
+                'immediate_goal': '探查泥土暗光与壳的关联。',
+            },
+        )
+
+        self.assertEqual(normalized['main_event'], event)
+
     def test_location_subject_event_is_not_header_only(self):
         event = '景和三年四月初四，上午，驿站起火。'
 

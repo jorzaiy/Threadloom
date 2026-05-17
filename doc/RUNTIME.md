@@ -192,10 +192,10 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 
 写回管线的 LLM 调用策略：
 
-- **skeleton keeper**：每轮提取 5 个核心字段（time/location/main_event/onstage_npcs/goal）。在 fill 轮次（合并轮/首轮/bootstrap/物件密集轮）自动跳过，因为 fill keeper 的输出已覆盖所有 skeleton 字段。
-- **state keeper fill**：每 N 轮（默认 3）做一次完整状态提取，补充 scene_objective、signals、objects、knowledge_scope，以及有正文证据的 NPC 与主角关系标签。
+- **skeleton keeper**：每轮提取 5 个核心字段（time/location/main_event/onstage_npcs/goal）。始终运行（包括 fill 轮次），确保 onstage_npcs 每轮都由 LLM 从正文中提取，不会因 fill keeper 跳过而丢失在场人物。
+- **state keeper fill**：每 N 轮（默认 3）做一次完整状态提取，补充 scene_objective、signals、objects、knowledge_scope，以及有正文证据的 NPC 与主角关系标签。当 fill 轮次为物件密集轮（`object_heavy_turn`）且 fill keeper 未输出 `possession_state` 时，会自动触发一次 focused possession retry（专用 LLM prompt 只问物品状态变化），防止跨场景长回复中物品位置遗漏。当 fill keeper 输出 `scene_objective.status=resolved` 时，`immediate_goal` 会被自动重置为"待确认"，由下一轮 skeleton 重新填充。
 - **actor registry**：每轮从叙事中提取新角色候选。
-- **event ledger**：每轮生成事件摘要，并从 narrator 回复头或当前 state 记录 `time_anchor/location_anchor`。在 fill 轮次直接复用 state_keeper 的 signal 输出（main_event/risks/clues），跳过独立 LLM 调用。
+- **event ledger**：每轮生成事件摘要，并从 narrator 回复头或当前 state 记录 `time_anchor/location_anchor`。在 fill 轮次直接复用 state_keeper 的 signal 输出（main_event/risks/clues），跳过独立 LLM 调用。事件摘要的 `actors` 字段除了从 `onstage_npcs` 匹配外，还会从 actors registry 中提取在 narrator reply 中出现的 NPC 名字，避免因 onstage 列表不完整而丢失参与者。
 - **summary chunks**：每 12 轮生成历史分块摘要，并记录该固定窗口的 `time_start/time_end`，让长程召回保留事件时间范围。
 
 名称规范化只在 actor_registry 绑定后由 `memory_maintenance` 统一执行一次，state_keeper 内部不再做独立的 semantic_cleanup。
@@ -206,6 +206,8 @@ NPC 与主角关系由 fill keeper 通过 `npc_relationships` 只输出本轮增
 
 物件状态采用“本轮明确事实覆盖旧账本”的口径。fill keeper 若看到已有物件被重新包好、放下、转交、收起或换位置，应输出同一 `object_id` 的最新 `possession_state`；归一化层会按 `object_id` 合并，并在当前场景已经显示主角携带/收起某物时，清掉明显过期的旧场景落点（如仍写在水里、桌上、床边），避免旧位置继续污染下一轮。
 
+
+`tracked_objects` 支持 `aliases` 字段：当 narrator 正文中出现物件的昵称或简称（如主角给物件起的名字），fill keeper 会将其记入 `aliases` 数组。selector 和 `_is_object_heavy_turn` 在匹配物件时同时检查 label 和 aliases，确保即使 narrator 使用别名也能正确触发物件相关逻辑。aliases 只记录稳定的专有称呼，不记录代词或集体名词。
 事件时间轴不是新的剧情事实来源，只把已经出现在 narrator 回复头或当前 state 中的时间/地点结构化保存。`event_summaries[].time_anchor` 用于 narrator prompt 的 `【事件时间轴】`，提醒模型按事件自身时间承接旧事；缺失时间只表示未记录，不允许模型自行补成“昨天/刚才”。`summary_chunks[].time_start/time_end` 记录固定 12 轮窗口的起止叙事时间，供远期摘要召回时维持时间顺序。
 
 `scene_objective` 是当前事件/场景段的稳定目标，区别于每轮可变的 `immediate_goal`。它回答“这一段事件为什么存在、围绕什么测试或推进”，例如训练段的资源争夺、规则理解或风险控制；`immediate_goal` 仍只表示主角下一拍要处理的事。fill keeper 只在目标缺失、明确新事件开启或旧事件明确结束时更新；普通对白、观察、移动和短暂心理变化应沿用当前目标。narrator 只读取 active objective，用它约束本轮不要偏离事件主轴。

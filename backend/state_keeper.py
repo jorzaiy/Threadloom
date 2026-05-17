@@ -169,6 +169,7 @@ time, location, main_event, onstage_npcs, immediate_goal 已经是固定骨架�
 15. 若物件既没有明确持有者，也没有明确场景落点（如桌上、柜台上、地上、床边、窗边、桶里、门后），默认不要写入物件层。
 16. 若物件被明确消耗、摧毁、遗失或退出追踪，在 tracked_objects 中输出原 object_id/label，并写 lifecycle_status: consumed|destroyed|lost|archived；不要直接删除。
 17. 若本轮明确改变了已有物件的持有、位置或物理状态，必须输出同一 object_id 的完整最新 `possession_state`；本轮事实优先覆盖旧状态，不要沿用已经过期的位置描述。
+18. 若正文中出现已追踪物件的昵称、简称或别名（如主角给物件起的名字），在该物件的 `tracked_objects` 条目中输出 `aliases` 数组。只记录稳定的专有称呼，不记录代词（它、这个）或集体名词（三只壳、那些东西）。
 """
 
 
@@ -1753,3 +1754,53 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
             'retry_count': max(0, attempts - 1),
         }
     return new_state
+
+
+POSSESSION_RETRY_SYSTEM = """你是物品状态提取器。从叙事正文中提取物品的持有、位置和状态变化。
+只输出一个 JSON 对象，不要代码块，不要解释。
+
+只允许字段：possession_state, object_visibility。
+
+possession_state 格式：
+[
+  {"object_id": "已有ID", "holder": "持有者名", "status": "当前物理状态短描述", "location": "当前位置"}
+]
+
+规则：
+- 只输出本轮正文中明确发生变化的物品。
+- 若物品被放下、交出、收起、转移、遗失，必须输出新的 holder/location/status。
+- holder 必须是人物名或"无"（放在某处无人持有时）。
+- 若无物品状态变化，输出空对象 {}。
+"""
+
+
+def retry_possession_keeper(narrator_reply: str, tracked_objects: list, possession_state: list, user_text: str = '') -> dict | None:
+    """Focused retry: ask LLM specifically about possession changes when main keeper missed them."""
+    import json as _json
+    objects_summary = _json.dumps(
+        [{'object_id': obj.get('object_id'), 'label': obj.get('label'), 'owner': obj.get('owner', ''), 'possession_status': obj.get('possession_status', '')}
+         for obj in (tracked_objects or []) if isinstance(obj, dict) and obj.get('object_id')],
+        ensure_ascii=False, indent=2
+    )
+    prompt = f"""当前追踪物品：
+{objects_summary}
+
+本轮叙事正文：
+{narrator_reply}
+"""
+    if user_text.strip():
+        prompt += f"\n本轮玩家输入：\n{user_text.strip()}\n"
+    prompt += "\n请检查正文中是否有物品的持有、位置或状态发生变化。若有，输出 possession_state；若无变化，输出 {}。"
+
+    try:
+        reply_text, usage = call_role_llm('state_keeper_candidate', POSSESSION_RETRY_SYSTEM, prompt)
+        if not str(reply_text or '').strip():
+            return None
+        payload = _json.loads(str(reply_text).strip().lstrip('```json').lstrip('```').rstrip('```').strip())
+        if not isinstance(payload, dict):
+            return None
+        if not payload.get('possession_state'):
+            return None
+        return {'payload': payload, 'usage': usage, 'raw_reply': reply_text}
+    except Exception:
+        return None

@@ -411,7 +411,7 @@ def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_sta
         return fallback
 
 
-def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[str], tracked_objects: list[dict] | None = None, carryover_clues: list[str] | None = None, time_anchor: str = '', location_anchor: str = '') -> dict:
+def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[str], tracked_objects: list[dict] | None = None, carryover_clues: list[str] | None = None, time_anchor: str = '', location_anchor: str = '', narrator_reply: str = '', actors_registry: dict | None = None) -> dict:
     summary = _normalize(str(ledger.get('summary_text', '') or ''))
     if _looks_like_header_only_event(summary):
         summary = ''
@@ -437,6 +437,33 @@ def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[
         ]
     actor_source_text = ' '.join([summary] + normalized_clues)
     actors = [name for name in onstage_names[:3] if name and name in actor_source_text]
+    # Fallback: extract actors from narrator_reply via actors_registry if onstage_names missed them
+    if len(actors) < 3 and actors_registry and narrator_reply:
+        actor_names_seen = set(actors)
+        for actor_id, actor in (actors_registry or {}).items():
+            if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
+                continue
+            name = str(actor.get('name', '') or '').strip()
+            if not name or name in actor_names_seen:
+                continue
+            if name in narrator_reply and name in actor_source_text:
+                actors.append(name)
+                actor_names_seen.add(name)
+                if len(actors) >= 3:
+                    break
+        # If still empty, check narrator_reply directly (not just actor_source_text)
+        if not actors:
+            for actor_id, actor in (actors_registry or {}).items():
+                if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
+                    continue
+                name = str(actor.get('name', '') or '').strip()
+                if not name or name in actor_names_seen:
+                    continue
+                if name in narrator_reply:
+                    actors.append(name)
+                    actor_names_seen.add(name)
+                    if len(actors) >= 3:
+                        break
 
     return {
         'event_id': f'evt_{turn_id[-4:]}',

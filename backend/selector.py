@@ -368,7 +368,17 @@ def build_npc_roster(*, onstage: list[str], relevant: list[str], active_threads:
 def summary_chunk_hits(summary_chunks: list[dict], *, recent_history: list[dict], user_text: str = '', tracked_objects: list[dict] | None = None, knowledge_records: list[dict] | None = None) -> list[dict]:
     recent_text = joined_recent_text(recent_history)
     query_text = '\n'.join([recent_text, str(user_text or '')])
-    object_labels = [str(item.get('label', '') or '').strip() for item in (tracked_objects or []) if isinstance(item, dict) and str(item.get('label', '') or '').strip()]
+    object_labels = []
+    for item in (tracked_objects or []):
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get('label', '') or '').strip()
+        if label:
+            object_labels.append(label)
+        for alias in (item.get('aliases', []) or []):
+            a = str(alias or '').strip()
+            if a and a not in object_labels:
+                object_labels.append(a)
     knowledge_texts = [str(item.get('text', '') or '').strip() for item in (knowledge_records or []) if isinstance(item, dict) and str(item.get('text', '') or '').strip()]
     weak_mundane_query = _looks_like_weak_mundane_query(user_text)
     hits = []

@@ -9,11 +9,13 @@ try:
     from .state_bridge import coarsen_current_time
     from .state_bridge import normalize_text_list
     from .state_bridge import normalize_state_dict
+    from .state_bridge import _looks_like_header_only_event
 except ImportError:
     from arbiter_state import merge_arbiter_state
     from state_bridge import coarsen_current_time
     from state_bridge import normalize_text_list
     from state_bridge import normalize_state_dict
+    from state_bridge import _looks_like_header_only_event
 
 
 def _dedupe_names(items, limit: int = 6) -> list[str]:
@@ -29,40 +31,7 @@ def _dedupe_names(items, limit: int = 6) -> list[str]:
 
 
 def _looks_like_header_only_sentence(value: str) -> bool:
-    text = re.sub(r'\s+', '', str(value or '')).strip('。！？!?*_`#>【】[]（）()')
-    if not text:
-        return True
-    parts = [part for part in re.split(r'[，,、]', text) if part]
-    if len(parts) < 2:
-        return False
-    has_time_anchor = any(_looks_like_date_or_time_anchor(part) for part in parts)
-    if not has_time_anchor:
-        return False
-    # Positive check: every non-time part looks like a pure location token.
-    _LOC_SUFFIXES = ('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '院', '厅',
-                     '阁', '府', '宫', '殿', '街', '巷', '亭', '轩', '井', '墙', '山',
-                     '旁', '边', '口', '内', '外', '前', '后', '里', '中', '上', '下',
-                     '终点', '入口', '出口')
-    _LOC_KEYWORDS = ('驿站', '客栈', '酒楼', '茶馆', '码头', '渡口', '集市', '广场',
-                     '官道', '小道', '河边', '溪边', '湖畔', '山脚', '山顶', '洞穴',
-                     '营地', '帐篷', '城墙', '城门', '村口', '镇', '城', '寺', '庙')
-    # Parts containing subject pronouns or action phrases are not pure locations.
-    _SUBJECT_MARKERS = ('她', '他', '它', '我', '你', '主角', '众人', '对方')
-    _ACTION_MARKERS = ('起火', '燃起', '烧起', '倒塌', '坍塌', '爆炸', '响起', '传来', '出现',
-                       '站在', '坐在', '跪在', '躺在', '走进', '跑进', '冲进', '赶到', '追到',
-                       '抬手', '扣住', '推开', '拉开', '打向', '递给', '问起', '说道', '喊道', '看向', '盯着')
-    non_time_parts = [p for p in parts if not _looks_like_date_or_time_anchor(p)]
-    if not non_time_parts:
-        return True
-    for part in non_time_parts:
-        if any(subj in part for subj in _SUBJECT_MARKERS):
-            return False
-        if any(marker in part for marker in _ACTION_MARKERS):
-            return False
-        is_loc = part.endswith(_LOC_SUFFIXES) or any(kw in part for kw in _LOC_KEYWORDS)
-        if not is_loc:
-            return False
-    return True
+    return _looks_like_header_only_event(value)
 
 
 def _looks_like_date_or_time_anchor(value: str) -> bool:
@@ -208,6 +177,21 @@ def extract_reply_skeleton(narrator_reply: str) -> dict:
                 skeleton['time'] = coarsen_current_time(token)
             else:
                 skeleton['location'] = token
+
+    if not header_match:
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), '')
+        first_sentence_match = re.match(r'(.{8,120}?[。！？!?])', first_line)
+        first_sentence = first_sentence_match.group(1).strip() if first_sentence_match else ''
+        if first_sentence and _looks_like_header_only_sentence(first_sentence):
+            body = text.replace(first_sentence, '', 1).strip()
+            header = first_sentence.strip('。！？!?*_`#>【】[]（）()')
+            parts = [part.strip() for part in re.split(r'[，,、]', header) if part.strip()]
+            time_parts = [part for part in parts if _looks_like_date_or_time_anchor(part)]
+            location_parts = [part for part in parts if not _looks_like_date_or_time_anchor(part)]
+            if time_parts:
+                skeleton['time'] = coarsen_current_time(time_parts[-1])
+            if location_parts:
+                skeleton['location'] = location_parts[-1]
 
     paragraphs = [line.strip() for line in body.splitlines() if line.strip()]
     first = ''

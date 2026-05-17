@@ -24,7 +24,7 @@ try:
     from .narrator_input import build_narrator_input, prompt_block_stats
     from .paths import normalize_session_id
     from .state_fragment import build_state_fragment, build_state_from_fragment, merge_reply_skeleton
-    from .state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
+    from .state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled, retry_possession_keeper
     from .persona_updater import update_persona
     from .state_fragment import merge_state_skeleton
     from .event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
@@ -49,7 +49,7 @@ except ImportError:
     from narrator_input import build_narrator_input, prompt_block_stats
     from paths import normalize_session_id
     from state_fragment import build_state_fragment, build_state_from_fragment, merge_reply_skeleton
-    from state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled
+    from state_keeper import StateKeeperCallError, call_state_keeper, call_skeleton_keeper, skeleton_keeper_enabled, retry_possession_keeper
     from persona_updater import update_persona
     from state_fragment import merge_state_skeleton
     from event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
@@ -63,6 +63,8 @@ OBJECT_TRANSFER_TERMS = (
     '递给', '交给', '塞给', '接过', '拿走', '夺过', '收走', '放下', '放回', '搁下', '摆回',
     '收起', '亮出', '摸出', '掏出', '握住', '拿起', '取出', '归还', '还给', '落到', '交回',
 )
+
+
 
 
 def _trim_trace_text(text: str, limit: int = TRACE_PROMPT_LIMIT) -> str:
@@ -337,7 +339,17 @@ def _is_object_heavy_turn(user_text: str, reply: str, state: dict, state_fragmen
         combined += '\n' + ' '.join(str(item.get('text', '') if isinstance(item, dict) else item) for item in (state_fragment.get('carryover_signals', []) or []))
     if not any(term in combined for term in OBJECT_TRANSFER_TERMS):
         return False
-    labels = [str(item.get('label', '') or '').strip() for item in (state.get('tracked_objects', []) or []) if isinstance(item, dict) and str(item.get('label', '') or '').strip()]
+    labels = []
+    for item in (state.get('tracked_objects', []) or []):
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get('label', '') or '').strip()
+        if label:
+            labels.append(label)
+        for alias in (item.get('aliases', []) or []):
+            a = str(alias or '').strip()
+            if a:
+                labels.append(a)
     if labels and any(label in combined for label in labels):
         return True
     return False
@@ -906,7 +918,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     is_consolidation_turn = consolidate_every > 0 and current_turn_num % consolidate_every == 0
     force_full_keeper_for_objects = _is_object_heavy_turn(text, reply, state, state_fragment)
     _will_run_fill = is_first_turn or needs_keeper_bootstrap or is_consolidation_turn or force_full_keeper_for_objects
-    should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and (not is_first_turn) and (not needs_keeper_bootstrap) and (not _will_run_fill)
+    should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and (not is_first_turn) and (not needs_keeper_bootstrap)
     if should_run_skeleton:
         try:
             skeleton_result = call_skeleton_keeper(state, state_fragment, reply, return_trace=True)
@@ -941,7 +953,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'model_usage': None,
             'fallback_used': False,
             'fallback_reason': None,
-            'skipped_reason': 'full state_keeper fill covers all fields' if _will_run_fill else f'non-skeleton turn ({current_turn_num}/{skeleton_every})',
+            'skipped_reason': 'skeleton_keeper disabled or incomplete reply',
             'skeleton_every_turns': skeleton_every,
         }
     turn_trace['runtime']['skeleton_keeper'] = {
@@ -1040,6 +1052,47 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'trace': copy.deepcopy(state_keeper_trace),
         'state_error': state_error,
     }
+
+    # --- Fix 5: retry possession extraction when object_heavy_turn but keeper missed it ---
+    if force_full_keeper_for_objects and completion_status == 'complete' and not state_error:
+        keeper_payload = state_keeper_trace.get('payload', {}) if isinstance(state_keeper_trace, dict) else {}
+        if not keeper_payload.get('possession_state'):
+            retry_result = retry_possession_keeper(
+                reply,
+                state.get('tracked_objects', []),
+                state.get('possession_state', []),
+                user_text=text,
+            )
+            if retry_result and retry_result.get('payload', {}).get('possession_state'):
+                from copy import deepcopy as _dc
+                retry_items = retry_result['payload']['possession_state']
+                possession = list(state.get('possession_state', []) or [])
+                existing_map = {str(item.get('object_id', '')): i for i, item in enumerate(possession) if isinstance(item, dict)}
+                for item in retry_items:
+                    if not isinstance(item, dict) or not item.get('object_id'):
+                        continue
+                    idx = existing_map.get(item['object_id'])
+                    if idx is not None:
+                        for k in ('holder', 'status', 'location'):
+                            if item.get(k):
+                                possession[idx][k] = item[k]
+                        possession[idx]['updated_by_turn'] = 'turn_current'
+                    else:
+                        possession.append(item)
+                state['possession_state'] = possession
+                if isinstance(state_keeper_diagnostics, dict):
+                    state_keeper_diagnostics['possession_retry'] = True
+
+    # --- Fix 2: reset stale immediate_goal when scene_objective is resolved ---
+    scene_obj = state.get('scene_objective', {}) if isinstance(state.get('scene_objective'), dict) else {}
+    keeper_payload = state_keeper_trace.get('payload', {}) if isinstance(state_keeper_trace, dict) else {}
+    keeper_scene_obj = keeper_payload.get('scene_objective', {}) if isinstance(keeper_payload.get('scene_objective'), dict) else {}
+    # Only trigger when keeper explicitly marked it resolved this turn
+    if keeper_scene_obj.get('status') == 'resolved' and scene_obj.get('status') == 'resolved':
+        current_goal = str(state.get('immediate_goal', '') or '').strip()
+        if current_goal and current_goal != '待确认':
+            state['immediate_goal'] = '待确认'
+
     turn_trace['runtime']['state_after_keeper'] = copy.deepcopy(state)
     append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply, 'completion_status': completion_status})
     state = merge_arbiter_state(state, arbiter)
@@ -1097,6 +1150,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         carryover_clues=state.get('carryover_clues', []),
         time_anchor=time_anchor,
         location_anchor=location_anchor,
+        narrator_reply=reply,
+        actors_registry=state.get('actors', {}),
     )
     if event_summary_item.get('summary'):
         append_event_summary(session_id, event_summary_item)
