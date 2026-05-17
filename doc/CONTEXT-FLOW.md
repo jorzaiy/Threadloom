@@ -70,7 +70,7 @@ web input
 
 当前分工草案（设计目标，不代表所有实现都已完全收口）：
 - `signals`：当前方向约束层。用于承接后续仍会影响局势推进的 `risk / clue / mixed` 信号，可直接进入 narrator / selector。
-- `event`：中短程提纲 / 检索层。每轮 event summary 既供 selector recall，也可作为 recent window 前段提纲直送 narrator，用于承接最近完整正文外的几轮事实；它不是要求 narrator 逐条复述的 steering 块。
+- `event`：中短程提纲 / 检索层。完整提交 turn 且生成非空摘要时写入 event summary，既供 selector recall，也可作为 recent window 前段提纲直送 narrator，用于承接最近完整正文外的几轮事实；它不是要求 narrator 逐条复述的 steering 块。
 - `summary`：长程压缩层。默认只在 selector 判断 recent window 不足、且旧事件确实回流时才补给 narrator。
 - `thread`：当前实验中已开始降级为 state/debug 辅助层，不再默认主导 narrator 或 selector。
 

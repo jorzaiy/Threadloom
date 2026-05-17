@@ -26,7 +26,7 @@
 - `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、当前时间粗时段归一化、抽象/非人物 entity 过滤、onstage 当前证据校验、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖、当前场景物件 stale guard 与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
 - `state_fragment.py`：state fragment 构建；以 skeleton keeper 输出与 arbiter 结果为基线生成 `state_fragment`，作为 narrator 与 fill keeper 的结构化锚点；`build_state_from_fragment()` 在非合并轮替代 full fill keeper 做轻量 state 更新
 - `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报、信号，以及有正文证据的 `npc_relationships` 增量，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
-- `state_updater.py`：`state_keeper` 失败时的保守兜底（仅延续上一轮状态 + generic 推理）
+- `state_updater.py`：离线 replay / rebuild 工具链中的保守兜底；在线主链失败时优先走 `state_fragment.build_state_from_fragment()` 的 `fragment-baseline`
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
 - `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；chunk 保存 `time_start/time_end` 作为窗口时间范围；`actors_mentioned` 会过滤非人物/抽象话题，并对源窗口中已知的主角名做保守一致性修复，避免 selector 以后按伪 actor 或主角错字召回
 - `lorebook_distiller.py`：角色卡导入 / 手动重建时把 `lorebook.json` 固化为 `lorebook-foundation.json` 与 `lorebook-index.json`
@@ -68,7 +68,7 @@
 - `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近完整正文 + 前段提纲 + 本轮输入为准
 - `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲和事件时间轴进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回
 - 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
-- `state_keeper` 优先，`state_updater` 兜底
+- `state_keeper` 优先，在线失败时以 `state_fragment` 形成 `fragment-baseline` 兜底；`state_updater` 主要保留给离线工具链
 - arbiter 已接入主链，不再只是文档占位
 - partial reply 有独立处理路径，不再继续污染事实层
 - partial reply 当前会在生成阶段被阻断：`finish_reason=length/error` 或半句式结尾会触发 narrator 重试，重试耗尽后返回空回复错误；旧 partial 历史在 `/api/history` 和 prompt recent window 中会连同对应 user 输入一起过滤
@@ -101,7 +101,7 @@
 - `active_threads` 当前已降为“state/debug 辅助层”的实验状态：数据结构仍保留，但不再默认进入 narrator prompt，也不再作为 selector 的主要命中依据；归一化层也不再允许它反向补 `relevant_npcs / scene_entities / main_event`
 - `carryover_signals` 统一信号层已接入状态 schema并真实落盘：设计目标是让 keeper 优先维护“后续仍会影响局势的统一信号”，再由兼容层派生旧 `immediate_risks / carryover_clues`；当前真实回合里 keeper 仍常直接产出旧字段，但状态归一化层已会把旧字段反推回统一信号层并持久化
 - `scene_objective` 是轻量事件级目标锚点：keeper fill 只在目标缺失、明显开启新任务/新场景主轴或目标明确结束时更新；narrator 注入 active objective 来约束本轮围绕事件目标推进，避免把 `immediate_goal` 误用成宏观训练/事件目标
-- 普通 `state_updater` 路径当前也会补 `carryover_signals`，不再只在 full fill keeper 回合里存在；`thread_tracker / context_builder / state_snapshot` 等核心消费点已开始优先使用统一信号层，再兼容旧字段
+- 离线 `state_updater` 路径当前也会补 `carryover_signals`；在线主链则由 skeleton / fragment / fill keeper 维护统一信号层，`thread_tracker / context_builder / state_snapshot` 等核心消费点已开始优先使用统一信号层，再兼容旧字段
 - `onstage_npcs` 当前只作为 state/UI 快照存在，不进入 narrator 主 prompt，也不承载长期人物基础设定；长期人物基础设定进入不可变 `actors`
 - `onstage_npcs / relevant_npcs / scene_entities` 当前必须有正向人物证据：稳定 actor、important NPC、continuity hint、明确人物 role，或正文/事件中“人物称谓 + 行动锚点”。地点、标题残片、事件短语不能从 `main_event/location` 反推出 NPC
 - `onstage_npcs` 还必须有当前回合证据；场景切换后，即使 actor registry 中存在核心 NPC，也不能仅凭历史重要性继续保留在场。state keeper validation 允许有新 location/main_event 的空 onstage payload。
@@ -125,7 +125,7 @@
 - `prev_state` 当前已在调用侧修正为“本轮前状态”，避免 event 用当前态伪装上一轮状态
 - event 当前不再输出或合并 `status_transitions`；短期状态只保留在最近窗口 / 当前硬锚点，不写入长期 actor 基础设定
 - heuristic fallback 当前也按多回合窗口工作，不再优先挑天气/氛围句；当前仍可能不如 LLM 版本稳定，但 summary 已开始更像阶段事件压缩器
-- `state_updater` 已更偏保守继承，不轻易覆盖已有高信号状态
+- 离线 `state_updater` 已更偏保守继承，不轻易覆盖已有高信号状态
 - narrator 对“半句中止但 provider 未标 partial”的返回增加了不完整输出保护，避免坏回复继续污染事实层
 - state fallback 现在会更严格地区分“可持续追踪物件”和“短语残片 / 动作词片段”
 - 已支持对旧污染 session 做离线重建，直接修复 `state / threads / important_npcs / summary`
@@ -135,7 +135,7 @@
 - 角色卡信息当前会动态读取角色卡元数据和缩略封面图；角色卡切换与导入入口现已主要收进设置面板
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间私下信息自动外溢
 - NPC 间信息隔离已升级为结构化知识系统：keeper 每轮只提取本轮新增 `knowledge_scope` delta，`state_bridge.py` 只保留本轮 delta 不再长期合并，`actor_registry.py` 派生 actor-id 版长期 `knowledge_records` 并做轻量相似去重，`narrator_input.py` 渲染为结构化知情边界
-- 所有文件写入已改为原子写入模式（`_atomic_write_text()` / `_atomic_write_json()`）：写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
+- 核心可变 JSON / 文本写入已改为原子写入模式（`_atomic_write_text()` / `_atomic_write_json()`）：写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏。删除、导入、repair 等路径仍可能有非事务性文件操作，不应理解为跨 artifact 数据库事务。
 - 模型调用已加入 API 韧性层：`_retry_on_rate_limit` 装饰器在 429/503 错误时自动指数退避重试（最多 3 次），尊重 `Retry-After` 响应头；远端和本地模型调用均已覆盖
 - 模型站点配置已加入 SSRF 与密钥外送防护：远程 `baseUrl` 必须使用 HTTPS，私网/link-local 等直接 IP 会被拒绝；切换站点 URL 时若未重新输入 API key，会清空旧 key。本地模型 helper (`local_model_client.py`) 现也统一走 `safe_http.open_safe_connection`，对 `127.0.0.1`/`localhost`/`::1` 放行，对其他私网/link-local 地址同样拒绝；如需把本地模型放在反向代理之后，请使用 loopback 端口。
 - 前端 assistant markdown 渲染已增加轻量净化，CSP 也补充 `object-src 'none'`、`base-uri 'self'`、`frame-ancestors 'none'`
@@ -279,6 +279,10 @@
     `recursive_scanning`、`extensions`
   - 仅触发用的 keyword-only 条目（content 为空但 keywords 非空）也会保留
   - 历史上曾提供过 metadata 回填脚本；这类一次性迁移工具已删除，不再作为当前维护入口
+- `lorebook-foundation.json`
+  - 从 `lorebook.json` 蒸馏出的常驻短世界基础 / 身份边界 / 规则口径
+- `lorebook-index.json`
+  - 情境世界书检索索引；命中后优先按 `source_entry_ids` 回源读取 `lorebook.json` 原文片段
 - `openings.json`
   - 开局模式、开局 bootstrap、开局选项
   - `mode: direct` 表示单一开局，运行时直接展示 `menu_intro`，不追加“可用开局 / 随机开局 / 报数字”菜单提示
@@ -372,13 +376,13 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 
 | 层                | 模块                | 触发频率           | 输入大小 | 提取字段                              |
 | ----              | ----                | ----               | ----     | ----                                  |
-| 启发式            | `state_updater.py`  | 每轮               | ~1KB     | 全字段（保守推理）                     |
+| 启发式            | `state_updater.py`  | 离线 replay / rebuild | ~1KB  | 全字段（保守推理）                     |
 | Skeleton LLM      | `state_keeper.py`   | 每完整轮           | ~2KB     | time, location, main_event, onstage_npcs, immediate_goal |
 | Fill LLM          | `state_keeper.py`   | 每 N 轮（默认 2）  | ~5KB     | carryover_signals, tracked_objects, knowledge_scope |
 | Actor Registry    | `actor_registry.py` | 每完整轮           | ~2KB     | actors, actor_context_index, actor-id bindings |
 
 - 读取 `config/runtime.json` 中 `memory.consolidate_every_turns`（当前默认 2）
-- 非合并轮使用 skeleton + `build_state_from_fragment()` + `update_state()` 轻量更新
+- 在线非合并轮使用 skeleton + `build_state_from_fragment()` 轻量更新；`state_updater.py` 保留为离线 replay / rebuild 的保守兜底
 - opening-choice 首轮当前是特殊链路：会先跑 skeleton + fill keeper，再接 thread/important_npc 写回，不直接复用普通非合并轮的 `update_state()` 路径
 - 诊断信息中 `provider` 标注为 `skeleton+fragment` 或 `full_fill`
 - 当前字段稳定性大致排序：`time / location / main_event` 高于 `onstage_npcs / immediate_risks / carryover_clues`，而 `immediate_goal` 仍偏保守。

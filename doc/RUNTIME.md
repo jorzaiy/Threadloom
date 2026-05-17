@@ -19,7 +19,7 @@
 
 这些不是同一优先级：`runtime-rules`、当前角色卡世界观、时代、题材、身份边界和世界机制是最高约束；recent history 与本轮用户输入只负责短期场景承接，不能反向改写角色卡世界。用户主角只是世界内角色，可以尝试行动和表达态度，但不能直接指定 NPC 服从、行动必然成功、关系成立、物品凭空出现或客观结论生效。
 
-### 中等刷新（默认每 12 轮）
+### 中等刷新（固定摘要窗口默认每 12 轮）
 
 建议周期性重读：
 - `relevant NPC profiles`
@@ -38,9 +38,9 @@ Selector 对 12 轮外固定 summary chunk 的回流采用“当前 turn 强锚�
 
 Session-local persona seed 仍不是完整人物传记。它每轮可更新重要度、前后台层级和近期观察，但 observation 只从 assistant 叙事中抽取与该 NPC 相关的短片段，不把用户 prompt 原文写入人物详情，也不把同一片段重复塞进多个字段。NPC 的外貌印象、语气、习惯动作和性格表现也走这条“narrator 正文可观察表现 -> persona observation”的窄通道沉淀；narrator 可以自然写出表现层细节，但不能直接输出结构化人物卡或决定是否持久建档。
 
-### 深刷新（默认每 20 轮或事件触发）
+### 深刷新（设计目标，当前未实现独立 20 轮调度器）
 
-在以下情况做一次更完整的上下文重组：
+设计上可在以下情况做一次更完整的上下文重组；当前代码没有单独的“每 20 轮 deep refresh/cache rebuild scheduler”，实际依赖每轮重新 `build_runtime_context()`、selector 当前锚点重筛、summary chunk / keeper archive 派生层和 regenerate/repair 触发的派生缓存重建：
 - 场景主功能明显切换
 - `Onstage NPCs` 明显换了一批
 - 当前主事件改变
@@ -67,7 +67,7 @@ Session-local persona seed 仍不是完整人物传记。它每轮可更新重�
 
 ### Step 0.5. 读取 active preset
 
-当前默认 preset 是 `runtime-data/default-user/presets/world-sim-core.json`。
+当前默认 preset id 是 `world-sim-core`。运行时通过 `config/runtime.json` 的 `sources.preset_dir=character/presets` 和用户级 `runtime-data/<user>/presets` 分层解析；默认用户当前对应 `runtime-data/default-user/presets/world-sim-core.json`。不要把旧的 `character/presets` 示例目录当成唯一来源。
 
 Preset 只负责叙事表现，不负责改写事实层、状态写回或系统硬边界。它当前强调：
 
@@ -192,10 +192,10 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 
 写回管线的 LLM 调用策略：
 
-- **skeleton keeper**：每轮提取 5 个核心字段（time/location/main_event/onstage_npcs/goal）。始终运行（包括 fill 轮次），确保 onstage_npcs 每轮都由 LLM 从正文中提取，不会因 fill keeper 跳过而丢失在场人物。
-- **state keeper fill**：每 N 轮（默认 3）做一次完整状态提取，补充 scene_objective、signals、objects、knowledge_scope，以及有正文证据的 NPC 与主角关系标签。当 fill 轮次为物件密集轮（`object_heavy_turn`）且 fill keeper 未输出 `possession_state` 时，会自动触发一次 focused possession retry（专用 LLM prompt 只问物品状态变化），防止跨场景长回复中物品位置遗漏。当 fill keeper 输出 `scene_objective.status=resolved` 时，`immediate_goal` 会被自动重置为"待确认"，由下一轮 skeleton 重新填充。
+- **skeleton keeper**：在普通完整 runtime 回合提取 5 个核心字段（time/location/main_event/onstage_npcs/goal）。当前第一轮和 keeper bootstrap 轮次由 full keeper / fragment baseline 承接，之后 skeleton 在 fill 与非 fill 轮次都可运行，确保 onstage_npcs 不会因 fill keeper 跳过而丢失在场人物。
+- **state keeper fill**：每 N 轮做一次完整状态提取；当前 `config/runtime.json` 默认 `memory.consolidate_every_turns=2`，代码兜底值为 3。fill 补充 scene_objective、signals、objects、knowledge_scope，以及有正文证据的 NPC 与主角关系标签。当 fill 轮次为物件密集轮（`object_heavy_turn`）且 fill keeper 未输出 `possession_state` 时，会自动触发一次 focused possession retry（专用 LLM prompt 只问物品状态变化），防止跨场景长回复中物品位置遗漏。当 fill keeper 输出 `scene_objective.status=resolved` 时，`immediate_goal` 会被自动重置为"待确认"，由下一轮 skeleton 重新填充。
 - **actor registry**：每轮从叙事中提取新角色候选。
-- **event ledger**：每轮生成事件摘要，并从 narrator 回复头或当前 state 记录 `time_anchor/location_anchor`。在 fill 轮次直接复用 state_keeper 的 signal 输出（main_event/risks/clues），跳过独立 LLM 调用。事件摘要的 `actors` 字段除了从 `onstage_npcs` 匹配外，还会从 actors registry 中提取在 narrator reply 中出现的 NPC 名字，避免因 onstage 列表不完整而丢失参与者。
+- **event ledger**：每轮生成事件摘要，并从 narrator 回复头或当前 state 记录 `time_anchor/location_anchor`。当前实现每个已提交完整回合都会调用 event ledger；若要在 fill 轮次复用 state_keeper signal 并跳过独立 LLM，需要另行实现。事件摘要的 `actors` 字段除了从 `onstage_npcs` 匹配外，还会从 actors registry 中提取在 narrator reply 中出现的 NPC 名字，避免因 onstage 列表不完整而丢失参与者。
 - **summary chunks**：每 12 轮生成历史分块摘要，并记录该固定窗口的 `time_start/time_end`，让长程召回保留事件时间范围。
 
 名称规范化只在 actor_registry 绑定后由 `memory_maintenance` 统一执行一次，state_keeper 内部不再做独立的 semantic_cleanup。
@@ -239,6 +239,8 @@ NPC 与主角关系由 fill keeper 通过 `npc_relationships` 只输出本轮增
 
 回滚后再用同一条用户输入重新进入主链。最终 history 仍保持一条原 user，后接新的 assistant。若最新 turn trace 缺失，完整回合 regenerate 会拒绝执行，避免只替换 history 而留下污染的事实层。
 
+当前 regenerate 回滚先清理 state/persona/event/summary chunk/keeper archive 等派生物，再重新进入 `handle_message()`；若新生成失败，会用进入 regenerate 前的快照恢复。该恢复不是跨文件数据库事务，依赖各 artifact 的原子写入与失败回滚逻辑。
+
 ---
 
 ## Backend Handler 顺序
@@ -249,7 +251,7 @@ NPC 与主角关系由 fill keeper 通过 `npc_relationships` 只输出本轮增
 2. 解析 `session_id`，确认它属于当前角色卡作用域；若同名 session 存在于其他角色卡下，拒绝请求
 3. 按解析后的 session 路径加锁
 4. 检查 `(session_id, client_turn_id)` 是否已处理
-5. 调 runtime `handle_turn(session_id, text, meta)`
+5. 调 runtime `handle_message(payload)`
 6. runtime 返回 `reply + state_snapshot + debug`
 7. backend 写访问日志 / 模型 usage
 8. 返回 JSON 给前端
@@ -258,8 +260,13 @@ NPC 与主角关系由 fill keeper 通过 `npc_relationships` 只输出本轮增
 
 ## 最小 Runtime Handler 伪代码
 
+实际函数名是 `handle_message(payload)`；下面的 `handle_turn` 只是早期概念名，后续实现和文档应以 `handle_message` 为准。
+
 ```python
-def handle_turn(session_id: str, text: str, meta: dict) -> dict:
+def handle_message(payload: dict) -> dict:
+    session_id = payload["session_id"]
+    text = payload["text"]
+    meta = payload.get("meta", {})
     ctx = load_runtime_context(session_id)
     scene_facts = build_scene_facts(ctx)
     user_turn = analyze_user_input(text, scene_facts)
@@ -294,13 +301,13 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
 
 ## 关键约束
 
-- `handle_turn()` 必须是 runtime 唯一主入口
-- `runtime-rules.md` 必须在每次 `handle_turn()` 开始时优先加载
+- `handle_message()` 必须是 runtime 唯一主入口；`handle_turn` 仅作为旧文档/伪代码概念名存在
+- `runtime-rules.md` 必须在每次 `handle_message()` 构建 runtime context 时优先加载
 - 前端不要自己拼 prompt
 - backend 不要自己判定剧情
 - 模型调用层不要自己维护长期状态
-- 所有写回必须发生在同一条 turn pipeline 中，避免状态分叉
-- 刷新策略默认采用“每轮轻刷新 + 周期中刷新 + 事件触发深刷新”，不要只用死板的全量重读频率
+- 所有写回必须发生在同一条 turn pipeline 中，避免状态分叉；当前实现不是跨 artifact 事务，`state/history/summary/event/persona/trace` 依赖原子文件写入和 regenerate 失败快照恢复来降低半提交风险
+- 刷新策略当前采用“每轮轻刷新 + keeper fill 周期刷新 + 12 轮 summary chunk / selector 锚点召回”；事件触发深刷新是设计目标，尚未形成独立 20 轮调度器
 
 ## 最小内部对象
 
@@ -358,14 +365,14 @@ def handle_turn(session_id: str, text: str, meta: dict) -> dict:
 
 ## 2026-05-08 Long-session Memory Maintenance
 
-长 session 的问题不只在“记录不够”，还在于既有记录需要持续维护。当前 runtime 已加入一层 deterministic memory maintenance，目标是让实名揭示、旧风险关闭和 archive 清洗在每轮提交与离线修复中都能发生：
+长 session 的问题不只在“记录不够”，还在于既有记录需要持续维护。当前 runtime 已加入一层 deterministic memory maintenance；每轮提交中维护 state 内的实名揭示和旧风险关闭，离线 repair 可额外清洗 / canonicalize 派生 archive：
 
-- actor canonicalization migration：`actor_registry` 一旦通过窄口径实名揭示把 generic actor 绑定到主名，`memory_maintenance.py` 会把 state 中的 `onstage_npcs / relevant_npcs / scene_entities / active_threads / important_npcs / possession_state / object_visibility / knowledge_scope.npc_local` 对齐到 canonical name；离线 repair 还会同步 `event_summaries / summary_chunks / keeper_record_archive`。该迁移只使用 registry 里已经存在的精确 alias，不从正文推断新等价关系；如果多个 actor 共享同一 alias，该 alias 会被跳过，避免误合并人物。
+- actor canonicalization migration：`actor_registry` 一旦通过窄口径实名揭示把 generic actor 绑定到主名，`memory_maintenance.py` 会在每轮提交中把 state 中的 `onstage_npcs / relevant_npcs / scene_entities / active_threads / important_npcs / possession_state / object_visibility / knowledge_scope.npc_local` 对齐到 canonical name；离线 repair 还会同步 `event_summaries / summary_chunks / keeper_record_archive`。该迁移只使用 registry 里已经存在的精确 alias，不从正文推断新等价关系；如果多个 actor 共享同一 alias，该 alias 会被跳过，避免误合并人物。
 - stale risk/thread resolver：当某个 actor 已经在 `onstage_npcs`，而旧 signal/thread 仍写着“仍在门外等待 / 还在门外等待 / 在走廊等待”等明确等待模式时，runtime 会剪掉对应 `immediate_risks / carryover_clues / carryover_signals`，并把纯 stale risk thread 归档为 resolved；如果只是主线程的 `obstacle` 过时，则只清空 obstacle，不删除主线。
 - keeper archive validation / recall filtering：keeper archive 是派生缓存，构建和读取时都会经过 `validate_keeper_archive()`。验证会删除非 object、窗口越界、空内容和已知 fragment digest；`provider == "manual-cleanup"` 的人工记录受保护。过滤只针对短碎片和明确坏 digest 模式，避免把有意义的“不确定/否定”事实误删。
 - archive / summary repair command：`backend/tools/repair_session_memory.py` 可对既有 session dry-run 检查或显式 `--apply` 写回。默认不写 state / summary chunks / event summaries / keeper archive；`--rebuild-derived` 才会重建派生层，`--no-archive-write` 可禁止 archive 写回。
 
-完整 turn 提交流程中，maintenance 在 `update_actor_registry()` 之后、最终 `save_state()` 之前运行，并把本轮维护结果写入 turn trace 的 `post_turn.memory_maintenance`，便于确认哪些字段被 canonicalize 或 stale-pruned。
+完整 turn 提交流程中，state maintenance 在 `update_actor_registry()` 之后、最终 `save_state()` 之前运行，并把本轮维护结果写入 turn trace 的 `post_turn.memory_maintenance`，便于确认哪些字段被 canonicalize 或 stale-pruned。`event_summaries / summary_chunks / keeper_record_archive` 的派生层 canonicalize 仍属于 repair / rebuild 范围，不是普通每轮提交的一部分。
 
 ## 2026-05-09 Low-pressure Turns and False NPC Filtering
 

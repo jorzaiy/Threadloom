@@ -16,6 +16,8 @@
 - `DELETE /api/providers`
 - `GET /api/model-config`
 - `POST /api/model-config`
+- `GET /api/narrator-preset`
+- `POST /api/narrator-preset`
 - `GET /api/sessions`
 - `GET /api/state?session_id=...`
 - `GET /api/history?session_id=...`
@@ -52,6 +54,7 @@
 - `GET /api/auth/me`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
+- `POST /api/auth/change-password`
 - `GET/POST /api/users`
 - `POST /api/multi-user`
 
@@ -122,15 +125,15 @@
 
 ## GET /api/site-config
 
-返回当前用户的单站点配置快照，以及已获取的模型列表。
+返回全局单站点配置快照，以及已获取的模型列表。多用户开启后，站点连接由管理员（`default-user`）统一维护，普通用户只读且不会看到完整 API Key。
 
 ## POST /api/site-config
 
-更新当前用户的站点 URL / API Key / API 类型。
+管理员专用。更新全局站点 URL / API Key / API 类型；普通用户在多用户模式下会收到 `FORBIDDEN`。
 
 ## POST /api/site-models/discover
 
-向当前站点请求 `/models`，并刷新当前用户可选模型列表。
+管理员专用。向当前站点请求 `/models`，并刷新全局可选模型列表。
 
 ## GET /api/model-config
 
@@ -139,6 +142,45 @@
 ## POST /api/model-config
 
 更新当前用户的 `Narrator / State Keeper` 模型选择。
+
+## GET /api/narrator-preset
+
+读取指定 narrator preset。Query：
+
+- `preset_id` 必填
+
+## POST /api/narrator-preset
+
+保存或删除当前用户的 narrator preset。
+
+保存请求体：
+
+```json
+{
+  "preset_id": "world-sim-core",
+  "content": {}
+}
+```
+
+删除请求体：
+
+```json
+{
+  "preset_id": "old-preset",
+  "delete": true
+}
+```
+
+### POST /api/auth/change-password
+
+已登录用户自助修改密码。请求必须带 Bearer token。
+
+```json
+{
+  "old_password": "current-password",
+  "new_password": "new-password-at-least-12-chars"
+}
+```
 
 ### Notes
 
@@ -291,7 +333,7 @@
 
 当前 state 写回还有两层额外约束：
 - `state_keeper` 会拒收低信号 JSON，并对照上一轮 state 检查是否出现异常回退
-- fallback `state_updater` 会优先保留已有高信号字段，而不是轻易用弱推断覆盖
+- runtime fallback 会先用 `state_fragment.build_state_from_fragment()` 形成 `fragment-baseline`，优先保留已有高信号字段；`state_updater.py` 当前主要用于离线 replay / rebuild 工具链
 
 opening 相关行为：
 - 新档首轮输入 `开始游戏` / `开始` / `重新开始` 会进入 opening 菜单
@@ -302,8 +344,8 @@ opening 相关行为：
 partial 相关行为：
 - 若 narrator 返回 `finish_reason=length`，该 assistant 回复会标记为 `partial`
 - 若 narrator 返回的正文明显停在半句中间，即使 provider 没给 `finish_reason`，当前也会按 `partial` 处理
-- partial 回复会保留在历史里显示
-- 但不会继续污染 `state / summary / threads / important_npcs`
+- partial 回复不会作为已提交正文保留在历史或事实层；生成阶段会自动重试，重试耗尽后返回空 `reply` 与 `NARRATOR_INCOMPLETE`
+- 旧历史中的 partial assistant 会在 `/api/history` 和 prompt recent window 中连同对应 user 输入一起过滤
 - 若主/副 narrator 全部失败，返回空 `reply` 与 `NARRATOR_UNAVAILABLE`，本轮不写历史、不递增 turn、不更新 state；详情见响应里的 `narrator_retry`
 
 ### Success Response
@@ -449,6 +491,12 @@ partial 相关行为：
 - `NO_REGENERATABLE_TURN`
 - `TURN_TRACE_MISSING`
 - `NARRATOR_UNAVAILABLE`
+- `NARRATOR_INCOMPLETE`
+- `AUTH_REQUIRED`
+- `AUTH_FAILED`
+- `RATE_LIMITED`
+- `FORBIDDEN`
+- `SESSION_CHARACTER_MISMATCH`
 - `INTERNAL_ERROR`
 
 ## GET /api/state
@@ -553,7 +601,7 @@ partial 相关行为：
 - 带 `before` 时返回更早一页，适合前端“加载更早记录”
 - 实际分页大小由 `runtime.json -> web.history_page_size` 控制
 - 当前会话消息数未超过分页大小时，`has_more=false`，前端不会显示“加载更早记录”入口；超过分页大小时，前端在消息区顶部提供固定工具栏/内联按钮加载更早页。
-- partial assistant 也会在这里返回，但不会进入事实层写回
+- partial assistant 不作为已提交正文返回；旧 partial 历史会连同对应 user 输入一起过滤
 
 ## GET /api/entity
 
