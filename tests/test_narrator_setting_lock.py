@@ -180,3 +180,23 @@ def test_narrator_prompt_includes_actor_relationship_to_protagonist():
     assert '【角色注册表】' in system_prompt
     assert '严教官' in system_prompt
     assert '与主角关系=队友（依据：并肩完成夜巡）' in system_prompt
+
+
+def test_narrator_prompt_includes_private_director_brief():
+    system_prompt, _user_prompt = build_narrator_input(
+        {
+            'runtime_rules': 'runtime',
+            'character_core': {'name': '维克托'},
+            'scene_facts': {},
+            'recent_history': [],
+            'active_preset': {},
+        },
+        '继续',
+    )
+
+    assert '【本轮导演简报】' in system_prompt
+    assert '不要输出本块标题、清单或分析' in system_prompt
+    assert '机会、关系、好奇、支援或回报' in system_prompt
+    assert '主动不等于怀疑或对抗主角' in system_prompt
+    assert '低压动作仍以低压内容为主体' in system_prompt
+    assert '避免连续两轮使用相同段落结构' in system_prompt

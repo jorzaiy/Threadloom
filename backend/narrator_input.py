@@ -678,6 +678,15 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
 
     # state_fragment is intentionally not sent to narrator; recent prose + outline are the short-term scene source.
 
+    blocks.append(
+        '【本轮导演简报】\n'
+        '- 写正文前隐形判断：用户动作的潜台词、场上 NPC 自己想做什么、哪个关系/物件/旧线索能自然回应、这一轮球该交给谁；不要输出本块标题、清单或分析。\n'
+        '- 主动回应优先选择机会、关系、好奇、支援或回报；不要默认选择追查、揭露、惩罚或危险。\n'
+        '- NPC 可以因性格、善意、秘密、怕麻烦、想表现、想占便宜或想找台阶主动行动；主动不等于怀疑或对抗主角。\n'
+        '- 低压动作仍以低压内容为主体；只允许轻量、可忽略、可继续生活的回应。\n'
+        '- 避免连续两轮使用相同段落结构、相同 NPC 反应、相同结尾 hook 或相同感官入口。'
+    )
+
     # 17. 最终要求
     blocks.append(
         '【要求】\n'
