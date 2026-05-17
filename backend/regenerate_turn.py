@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 try:
+    from .atomic_io import atomic_write_text
     from .handler_message import handle_message
     from .runtime_store import load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, load_summary_chunks, load_turn_trace, save_event_summaries, save_history, save_meta, save_session_persona_layers, save_state, save_summary, save_summary_chunks, session_paths
     from .summary_updater import update_summary
 except ImportError:
+    from atomic_io import atomic_write_text
     from handler_message import handle_message
     from runtime_store import load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, load_summary_chunks, load_turn_trace, save_event_summaries, save_history, save_meta, save_session_persona_layers, save_state, save_summary, save_summary_chunks, session_paths
     from summary_updater import update_summary
@@ -105,8 +107,7 @@ def _restore_artifacts(session_id: str, snapshot: dict) -> None:
     save_summary(session_id, str(snapshot.get('summary', '') or ''))
     keeper_archive = session_paths(session_id)['keeper_archive']
     if snapshot.get('keeper_archive_exists'):
-        keeper_archive.parent.mkdir(parents=True, exist_ok=True)
-        keeper_archive.write_text(str(snapshot.get('keeper_archive_text', '') or ''), encoding='utf-8')
+        atomic_write_text(keeper_archive, str(snapshot.get('keeper_archive_text', '') or ''), encoding='utf-8')
     elif keeper_archive.exists():
         keeper_archive.unlink()
 
