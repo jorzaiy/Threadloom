@@ -59,7 +59,7 @@ repair 报告里的常见 `changes[].action`：
 - NPC 档案：`memory/npcs/*.md`
 - root persona seed：`runtime/persona-seeds/*`
 
-`Threadloom` 不替代这些资产，而是在当前阶段把它们重新组织成 session-local runtime。
+这些是 legacy / compatibility seed inputs；当前主工作路径是 `runtime-data/<user>/characters/<character_id>/source/` 与 session-local runtime。`Threadloom` 不替代这些资产，而是在当前阶段把它们重新组织成分层 runtime。
 
 当前主角档案建议：
 
@@ -150,6 +150,8 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 - `openings.json`
 - `system-npcs.json`
 - `import-manifest.json`
+- `lorebook-foundation.json`
+- `lorebook-index.json`
 - `assets/`
 - `imported/`
 
@@ -165,7 +167,7 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
   - `core`
   - `faction_named`
   - `roster`
-- 当前运行时默认只优先消费 `core`
+- 当前运行时按 `core → faction_named → roster` 分级 fallback，直到达到候选 limit
 - `assets/` 单独保存封面和缩略图
 
 ## 最小启动
@@ -198,9 +200,9 @@ journalctl -u threadloom -f    # 实时日志
 - 推荐把真实密钥只放在 `.env.local`，`config/*.json` 中使用 `env:VAR` 引用
 - 修改站点 URL 时若没有重新输入 API Key，运行时会清空旧密钥，避免旧 key 被转发到新 endpoint。
 - 远程 provider URL 必须使用 HTTPS；本机模型服务可继续使用 `localhost` / `127.0.0.1`。
-- 当前用户自己的站点与模型配置会写到 `runtime-data/<user>/config/`
+- 站点连接配置由管理员维护，真实全局来源是 `runtime-data/default-user/config/site.json`；模型选择写到各自用户的 `runtime-data/<user>/config/model-runtime.json`
 - `config/runtime.json` 继续承载共享内容层与全局策略，不再作为用户站点管理的主存储
-- turn trace 默认关闭；仅在需要排查 prompt/context 问题时显式启用，并注意 trace 文件会包含敏感上下文。
+- 当前 live 本地配置可启用 turn trace 便于调试；生产环境仍应保持关闭，并注意 trace 文件会包含敏感上下文。
 - 当前用户模型/站点文件：
   - `runtime-data/default-user/config/site.json`
   - `runtime-data/default-user/config/model-runtime.json`
@@ -371,6 +373,8 @@ server {
 - `POST /api/characters/import`
 - `POST /api/chat/preview`
 - `POST /api/chat/import`
+- `GET /api/narrator-preset`
+- `POST /api/narrator-preset`
 
 当前前端支持：
 - 点击底部当前会话名，展开最近会话下拉
@@ -390,14 +394,14 @@ server {
 - 开局选择后的首轮 narrator 正文现在会直接接入首轮 keeper 写回：通常能落下时间/地点/主事件/在场人物/风险等基础状态，不再只留一个 opening 壳 state；`immediate_goal` 当前仍可能偏保守或回到 `待确认`
 - 首个 narrator 回合会用大预算注入原始 alwaysOn/foundation 世界书片段给世界定底；后续普通回合改为“蒸馏基础护栏 + selector 回源原文片段”，避免 raw lore 每轮压过 recent window
 - 同一 `session_id` 的 HTTP 写请求现在会串行执行，降低并发覆盖风险
-- 每个 turn 现在会额外落一份 `turn-trace/turn-XXXX.json`，用于单回合精确回放
+- trace 启用时，每个 turn 会额外落一份 `turn-trace/turn-XXXX.json`，用于单回合精确回放；`regenerate-last` 的精确恢复依赖已有 trace，缺失时只能走普通 history 回滚
 - `runtime.json -> trace.enabled / trace.keep_last_turns` 可控制 trace 是否启用以及最多保留多少轮
 - narrator 正文生成现在先用主 narrator 模型重试 3 次；主模型均失败后，使用 `state_keeper.model` 作为副 LLM 再重试 3 次。副 LLM 接管会在 response / turn trace 的 `narrator_retry` 中标记 `provider_used: secondary`。
 - 若主/副 narrator 全部失败，本轮返回空 `reply` 与 `NARRATOR_UNAVAILABLE`，不写 assistant 历史、不递增 turn、不更新 state，trace 标记 `not_committed: true`，避免沉浸式 RP 中出现硬编码 fallback 文案。
 - partial assistant 回复不会作为已提交正文显示；生成阶段会自动重试，重试耗尽后返回状态栏错误，`/api/history` 与后续 prompt recent window 会过滤旧 partial 轮次及其对应 user 输入
 - narrator 若明显停在半句中间，即使 provider 没返回 `finish_reason`，当前也会按 incomplete 处理，避免把坏输出继续写坏 state 或污染下一轮上下文
 - `regenerate-last` 会回滚最后一对 `user -> assistant(partial)` 再重试
-- `state_keeper` 优先，`state_updater` 兜底
+- `state_keeper` 优先，在线失败时先走 `state_fragment` 形成 `fragment-baseline`，`state_updater` 主要保留给离线 replay / rebuild
 - `state_keeper` 现在会拒收明显低信号或相对上一轮明显退化的 state
 - `state_fragment` 现在会先作为结构化锚点进入 narrator 与 state_keeper
 - `state_keeper_candidate` 固定继承 `state_keeper` 的实际模型，不再通过 hidden advanced 配置单独分模。
@@ -417,7 +421,7 @@ server {
   - `signal`：当前方向约束层，可直接进入 narrator / selector
   - `thread`：state/debug 辅助层，不再默认承担 steering 职责
 - `event` 当前真实行为已更接近这份草案：
-  - 每 3 轮写入一次 `event_summaries`
+  - 每个完整提交 turn 都可写入 `event_summaries`；只接受完整 assistant 回复且摘要非空
   - 事件总结当前已真正读取最近 `1~3` 对 turn 窗口，而不是只看当前轮 narrator prose
   - narrator 会把同一 recent window 中较早、未进入完整正文窗口的回合渲染为 `【最近窗口前段提纲】`，避免把所有连续性都压给 keeper
   - fallback event summary 当前已不再优先抓天气/氛围句，开始更像阶段事件压缩；后续若继续打磨，主方向应是 clue/risk 的结构化质量，而不是继续扩大窗口
@@ -461,7 +465,7 @@ server {
 - 前端默认会话选择已切到“最近更新的活动会话优先”，不再固化到 `story-live`
 - 角色卡管理已改到设置面板中，支持读取角色卡元数据和缩略封面图
 - narrator prompt 已加入更通用的知情边界约束，减少 NPC 间自动共享私下信息
-- 所有文件写入（`runtime_store.py`、`keeper_archive.py`）已改为原子写入：先写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏
+- 核心可变 JSON / 文本写入（`runtime_store.py`、`keeper_archive.py` 等）已改为原子写入：先写临时文件 → fsync → `os.replace`（POSIX 原子），防止崩溃/断电导致数据损坏；删除、导入、repair 等路径仍可能有非事务性文件操作，不应理解为跨 artifact 数据库事务
 - 模型调用层（`model_client.py`、`local_model_client.py`）已加入 429/503 指数退避重试（最多 3 次）；远程模型尊重 `Retry-After` 头。本地模型 helper 不再内置默认 endpoint 或默认模型名，调用方必须显式传入 `base_url` 与 `model`。两者现都通过 `safe_http.open_safe_connection` 出站：DNS 预解析 + IP pin 防止 DNS rebinding，并按 `_LOOPBACK_HOSTS` 白名单只放行 `127.0.0.1`/`localhost`/`::1`，其他私网/link-local 地址会被 SSRF 守门拒绝。如果你把本地 llama 通过反向代理对外暴露，后端 `base_url` 仍应配为 loopback 地址。
 - state 中的 `knowledge_scope` 字段只保留本轮新增知情 delta：包含 `protagonist.learned[]` 和 `npc_local.{name}.learned[]`，由 keeper 按回合提取增量，`state_bridge.py` 清洗但不长期合并；长期知识由 `actor_registry.py` 派生到 actor-id 版 `knowledge_records`，并做轻量相似去重，`narrator_input.py` 渲染为结构化知情边界
 - state 中新增 `resolved_events[]` 字段：线程经 `active → watch → cooling_down → resolved` 状态机过渡后归档（最多 20 条）
@@ -619,7 +623,7 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
 - persona 流转已接入，但规则仍偏保守启发式
 - 世界书人物注入已接入，但还不是独立调度层
 - 前端没有编辑能力，错误恢复也仍较薄
-- `runtime.json` 里的部分 web 配置项还没完全生效到 UI
+- `runtime.json` 的主要 web 配置项已基本贯通到 API / UI；剩余问题主要是减少无效配置项与补文档
 
 ## 当前已知问题
 
@@ -628,7 +632,7 @@ python3 backend/import_sillytavern_chat.py --source '/root/Threadloom/tmp/你的
 - 一次性服务 NPC 仍可能偶发被高估重要性
 - 同名实体仍没有完整的 disambiguation 交互，当前只是后端直出实体列表并在歧义时保守展示
 - summary / important NPC / thread tracker 之间仍可能互相放大弱信号
-- 主角目前还没有独立的 runtime 层，observer/主角信息仍需要继续和 NPC 层做强隔离
+- 主角已作为 actor registry 内置 protagonist 与玩家档案分层进入 runtime；observer/主角信息仍需要继续和 NPC 层做强隔离
 - 物件状态层已经接线完成，但当前真实回合中的抽取强度还不够；链路已通，实际产出仍需要继续调强
 - 当前单回合精确回放已优先覆盖 runtime 主链；opening 菜单态暂不作为主要回放目标
 

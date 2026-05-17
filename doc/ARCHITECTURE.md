@@ -47,12 +47,12 @@
           ▼
 [ RP Runtime Orchestrator ]
    ├─ canon / state / recent window / keeper archive
-   ├─ npc profiles / persona seeds
-   ├─ scene parsing
+   ├─ actor registry / npc profiles / persona seeds
+   ├─ scene parsing / signals / event timeline
    ├─ arbiter
    ├─ narrator context build
    ├─ model call
-   └─ writeback
+   └─ writeback / deterministic maintenance
 ```
 
 ## 仓库目录结构
@@ -247,11 +247,11 @@ mem0 的定位是 AI agent 的通用长期记忆层：从对话中自动提取�
 3. active preset
 4. `character/lorebook.json`
 5. `memory/canon.md`
-6. `memory/state.md`
-7. relevant `memory/npcs/*.md`
-8. relevant `runtime/persona-seeds/*`
+6. session-local `state.json` / actor registry / item 与 knowledge 账本
+7. relevant `memory/npcs/*.md`；缺失时可回落到当前 session persona seed
+8. 世界书 foundation + selector 命中的情境世界书回源片段
 9. 最近窗口：前段逐回合提纲 + 最近完整正文
-10. keeper archive recall 命中
+10. keeper archive / summary chunk 条件 recall 命中
 
 原则：
 - `runtime-rules.md` 必须先于其他上下文被加载
@@ -418,7 +418,7 @@ mem0 的定位是 AI agent 的通用长期记忆层：从对话中自动提取�
 
 第一版暂不做：
 - 多渠道
-- 完整多用户产品
+- 公网 SaaS 多租户平台
 - 多故事并行
 - 复杂权限系统
 - 设备节点

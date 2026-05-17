@@ -113,12 +113,12 @@
 
 ## 当前仍然最关键的问题
 
-### 1. `state_keeper` 已切换为 `gemma-4-31b-it` 双 keeper 架构
+### 1. `state_keeper` 已切换为双 keeper 架构
 
 原来的最大瓶颈（纯 prose 反提 + 4B 模型能力不足）已基本解决。
 
 现状：
-- skeleton + fill 双 keeper 均使用 `gemma-4-31b-it`，提取 prompt 已加入字段级质量指南和正反例
+- skeleton + fill 双 keeper 均使用当前配置的 State Keeper 模型，提取 prompt 已加入字段级质量指南和正反例
 - `state_keeper_candidate` 现继承 State Keeper 模型，默认上限已高于早期 280 截断阶段
 - heuristic 层重写为评分式架构：`_score_sentence()` 替代关键词猜世界，加入元文本过滤和中文自然断点截断
 - 在 4 组跨题材长记录测试中（维克托、九幽大陆、血蚀纪），关键指标全部归零
@@ -129,7 +129,7 @@
 
 ### 2. fallback state 质量已大幅提升
 
-`state_updater.py` 已重构为基于评分的抽取架构，不再依赖题材关键词猜世界。前面有 `fragment-baseline` 兜底，heuristic 层也已加入元文本过滤、中文自然断点截断和阈值过滤。
+在线主链失败时优先形成 `fragment-baseline` 兜底；`state_updater.py` 已重构为离线 replay / rebuild 可用的保守抽取架构，不再依赖题材关键词猜世界。heuristic 层也已加入元文本过滤、中文自然断点截断和阈值过滤。
 
 影响：
 - 当 `state_keeper` 失败时，fallback 产出质量已接近可用水平
@@ -185,19 +185,19 @@
 结论：
 - 当前这一层主要剩余工作转为减少无效配置项与补文档，而不是继续补 UI 接线
 
-### 6. 主角 runtime 仍缺位；事件归档层已初步落地
+### 6. 主角 runtime 已初步落地；事件归档层已初步落地
 
-当前系统已经开始把 NPC、线程和摘要分层，主角仍缺独立层，但已解决事件归档已有初步结构。
+当前系统已经开始把 NPC、线程和摘要分层；主角已作为 actor registry 内置 protagonist 与玩家档案分层进入 runtime，但 observer/主角信息仍需要继续和 NPC 层做强隔离。事件归档已有初步结构。
 
 已完成：
 - thread tracker 已补 `resolved_events` 归档：线程经 `cooling_down` 过渡后进入 `resolved`，归档到 `state.resolved_events[]`（最多 20 条）
 - 已解决事件不再只依赖 summary 和记忆层保存，而有显式的结构化归档
 
-仍缺位：
+仍需继续收紧：
 - 主角 observer / user-side 信息若污染到 NPC 层，后续会被 `important_npcs`、threads、summary 一起放大
 
 结论：
-- 后续应补 `protagonist_runtime`
+- 后续应继续收紧 protagonist / NPC 信息边界
 - `resolved_events` 已初步可用，后续可继续优化归档内容的丰富度
 
 ### 7. NPC 间信息隔离已升级为结构化 knowledge scope
