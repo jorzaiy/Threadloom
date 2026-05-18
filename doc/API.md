@@ -26,6 +26,7 @@
 - `POST /api/new-game`
 - `POST /api/delete-session`
 - `POST /api/regenerate-last`
+- `POST /api/delete-latest-turn`
 - `GET /api/characters`
 - `POST /api/character/select`
 - `POST /api/character/delete`
@@ -774,6 +775,50 @@ partial 回复路径会：
   "error": {
     "code": "NO_PARTIAL_TURN",
     "message": "latest assistant reply is not partial"
+  }
+}
+```
+
+## POST /api/delete-latest-turn
+
+删除最后一轮已提交的 `user -> assistant` 对，并回滚该轮 narrator / keeper 写入造成的派生状态。用于用户误触发送、输入有错别字或未写完时撤销最后一轮。
+
+### Request
+
+```json
+{
+  "session_id": "story-live"
+}
+```
+
+### Behavior
+
+- 只允许删除当前 session 的最后一轮，不支持删除历史中间轮次。
+- 完整回合会读取最新 turn trace 的 `pre_turn.state` 与 `pre_turn.persona_layers`，恢复 `state.json` 和 session-local persona。
+- 删除该 turn 的 `event_summaries` 项，清空 `summary_chunks` 与 `keeper_record_archive` 派生缓存，并重建 `summary.md`。
+- 清理对应 `processed_client_turn_ids`、`turn_audits` 和 `last_turn_audit`，并回退 `meta.last_turn_id`。
+- 如果最新完整回合缺少 turn trace，会拒绝删除，避免只删 history 而留下 keeper/state 污染。
+
+### Response
+
+```json
+{
+  "ok": true,
+  "session_id": "story-live",
+  "deleted_turn_id": "turn-0007",
+  "deleted_user_text": "误触发送的输入",
+  "messages": [],
+  "state_snapshot": {}
+}
+```
+
+### Error
+
+```json
+{
+  "error": {
+    "code": "TURN_TRACE_MISSING",
+    "message": "latest turn trace is required to delete a complete turn"
   }
 }
 ```

@@ -241,6 +241,22 @@ NPC 与主角关系由 fill keeper 通过 `npc_relationships` 只输出本轮增
 
 当前 regenerate 回滚先清理 state/persona/event/summary chunk/keeper archive 等派生物，再重新进入 `handle_message()`；若新生成失败，会用进入 regenerate 前的快照恢复。该恢复不是跨文件数据库事务，依赖各 artifact 的原子写入与失败回滚逻辑。
 
+### Delete latest user turn
+
+用户误触发送、输入错别字或内容未写完时，前端可以调用 `/api/delete-latest-turn` 撤销最后一轮。该流程只允许删除最新 `user -> assistant` 对，不支持删除历史中间轮次。
+
+完整回合 delete 与 regenerate 使用同一套 turn trace 回滚原则，但不会重新进入 `handle_message()`：
+
+- `history.jsonl` 删除最后的 user/assistant 对
+- `state.json` 恢复到该轮生成前的 `pre_turn.state`
+- session-local `persona/*` 恢复到该轮生成前的 `pre_turn.persona_layers`
+- 删除该 turn 的 `event_summaries` 项
+- 清空 `summary_chunks` 与 `keeper_record_archive` 派生缓存，避免误触输出继续参与 selector/context
+- 用删除后的 history/state 重建 `summary.md`
+- 清理指向该 turn 的幂等缓存与 audit，并回退 `meta.last_turn_id`
+
+如果最新完整回合缺少 turn trace，delete 会拒绝执行，避免只删除可见聊天记录但保留 keeper/state 污染。
+
 ---
 
 ## Backend Handler 顺序
