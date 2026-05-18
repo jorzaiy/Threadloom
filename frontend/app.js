@@ -1760,6 +1760,7 @@ async function deleteLatestTurn() {
   });
   pendingUserMessage = null;
   pendingClientTurnId = null;
+  applyWebConfig(data.web || {});
   renderMessages(data.messages || []);
   renderState(data.state_snapshot || {});
   renderCharacterCard(data.character_card || lastCharacterCard);
