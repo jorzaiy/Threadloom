@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -178,6 +179,8 @@ def test_partial_regenerate_keeps_existing_behavior(monkeypatch):
 def test_delete_latest_turn_restores_pre_turn_artifacts(monkeypatch, tmp_path):
     session_id = 'delete-turn-session'
     history_store = {'items': [
+        {'ts': 90, 'role': 'user', 'content': '旧输入'},
+        {'ts': 91, 'role': 'assistant', 'content': '旧回复', 'completion_status': 'complete'},
         {'ts': 100, 'role': 'user', 'content': '误触输入'},
         {'ts': 101, 'role': 'assistant', 'content': '误触回复', 'completion_status': 'complete'},
     ]}
@@ -196,7 +199,16 @@ def test_delete_latest_turn_restores_pre_turn_artifacts(monkeypatch, tmp_path):
     saved_chunks = {}
     summary_updates = []
     keeper_archive = tmp_path / 'keeper_record_archive.json'
-    keeper_archive.write_text('{"records":[1]}', encoding='utf-8')
+    keeper_archive.write_text(json.dumps({
+        'version': 1,
+        'source_pair_count': 5,
+        'history_message_count': 4,
+        'records': [
+            {'provider': 'heuristic', 'window': {'end_pair_index': 4}, 'history_digest': ['旧记录']},
+            {'provider': 'manual-cleanup', 'window': {'end_pair_index': 4}, 'history_digest': ['人工清理记录']},
+            {'provider': 'heuristic', 'window': {'end_pair_index': 5}, 'history_digest': ['误触记录']},
+        ],
+    }, ensure_ascii=False), encoding='utf-8')
 
     monkeypatch.setattr(regenerate_turn, 'load_history', lambda _session_id: list(history_store['items']))
     monkeypatch.setattr(regenerate_turn, 'save_history', lambda _session_id, items: history_store.update(items=list(items)))
@@ -205,7 +217,13 @@ def test_delete_latest_turn_restores_pre_turn_artifacts(monkeypatch, tmp_path):
     monkeypatch.setattr(regenerate_turn, 'load_state', lambda _session_id: {'main_event': '误触后状态'})
     monkeypatch.setattr(regenerate_turn, 'load_session_persona_layers', lambda _session_id: {'scene': {'误触人物': {}}, 'archive': {}, 'longterm': {}})
     monkeypatch.setattr(regenerate_turn, 'load_event_summaries', lambda _session_id: {'version': 1, 'items': [{'turn_id': 'turn-0004'}, {'turn_id': 'turn-0005'}]})
-    monkeypatch.setattr(regenerate_turn, 'load_summary_chunks', lambda _session_id: {'version': 1, 'chunks': [{'chunk_id': 'chunk_0001'}]})
+    monkeypatch.setattr(regenerate_turn, 'load_summary_chunks', lambda _session_id: {
+        'version': 1,
+        'chunks': [
+            {'chunk_id': 'chunk_0001', 'turn_end': 4},
+            {'chunk_id': 'chunk_0002', 'turn_end': 5},
+        ],
+    })
     monkeypatch.setattr(regenerate_turn, 'load_summary', lambda _session_id: '# Before delete snapshot\n')
     monkeypatch.setattr(regenerate_turn, 'load_turn_trace', lambda _session_id, _turn_id: {
         'pre_turn': {
@@ -225,7 +243,10 @@ def test_delete_latest_turn_restores_pre_turn_artifacts(monkeypatch, tmp_path):
     assert result['ok'] is True
     assert result['deleted_turn_id'] == 'turn-0005'
     assert result['deleted_user_text'] == '误触输入'
-    assert history_store['items'] == []
+    assert history_store['items'] == [
+        {'ts': 90, 'role': 'user', 'content': '旧输入'},
+        {'ts': 91, 'role': 'assistant', 'content': '旧回复', 'completion_status': 'complete'},
+    ]
     assert meta_store['data']['last_turn_id'] == 4
     assert 'web-5' not in meta_store['data']['processed_client_turn_ids']
     assert meta_store['data']['processed_client_turn_ids']['web-4']['turn_id'] == 'turn-0004'
@@ -234,9 +255,15 @@ def test_delete_latest_turn_restores_pre_turn_artifacts(monkeypatch, tmp_path):
     assert saved_state['state'] == {'main_event': '误触前状态'}
     assert saved_persona['layers'] == {'scene': {}, 'archive': {}, 'longterm': {}}
     assert saved_events['payload']['items'] == [{'turn_id': 'turn-0004'}]
-    assert saved_chunks['payload'] == {'version': 1, 'chunks': []}
+    assert saved_chunks['payload'] == {'version': 1, 'chunks': [{'chunk_id': 'chunk_0001', 'turn_end': 4}]}
     assert summary_updates == [session_id]
-    assert not keeper_archive.exists()
+    archive = json.loads(keeper_archive.read_text(encoding='utf-8'))
+    assert archive['source_pair_count'] == 4
+    assert archive['history_message_count'] == 2
+    assert archive['records'] == [
+        {'provider': 'heuristic', 'window': {'end_pair_index': 4}, 'history_digest': ['旧记录']},
+        {'provider': 'manual-cleanup', 'window': {'end_pair_index': 4}, 'history_digest': ['人工清理记录']},
+    ]
 
 
 def test_delete_latest_turn_requires_trace_for_complete_turn(monkeypatch):

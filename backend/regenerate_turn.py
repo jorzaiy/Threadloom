@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
+
 try:
     from .atomic_io import atomic_write_text
     from .handler_message import handle_message
@@ -48,7 +50,73 @@ def _drop_turn_audits(meta: dict, target_turn_id: str | None) -> None:
             meta.pop('last_turn_audit', None)
 
 
-def _rollback_derived_artifacts(session_id: str, target_turn_id: str, turn_trace: dict) -> None:
+def _turn_number(turn_id: str | None) -> int:
+    try:
+        return int(str(turn_id or '').rsplit('-', 1)[-1])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _int_value(value: object) -> int:
+    try:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return 0
+
+
+def _record_end_pair_index(record: dict) -> int:
+    try:
+        return int((record.get('window', {}) or {}).get('end_pair_index', 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _prune_summary_chunks(session_id: str, *, max_pair_index: int) -> None:
+    payload = load_summary_chunks(session_id)
+    chunks = payload.get('chunks', []) if isinstance(payload.get('chunks', []), list) else []
+    kept = []
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        try:
+            turn_end = int(chunk.get('turn_end', 0) or 0)
+        except (TypeError, ValueError):
+            turn_end = 0
+        if turn_end <= max_pair_index:
+            kept.append(chunk)
+    next_payload: dict = dict(payload) if isinstance(payload, dict) else {'version': 1}
+    next_payload['chunks'] = kept
+    save_summary_chunks(session_id, next_payload)
+
+
+def _prune_keeper_archive(session_id: str, *, max_pair_index: int, history_message_count: int) -> None:
+    keeper_archive = session_paths(session_id)['keeper_archive']
+    if not keeper_archive.exists():
+        return
+    try:
+        archive = json.loads(keeper_archive.read_text(encoding='utf-8'))
+    except Exception:
+        return
+    if not isinstance(archive, dict):
+        return
+    records = archive.get('records', []) if isinstance(archive.get('records', []), list) else []
+    kept = [record for record in records if isinstance(record, dict) and _record_end_pair_index(record) <= max_pair_index]
+    next_archive = dict(archive)
+    next_archive['records'] = kept
+    next_archive['source_pair_count'] = min(_int_value(next_archive.get('source_pair_count', 0)), max_pair_index)
+    next_archive['history_message_count'] = history_message_count
+    atomic_write_text(keeper_archive, json.dumps(next_archive, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+
+def _rollback_derived_artifacts(session_id: str, target_turn_id: str, turn_trace: dict, *, reset_derived_caches: bool = True, history_message_count: int = 0) -> None:
     pre_turn = turn_trace.get('pre_turn', {}) if isinstance(turn_trace.get('pre_turn', {}), dict) else {}
     prev_state = pre_turn.get('state') if isinstance(pre_turn.get('state'), dict) else None
     if prev_state is None:
@@ -67,10 +135,15 @@ def _rollback_derived_artifacts(session_id: str, target_turn_id: str, turn_trace
     event_payload['items'] = items
     save_event_summaries(session_id, event_payload)
 
-    save_summary_chunks(session_id, {'version': 1, 'chunks': []})
-    keeper_archive = session_paths(session_id)['keeper_archive']
-    if keeper_archive.exists():
-        keeper_archive.unlink()
+    if reset_derived_caches:
+        save_summary_chunks(session_id, {'version': 1, 'chunks': []})
+        keeper_archive = session_paths(session_id)['keeper_archive']
+        if keeper_archive.exists():
+            keeper_archive.unlink()
+    else:
+        max_pair_index = max(0, _turn_number(target_turn_id) - 1)
+        _prune_summary_chunks(session_id, max_pair_index=max_pair_index)
+        _prune_keeper_archive(session_id, max_pair_index=max_pair_index, history_message_count=history_message_count)
 
 
 def _snapshot_artifacts(session_id: str, history: list, meta: dict) -> dict:
@@ -196,7 +269,7 @@ def delete_latest_turn(session_id: str) -> dict:
             turn_trace = load_turn_trace(session_id, target_turn_id)
             if not turn_trace:
                 return {'error': {'code': 'TURN_TRACE_MISSING', 'message': 'latest turn trace is required to delete a complete turn'}}
-            _rollback_derived_artifacts(session_id, target_turn_id, turn_trace)
+            _rollback_derived_artifacts(session_id, target_turn_id, turn_trace, reset_derived_caches=False, history_message_count=len(history) - 2)
 
         trimmed_history = history[:-2]
         save_history(session_id, trimmed_history)
