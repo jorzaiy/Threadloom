@@ -287,7 +287,8 @@ NPC_EPISTEMIC_MARKERS = (
 
 GENERIC_ACTOR_HINTS = (
     '男生', '女生', '学员', '新生', '高年级', '助教', '老师', '教官', '医生', '护士', '杂工', '炊事员',
-    '寸头', '高个子', '圆脸', '金发', '瘦高', '迟到', '受伤', '年轻', '老人', '小个子',
+    '寸头', '高个子', '圆脸', '金发', '瘦高', '迟到', '受伤', '年轻', '老人', '小个子', '修士', '客人',
+    '茶客', '书生', '汉子', '孩子',
 )
 
 NON_NAME_DIALOGUE = {
@@ -308,6 +309,7 @@ COMMON_SURNAME_PREFIXES = set(
 PERSON_ALIAS_SUFFIXES = (
     '人', '男人', '女人', '女子', '青年', '少年', '老者', '壮汉', '男生', '女生', '学员', '新生',
     '教官', '助教', '老师', '教员', '先生', '小姐', '女士', '夫人', '长官', '队长', '主管',
+    '掌柜', '老板', '伙计', '客人', '茶客', '修士', '散修', '书生', '汉子', '孩子',
 )
 
 ROLE_FUNCTION_TERMS = (
@@ -406,15 +408,26 @@ def _descriptive_role_overlap(left: dict, right: dict) -> bool:
     right_names = _actor_names(right)
     if not any(_is_descriptive_actor_name(name) for name in left_names | right_names):
         return False
+    left_text = ' '.join(str(left.get(key, '') or '') for key in ('name', 'appearance', 'identity'))
+    right_text = ' '.join(str(right.get(key, '') or '') for key in ('name', 'appearance', 'identity'))
+    shared_location = any(token in left_text and token in right_text for token in ('隔壁', '二楼', '倒数第二间'))
+    if not shared_location:
+        shared_location = bool(
+            (('隔壁' in left_text and '倒数第二间' in right_text) or ('倒数第二间' in left_text and '隔壁' in right_text))
+            and ('二楼' in left_text or '二楼' in right_text)
+        )
+    shared_role = any(token in left_text and token in right_text for token in ('客人', '房客', '住客', '修士'))
+    if shared_location and shared_role:
+        return True
     left_functions = _actor_function_terms(left)
     right_functions = _actor_function_terms(right)
     if not left_functions or not right_functions:
         return False
     if left_functions & right_functions:
         return True
-    left_text = ' '.join(str(left.get(key, '') or '') for key in ('name', 'appearance', 'identity'))
-    right_text = ' '.join(str(right.get(key, '') or '') for key in ('name', 'appearance', 'identity'))
-    return bool(('柜台' in left_text and '掌柜' in right_text) or ('掌柜' in left_text and '柜台' in right_text))
+    if ('柜台' in left_text and '掌柜' in right_text) or ('掌柜' in left_text and '柜台' in right_text):
+        return True
+    return False
 
 
 def _clean_actor_aliases(aliases: list[str], actor_name: str = '') -> list[str]:

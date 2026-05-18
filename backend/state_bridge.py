@@ -47,6 +47,7 @@ GENERIC_SHADOW_LABELS = {'暗影', '黑影', '影子', '人影'}
 PERSON_EVIDENCE_SUFFIXES = ENTITY_DESCRIPTOR_SUFFIXES + (
     '老汉', '老妇', '老人', '先生', '小姐', '姑娘', '掌柜', '老板', '东家', '伙计', '学徒', '官差', '衙役',
     '捕快', '巡捕', '守卫', '侍卫', '士兵', '弟子', '师父', '师兄', '师姐', '师弟', '师妹', '长老', '管事',
+    '孩子', '小孩', '客人', '茶客', '修士', '散修', '书生', '汉子',
 )
 PERSON_ACTION_VERBS = (
     '说', '问', '答', '笑', '喊', '叫', '道', '提醒', '解释', '反驳', '点头', '摇头', '看', '望', '盯', '瞥',
@@ -55,7 +56,8 @@ PERSON_ACTION_VERBS = (
 PERSON_ROLE_HINTS = (
     '人物', '人', '者', '男', '女', '青年', '少年', '老者', '老人', '老汉', '老妇', '姑娘', '先生', '小姐',
     '掌柜', '老板', '东家', '伙计', '学徒', '官差', '衙役', '捕快', '巡捕', '守卫', '侍卫', '士兵', '弟子',
-    '师父', '师兄', '师姐', '师弟', '师妹', '长老', '管事', 'NPC', 'npc',
+    '师父', '师兄', '师姐', '师弟', '师妹', '长老', '管事', '孩子', '小孩', '客人', '茶客', '修士', '散修',
+    'NPC', 'npc',
 )
 
 
@@ -287,6 +289,8 @@ def _looks_like_person_label(name: str) -> bool:
         return True
     if any(text.endswith(suffix) for suffix in PERSON_EVIDENCE_SUFFIXES):
         return True
+    if text in {'黑皮', '瘦长脸', '半大孩子'}:
+        return True
     return False
 
 
@@ -409,6 +413,11 @@ def _role_has_person_evidence(role_label: str) -> bool:
     return any(hint in role for hint in PERSON_ROLE_HINTS)
 
 
+def _is_generic_scene_role_label(role_label: str) -> bool:
+    text = str(role_label or '').strip()
+    return not text or text in {'待确认', '当前互动核心人物', '相关场景人物', '当前场景人物'}
+
+
 def _actor_name_pool(*states: dict[str, Any]) -> set[str]:
     names: set[str] = set()
     for state in states:
@@ -518,12 +527,21 @@ def _filter_onstage_names_with_current_evidence(names: Iterable[str], current: d
 
 def _filter_scene_entities_with_person_evidence(entities: list[dict[str, Any]], current: dict[str, Any], prev: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+    current_onstage_pool = {
+        sanitize_runtime_name(name)
+        for name in current.get('onstage_npcs', []) or []
+        if sanitize_runtime_name(name)
+    } | _current_turn_onstage_name_pool(current)
     for item in entities or []:
         if not isinstance(item, dict):
             continue
         primary = sanitize_runtime_name(item.get('primary_label', ''))
         if not _has_positive_person_evidence(primary, item, current, prev):
             continue
+        role_label = str(item.get('role_label', '') or '').strip()
+        if current_onstage_pool and not bool(item.get('onstage')) and primary not in current_onstage_pool and _is_generic_scene_role_label(role_label):
+            if not _has_current_turn_person_evidence(primary, current):
+                continue
         if bool(item.get('onstage')) and _needs_current_turn_person_evidence(primary, current, prev) and not _has_current_turn_person_evidence(primary, current):
             continue
         next_item = dict(item)
@@ -1216,7 +1234,27 @@ def _object_signature(label: str) -> str:
     text = str(label or '').strip()
     if not text:
         return ''
-    return re.sub(r'^(?:一[个把只张本份封]|这[个把只张本份封]|那[个把只张本份封])', '', text).strip()
+    text = normalize_keeper_object_label(text)
+    text = re.sub(r'^(?:一[个把只张本份封枚根]|这[个把只张本份封枚根]|那[个把只张本份封枚根])', '', text).strip()
+    return text
+
+
+def _object_label_surfaces(item: dict) -> list[str]:
+    labels = [str((item or {}).get('label', '') or '').strip()]
+    labels.extend(str(alias or '').strip() for alias in ((item or {}).get('aliases', []) or []))
+    out: list[str] = []
+    for label in labels:
+        if label and not _looks_like_bad_object_label(label) and label not in out:
+            out.append(label)
+    return out
+
+
+def _object_items_compatible(left: dict, right: dict) -> bool:
+    for left_label in _object_label_surfaces(left):
+        for right_label in _object_label_surfaces(right):
+            if _object_labels_compatible(left_label, right_label):
+                return True
+    return False
 
 
 def _object_labels_compatible(left: str, right: str) -> bool:
@@ -1316,8 +1354,7 @@ def _merge_tracked_objects(prev_objects: list[dict], candidate_objects: list[dic
             if idx in used_prev:
                 continue
             prev_id = str(prev.get('object_id', '') or '').strip()
-            prev_label = str(prev.get('label', '') or '').strip()
-            if (object_id and prev_id and object_id == prev_id) or _object_labels_compatible(label, prev_label):
+            if (object_id and prev_id and object_id == prev_id) or _object_items_compatible(candidate, prev):
                 matched_idx = idx
                 break
         prev = prev_items[matched_idx] if matched_idx is not None else None
@@ -1373,6 +1410,22 @@ def _merge_tracked_objects(prev_objects: list[dict], candidate_objects: list[dic
         if any(str(item.get('object_id', '') or '').strip() == object_id for item in merged):
             continue
         if not label or not object_id or _looks_like_bad_object_label(label):
+            continue
+        matched_idx = None
+        for merged_idx, existing in enumerate(merged):
+            if _object_items_compatible(prev, existing):
+                matched_idx = merged_idx
+                break
+        if matched_idx is not None:
+            existing = merged[matched_idx]
+            aliases = _object_label_surfaces(existing) + _object_label_surfaces(prev)
+            merged[matched_idx] = {
+                **prev,
+                **existing,
+                'object_id': str(existing.get('object_id', '') or object_id),
+                'label': _prefer_stable_object_label(str(existing.get('label', '') or ''), label),
+                'aliases': list(dict.fromkeys(alias for alias in aliases if alias and alias != existing.get('label')))[:8],
+            }
             continue
         merged.append(dict(prev))
     return merged
@@ -2164,6 +2217,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
     tracked_objects = current.get('tracked_objects', prev.get('tracked_objects', []))
     if not isinstance(tracked_objects, list):
         tracked_objects = prev.get('tracked_objects', []) if isinstance(prev.get('tracked_objects', []), list) else []
+    raw_candidate_tracked_objects = [dict(item) for item in tracked_objects if isinstance(item, dict)]
     prev_tracked_objects = prev.get('tracked_objects', []) if isinstance(prev.get('tracked_objects', []), list) else []
     tracked_objects = _merge_tracked_objects(prev_tracked_objects, tracked_objects)
     normalized_objects = []
@@ -2202,6 +2256,17 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             normalized_item['lifecycle_reason'] = str(item.get('lifecycle_reason', '') or '').strip()
         normalized_objects.append(normalized_item)
     object_index = {item['object_id']: item for item in normalized_objects}
+    object_id_aliases: dict[str, str] = {}
+    for raw in prev_tracked_objects + raw_candidate_tracked_objects + tracked_objects:
+        if not isinstance(raw, dict):
+            continue
+        raw_id = str(raw.get('object_id', '') or '').strip()
+        if not raw_id or raw_id in object_index:
+            continue
+        for stable_id, stable_item in object_index.items():
+            if _object_items_compatible(raw, stable_item):
+                object_id_aliases[raw_id] = stable_id
+                break
     graveyard_objects = [dict(item) for item in current.get('graveyard_objects', prev.get('graveyard_objects', [])) if isinstance(item, dict)]
     graveyard_by_id = {
         str(item.get('object_id', '') or '').strip(): item
@@ -2250,6 +2315,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         if not isinstance(item, dict):
             continue
         object_id = str(item.get('object_id', '') or '').strip()
+        object_id = object_id_aliases.get(object_id, object_id)
         holder = sanitize_runtime_name(item.get('holder', ''))
         holder_entity = early_holder_lookup.get(holder)
         if holder_entity:
@@ -2289,6 +2355,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         if not isinstance(item, dict):
             continue
         object_id = str(item.get('object_id', '') or '').strip()
+        object_id = object_id_aliases.get(object_id, object_id)
         if not object_id:
             continue
         if object_id not in object_index or object_id in retired_object_ids:

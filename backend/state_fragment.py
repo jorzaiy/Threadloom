@@ -142,7 +142,7 @@ def build_state_from_fragment(prev_state: dict, state_fragment: dict, session_id
         if value and value != '待确认':
             next_state[field] = value
 
-    for field in ('onstage_npcs', 'relevant_npcs', 'immediate_risks', 'carryover_clues', 'scene_entities', 'tracked_objects', 'possession_state', 'object_visibility'):
+    for field in ('onstage_npcs', 'relevant_npcs', 'immediate_risks', 'carryover_clues', 'scene_entities', 'tracked_objects', 'possession_state', 'object_visibility', '_current_turn_onstage_npcs'):
         value = fragment.get(field)
         if isinstance(value, list) and value:
             next_state[field] = deepcopy(value)

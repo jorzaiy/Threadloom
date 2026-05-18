@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'backend'))
 
-from backend.state_fragment import extract_reply_skeleton, merge_reply_skeleton, merge_state_skeleton
+from backend.state_fragment import build_state_from_fragment, extract_reply_skeleton, merge_reply_skeleton, merge_state_skeleton
 from backend import state_keeper
 from backend.state_bridge import normalize_state_dict
 from backend.thread_tracker import apply_thread_tracker
@@ -224,6 +224,89 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertEqual(normalized['onstage_npcs'], ['严教官'])
         self.assertNotIn('_current_turn_onstage_npcs', normalized)
+
+    def test_current_scene_onstage_refresh_drops_stale_generic_entity(self):
+        prev = {
+            'time': '下午',
+            'location': '旧客栈',
+            'main_event': '主角和中年人谈完旧事。',
+            'immediate_goal': '离开客栈。',
+            'scene_entities': [
+                {
+                    'entity_id': 'scene_npc_01',
+                    'primary_label': '中年人',
+                    'aliases': ['中年人'],
+                    'role_label': '当前互动核心人物',
+                    'onstage': False,
+                }
+            ],
+        }
+        current = {
+            'time': '下午',
+            'location': '青州城北门内茶肆',
+            'main_event': '瘦长脸、黑皮和半大孩子在茶肆旁压低声音说起城门盘查。',
+            'immediate_goal': '判断是否继续听他们谈话。',
+            'onstage_npcs': ['瘦长脸', '黑皮', '半大孩子'],
+            '_current_turn_onstage_npcs': ['瘦长脸', '黑皮', '半大孩子'],
+        }
+
+        normalized = normalize_state_dict(current, prev_state=prev)
+
+        self.assertEqual(normalized['onstage_npcs'], ['瘦长脸', '黑皮', '半大孩子'])
+        self.assertEqual([item['primary_label'] for item in normalized['scene_entities']], ['瘦长脸', '黑皮', '半大孩子'])
+
+    def test_build_state_from_fragment_preserves_current_turn_onstage_marker(self):
+        fragment = merge_state_skeleton(
+            {
+                'time': '下午',
+                'location': '青州城北门内茶肆',
+                'main_event': '茶肆旁几人压低声音说起城门盘查。',
+                'immediate_goal': '判断是否继续听他们谈话。',
+            },
+            {'onstage_npcs': ['黑皮', '半大孩子']},
+        )
+
+        normalized = build_state_from_fragment({}, fragment, 'session-test')
+
+        self.assertEqual(normalized['onstage_npcs'], ['黑皮', '半大孩子'])
+        self.assertEqual([item['primary_label'] for item in normalized['scene_entities']], ['黑皮', '半大孩子'])
+        self.assertNotIn('_current_turn_onstage_npcs', normalized)
+
+    def test_object_aliases_merge_duplicate_ids_and_possession(self):
+        prev = {
+            'time': '下午',
+            'location': '客栈',
+            'main_event': '主角整理物品。',
+            'immediate_goal': '继续赶路。',
+            'tracked_objects': [
+                {'object_id': 'wind_talisman_01', 'label': '御风符', 'kind': 'key_item', 'story_relevant': True},
+                {'object_id': 'bronze_calc_rods', 'label': '青铜算筹', 'kind': 'tool', 'story_relevant': True},
+            ],
+            'possession_state': [
+                {'object_id': 'wind_talisman_01', 'holder': '主角', 'status': 'on_desk', 'location': '桌上'},
+                {'object_id': 'bronze_calc_rods', 'holder': '主角', 'status': 'placed_on_ground', 'location': '地上'},
+            ],
+        }
+        current = {
+            'time': '下午',
+            'location': '客栈',
+            'main_event': '主角把御风符和青铜算筹收进储物袋。',
+            'immediate_goal': '离开客栈。',
+            'tracked_objects': [
+                {'object_id': 'wind_charm', 'label': '御风符', 'kind': 'key_item', 'aliases': ['风符']},
+                {'object_id': 'calculation_sticks', 'label': '青铜算筹', 'kind': 'tool', 'aliases': ['算筹']},
+            ],
+            'possession_state': [
+                {'object_id': 'wind_charm', 'holder': '主角', 'status': 'in_storage_bag', 'location': '储物袋'},
+                {'object_id': 'calculation_sticks', 'holder': '主角', 'status': 'in_storage_bag', 'location': '储物袋'},
+            ],
+        }
+
+        normalized = normalize_state_dict(current, prev_state=prev)
+
+        self.assertEqual([item['object_id'] for item in normalized['tracked_objects']], ['wind_talisman_01', 'bronze_calc_rods'])
+        self.assertEqual([item['object_id'] for item in normalized['possession_state']], ['wind_talisman_01', 'bronze_calc_rods'])
+        self.assertTrue(all(item['status'] == 'in_storage_bag' for item in normalized['possession_state']))
 
     def test_keeper_baseline_restores_current_turn_skeleton_marker(self):
         baseline = normalize_state_dict(
