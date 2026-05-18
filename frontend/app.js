@@ -1211,6 +1211,9 @@ function renderMessages(items) {
     return;
   }
   const lastAssistantIndex = allItems.map(i => i.role).lastIndexOf('assistant');
+  const latestCommittedUserIndex = !pendingUserMessage
+    ? allItems.map(i => i.role).lastIndexOf('user')
+    : -1;
   let i = 0;
   for (const item of allItems) {
     const article = document.createElement('article');
@@ -1268,6 +1271,32 @@ function renderMessages(items) {
       }
     } else {
       body.textContent = item.content;
+      if (i === latestCommittedUserIndex && !item.pending) {
+        const wrap = document.createElement('div');
+        wrap.className = 'msg-regenerate-wrap msg-delete-wrap';
+        const btn = document.createElement('button');
+        btn.className = 'msg-regenerate-btn msg-delete-turn-btn';
+        btn.type = 'button';
+        btn.title = '删除最后一轮';
+        btn.setAttribute('aria-label', '删除最后一轮');
+        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5"></path><path d="M14 11v5"></path></svg>';
+        btn.addEventListener('click', async () => {
+          if (!window.confirm('删除最后一轮输入和回复？这会一起回滚本轮状态记录。')) return;
+          btn.disabled = true;
+          btn.classList.add('loading');
+          setStatus('删除最后一轮中...', 'working');
+          try {
+            await deleteLatestTurn();
+            setStatus('已删除最后一轮', 'ok');
+          } catch (err) {
+            setStatus(`错误：${err.message}`, 'error');
+            btn.disabled = false;
+            btn.classList.remove('loading');
+          }
+        });
+        wrap.appendChild(btn);
+        body.appendChild(wrap);
+      }
     }
     article.appendChild(head);
     article.appendChild(body);
@@ -1719,6 +1748,23 @@ async function regenerateLast() {
   await loadHistory();
   renderState(data.state_snapshot || {});
   renderDebug(data.debug || null);
+  shouldStickToBottom = true;
+  focusLatestAssistant({ smooth: false });
+}
+
+async function deleteLatestTurn() {
+  const data = await apiJson('/api/delete-latest-turn', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: sessionId()})
+  });
+  pendingUserMessage = null;
+  pendingClientTurnId = null;
+  renderMessages(data.messages || []);
+  renderState(data.state_snapshot || {});
+  renderCharacterCard(data.character_card || lastCharacterCard);
+  renderDebug({delete_latest_turn: {turn_id: data.deleted_turn_id || null}});
+  updateSessionIndicator();
   shouldStickToBottom = true;
   focusLatestAssistant({ smooth: false });
 }

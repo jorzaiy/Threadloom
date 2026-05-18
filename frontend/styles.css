@@ -829,10 +829,23 @@ button:active {
   opacity: 0.6;
 }
 
+.msg.user:hover .msg-delete-turn-btn {
+  opacity: 0.58;
+}
+
 .msg-regenerate-btn:hover {
   opacity: 1;
   background: rgba(0, 0, 0, 0.05);
   color: var(--primary);
+}
+
+.msg-delete-wrap {
+  margin-bottom: -9px;
+}
+
+.msg-delete-turn-btn:hover {
+  background: rgba(123, 47, 42, 0.08);
+  color: #7b2f2a;
 }
 
 .msg-regenerate-btn:disabled,
