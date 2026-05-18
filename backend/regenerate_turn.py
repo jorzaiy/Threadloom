@@ -173,3 +173,51 @@ def regenerate_last_partial(session_id: str, *, allow_complete: bool = False) ->
             regenerated_history[-2] = dict(user)
             save_history(session_id, regenerated_history)
     return result
+
+
+def delete_latest_turn(session_id: str) -> dict:
+    history = load_history(session_id)
+    meta = load_meta(session_id)
+    if len(history) < 2:
+        return {'error': {'code': 'NO_DELETABLE_TURN', 'message': 'no latest turn to delete'}}
+
+    assistant = history[-1]
+    user = history[-2]
+    if user.get('role') != 'user' or assistant.get('role') != 'assistant':
+        return {'error': {'code': 'NO_DELETABLE_TURN', 'message': 'latest turn is not a user/assistant pair'}}
+
+    completion_status = assistant.get('completion_status', 'complete')
+    target_turn_id = _latest_turn_id(meta)
+    restore_snapshot = _snapshot_artifacts(session_id, history, meta)
+    try:
+        if completion_status != 'partial':
+            if not target_turn_id:
+                return {'error': {'code': 'NO_DELETABLE_TURN', 'message': 'no committed turn to delete'}}
+            turn_trace = load_turn_trace(session_id, target_turn_id)
+            if not turn_trace:
+                return {'error': {'code': 'TURN_TRACE_MISSING', 'message': 'latest turn trace is required to delete a complete turn'}}
+            _rollback_derived_artifacts(session_id, target_turn_id, turn_trace)
+
+        trimmed_history = history[:-2]
+        save_history(session_id, trimmed_history)
+        if completion_status != 'partial':
+            update_summary(session_id)
+
+        if completion_status != 'partial' and int(meta.get('last_turn_id', 0) or 0) > 0:
+            meta['last_turn_id'] = int(meta.get('last_turn_id', 0) or 0) - 1
+        _drop_processed_turn(meta, target_turn_id if completion_status != 'partial' else None)
+        _drop_turn_audits(meta, target_turn_id if completion_status != 'partial' else None)
+        save_meta(session_id, meta)
+    except ValueError as err:
+        _restore_artifacts(session_id, restore_snapshot)
+        return {'error': {'code': 'TURN_TRACE_MISSING', 'message': str(err)}}
+    except Exception:
+        _restore_artifacts(session_id, restore_snapshot)
+        raise
+
+    return {
+        'ok': True,
+        'session_id': session_id,
+        'deleted_turn_id': target_turn_id if completion_status != 'partial' else None,
+        'deleted_user_text': str(user.get('content', '') or ''),
+    }

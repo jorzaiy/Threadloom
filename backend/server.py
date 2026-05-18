@@ -32,7 +32,7 @@ from model_config import (
     update_site_config,
     upsert_provider_config,
 )
-from regenerate_turn import regenerate_last_partial
+from regenerate_turn import delete_latest_turn, regenerate_last_partial
 from session_lifecycle import delete_session, list_sessions, start_new_game
 from paths import DEFAULT_USER_ID, active_character_id, active_user_id, current_session_dir, find_character_session_dir, is_path_within_user_root, normalize_session_id, resolve_session_dir, reset_active_user_id, reset_multi_user_request_context, set_active_user_id, set_multi_user_request_context, slugify
 from player_profile import base_player_profile_source_path, character_player_profile_override_source_path, delete_user_avatar, legacy_profile_to_unified, load_base_player_profile, load_character_player_profile_override, normalize_profile_text_with_keeper_llm, read_profile_source, render_runtime_player_profile_markdown, resolve_user_avatar_path, save_base_player_profile, save_base_player_profile_source, save_character_player_profile_override, save_character_player_profile_override_source, save_user_avatar, validate_unified_player_profile
@@ -854,6 +854,26 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 with self._session_lock(session_id):
                     result = regenerate_last_partial(session_id, allow_complete=allow_complete)
+                status = 200 if 'error' not in result else 400
+                return self._send(status, result)
+
+            if parsed.path == '/api/delete-latest-turn':
+                session_id = str(payload.get('session_id', '') or '').strip()
+                if not session_id:
+                    return self._invalid_input('session_id is required')
+                try:
+                    session_id = normalize_session_id(session_id)
+                except ValueError as err:
+                    return self._invalid_input(str(err))
+                if not self._validate_active_session_scope(session_id, allow_missing=False):
+                    return
+                with self._session_lock(session_id):
+                    result = delete_latest_turn(session_id)
+                    if 'error' not in result:
+                        result['messages'] = filter_committed_history_items(load_history(session_id))
+                        result['state_snapshot'] = build_state_snapshot(load_state(session_id))
+                        result['character_card'] = load_character_card_meta()
+                        result['web'] = web_runtime_settings()
                 status = 200 if 'error' not in result else 400
                 return self._send(status, result)
 

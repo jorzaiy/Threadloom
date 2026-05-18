@@ -173,3 +173,80 @@ def test_partial_regenerate_keeps_existing_behavior(monkeypatch):
     assert history_store['items'] == []
     assert meta_store['data']['last_turn_id'] == 0
     assert meta_store['data']['processed_client_turn_ids'] == {}
+
+
+def test_delete_latest_turn_restores_pre_turn_artifacts(monkeypatch, tmp_path):
+    session_id = 'delete-turn-session'
+    history_store = {'items': [
+        {'ts': 100, 'role': 'user', 'content': '误触输入'},
+        {'ts': 101, 'role': 'assistant', 'content': '误触回复', 'completion_status': 'complete'},
+    ]}
+    meta_store = {'data': {
+        'last_turn_id': 5,
+        'processed_client_turn_ids': {
+            'web-5': {'turn_id': 'turn-0005', 'reply': '误触回复'},
+            'web-4': {'turn_id': 'turn-0004', 'reply': '旧回复'},
+        },
+        'turn_audits': [{'turn_id': 'turn-0004'}, {'turn_id': 'turn-0005'}],
+        'last_turn_audit': {'turn_id': 'turn-0005'},
+    }}
+    saved_state = {}
+    saved_persona = {}
+    saved_events = {}
+    saved_chunks = {}
+    summary_updates = []
+    keeper_archive = tmp_path / 'keeper_record_archive.json'
+    keeper_archive.write_text('{"records":[1]}', encoding='utf-8')
+
+    monkeypatch.setattr(regenerate_turn, 'load_history', lambda _session_id: list(history_store['items']))
+    monkeypatch.setattr(regenerate_turn, 'save_history', lambda _session_id, items: history_store.update(items=list(items)))
+    monkeypatch.setattr(regenerate_turn, 'load_meta', lambda _session_id: dict(meta_store['data']))
+    monkeypatch.setattr(regenerate_turn, 'save_meta', lambda _session_id, meta: meta_store.update(data=meta))
+    monkeypatch.setattr(regenerate_turn, 'load_state', lambda _session_id: {'main_event': '误触后状态'})
+    monkeypatch.setattr(regenerate_turn, 'load_session_persona_layers', lambda _session_id: {'scene': {'误触人物': {}}, 'archive': {}, 'longterm': {}})
+    monkeypatch.setattr(regenerate_turn, 'load_event_summaries', lambda _session_id: {'version': 1, 'items': [{'turn_id': 'turn-0004'}, {'turn_id': 'turn-0005'}]})
+    monkeypatch.setattr(regenerate_turn, 'load_summary_chunks', lambda _session_id: {'version': 1, 'chunks': [{'chunk_id': 'chunk_0001'}]})
+    monkeypatch.setattr(regenerate_turn, 'load_summary', lambda _session_id: '# Before delete snapshot\n')
+    monkeypatch.setattr(regenerate_turn, 'load_turn_trace', lambda _session_id, _turn_id: {
+        'pre_turn': {
+            'state': {'main_event': '误触前状态'},
+            'persona_layers': {'scene': {}, 'archive': {}, 'longterm': {}},
+        }
+    })
+    monkeypatch.setattr(regenerate_turn, 'save_state', lambda _session_id, state: saved_state.update(state=state))
+    monkeypatch.setattr(regenerate_turn, 'save_session_persona_layers', lambda _session_id, layers: saved_persona.update(layers=layers))
+    monkeypatch.setattr(regenerate_turn, 'save_event_summaries', lambda _session_id, payload: saved_events.update(payload=payload))
+    monkeypatch.setattr(regenerate_turn, 'save_summary_chunks', lambda _session_id, payload: saved_chunks.update(payload=payload))
+    monkeypatch.setattr(regenerate_turn, 'update_summary', lambda _session_id: summary_updates.append(_session_id) or '# Rolled Back\n')
+    monkeypatch.setattr(regenerate_turn, 'session_paths', lambda _session_id: {'keeper_archive': keeper_archive})
+
+    result = regenerate_turn.delete_latest_turn(session_id)
+
+    assert result['ok'] is True
+    assert result['deleted_turn_id'] == 'turn-0005'
+    assert result['deleted_user_text'] == '误触输入'
+    assert history_store['items'] == []
+    assert meta_store['data']['last_turn_id'] == 4
+    assert 'web-5' not in meta_store['data']['processed_client_turn_ids']
+    assert meta_store['data']['processed_client_turn_ids']['web-4']['turn_id'] == 'turn-0004'
+    assert meta_store['data']['turn_audits'] == [{'turn_id': 'turn-0004'}]
+    assert meta_store['data']['last_turn_audit'] == {'turn_id': 'turn-0004'}
+    assert saved_state['state'] == {'main_event': '误触前状态'}
+    assert saved_persona['layers'] == {'scene': {}, 'archive': {}, 'longterm': {}}
+    assert saved_events['payload']['items'] == [{'turn_id': 'turn-0004'}]
+    assert saved_chunks['payload'] == {'version': 1, 'chunks': []}
+    assert summary_updates == [session_id]
+    assert not keeper_archive.exists()
+
+
+def test_delete_latest_turn_requires_trace_for_complete_turn(monkeypatch):
+    monkeypatch.setattr(regenerate_turn, 'load_history', lambda _session_id: [
+        {'role': 'user', 'content': '输入'},
+        {'role': 'assistant', 'content': '输出', 'completion_status': 'complete'},
+    ])
+    monkeypatch.setattr(regenerate_turn, 'load_meta', lambda _session_id: {'last_turn_id': 1})
+    monkeypatch.setattr(regenerate_turn, 'load_turn_trace', lambda _session_id, _turn_id: {})
+
+    result = regenerate_turn.delete_latest_turn('session')
+
+    assert result['error']['code'] == 'TURN_TRACE_MISSING'
