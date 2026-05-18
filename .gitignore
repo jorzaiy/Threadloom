@@ -30,6 +30,7 @@ tmp/
 
 # Task scratch + ad-hoc test artefacts
 .task-work/
+.sisyphus/
 doc/archive/
 doc/test-reports/
 *.backup
