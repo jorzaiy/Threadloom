@@ -15,6 +15,25 @@
 
 但它仍然是原型，离“稳定主链”还有明显距离。问题不在于能不能跑，而在于：事实层是否足够稳、fallback 是否足够保守、连续多轮后会不会轻微漂移累积成明显失真。
 
+## 2026-05-19 Unified Memory Transaction
+
+本轮针对 `九幽大陆-20260517-f12610` 暴露的长 session 记忆混乱做了第一阶段收口。结论是：原始 `history.jsonl` 相对干净，主要污染来自多个派生记忆层各自调用 LLM 后互相竞争事实解释权，例如 summary chunk 人名漂移、keeper archive 把后期全局物件写进早期窗口、物件 ID 重复，以及 keeper 输出被 `finish_reason=length` 截断后仍被视作成功。
+
+已完成的第一版纵切：
+
+- 默认启用统一记忆事务：每个完整 runtime 回合只让 full `state_keeper` 作为唯一 LLM 记忆 patch 来源。
+- 统一模式下关闭 skeleton keeper LLM、actor registry LLM、focused possession retry LLM、event ledger LLM、summary chunk LLM。
+- `state_keeper` 的 `finish_reason=length` 视为失败，不允许半截输出落盘。
+- summary chunk LLM 若被截断，降级 heuristic 并记录 `llm_rejected_reason=length`。
+- context 装配前 quarantine 明显主角名复合漂移的 summary chunks，避免坏 chunk 继续注入 narrator。
+- keeper archive heuristic digest 只允许记录当前窗口文本中实际出现的物件，避免用最新全局物品污染早期窗口。
+- opening choice 首轮进入 narrator 时跳过中间 checkpoint save，最终 state 由 handler 在本轮结束统一提交。
+- `repair_memory(rebuild_derived=True)` 会清空并 heuristic 重建 summary chunks，同时无 LLM 重建 keeper archive；已用于修复 f12610 的派生缓存。
+
+验证结果：相关 changed files LSP clean；memory / context / keeper / delete 回归扩展集合 `178 passed`；针对 review blocking 的 opening / event ledger / summary chunk focused tests `9 passed`；targeted Oracle follow-up review 通过。
+
+仍建议观察 5-10 个真实回合后再继续 Phase 3 完整版：也就是更大的 `merge_candidate` schema、evidence quote required、stable ID resolver、duplicate reject / alias merge / unresolved queue。当前版本已切掉最大污染源，但尚未实现完整的候选合并审批队列。
+
 ## 2026-04-16 Live HTTP Soak
 
 这轮新增了一次真实 HTTP 长跑验证，重点不再是“链路能不能跑”，而是：

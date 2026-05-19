@@ -25,10 +25,10 @@
 - `name_sanitizer.py`：实体名清洗与人物性校验；过滤时间、空间、规则、栏目、盲区等抽象/结构标签，提供 `sanitize_runtime_name()` 与 `looks_like_bad_entity_fragment()` 等共享校验函数
 - `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、当前时间粗时段归一化、抽象/非人物 entity 过滤、onstage 当前证据校验、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖、当前场景物件 stale guard 与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
 - `state_fragment.py`：state fragment 构建；以 skeleton keeper 输出与 arbiter 结果为基线生成 `state_fragment`，作为 narrator 与 fill keeper 的结构化锚点；`build_state_from_fragment()` 在非合并轮替代 full fill keeper 做轻量 state 更新
-- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报、信号，以及有正文证据的 `npc_relationships` 增量，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成
+- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报、信号，以及有正文证据的 `npc_relationships` 增量，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成；若模型返回 `finish_reason=length`，该 keeper 输出会被视为失败，避免半截 JSON 进入记忆层
 - `state_updater.py`：离线 replay / rebuild 工具链中的保守兜底；在线主链失败时优先走 `state_fragment.build_state_from_fragment()` 的 `fragment-baseline`
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
-- `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；chunk 保存 `time_start/time_end` 作为窗口时间范围；`actors_mentioned` 会过滤非人物/抽象话题，并对源窗口中已知的主角名做保守一致性修复，避免 selector 以后按伪 actor 或主角错字召回
+- `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；chunk 保存 `time_start/time_end` 作为窗口时间范围；`actors_mentioned` 会过滤非人物/抽象话题，并对源窗口中已知的主角名做保守一致性修复，避免 selector 以后按伪 actor 或主角错字召回。统一记忆事务模式下，新 chunk 使用 heuristic 生成；legacy LLM chunk 若返回 `finish_reason=length` 会降级 heuristic 并记录拒收原因
 - `lorebook_distiller.py`：角色卡导入 / 手动重建时把 `lorebook.json` 固化为 `lorebook-foundation.json` 与 `lorebook-index.json`
 - `persona_updater.py` / `persona_runtime.py`：session-local persona 流转、重要度计数、近期观察沉淀与展示骨架；observation 只来自 assistant 叙事中与 NPC 相关的短片段，不把用户 prompt 原文固化为 NPC 事实；抽象话题和结构标签不会生成 persona seed
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
@@ -36,15 +36,15 @@
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档；最终 actor 索引由 state normalization 对齐和剪枝
 - `actor_registry.py`：narrator 回复后的不可变角色注册表；只创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份不再覆盖；内置 protagonist 会从玩家档案沉淀公开身份、私密身份、外貌与知情边界；同时维护 12 轮未提及归档索引，并把物品 / 情报绑定到 `actor_id`；`knowledge_records` 吸收本轮 `knowledge_scope` 时会做轻量相似去重；Keeper 输出的 `npc_relationships` 会在这里绑定到既有 NPC actor 的 `relationship_to_protagonist`；LLM candidate 在创建前会再过人物性/抽象名校验
 - `entity_candidate_judge.py`：entity 候选人物性校验统一入口；调用 LLM 判定候选名是否为真实人物角色，过滤时间/空间/规则/结构标签；`state_updater.py` 复用此入口，不再在 `state_bridge.py` 中重复 judge
-- `memory_maintenance.py`：长期记忆维护层；按 actor registry 的精确 alias 做跨 state / event / summary chunk / keeper archive canonicalization，并清理“人物已在场但旧风险仍称其在门外等待”的 stale signal/thread。该层只做确定性维护，不通过正文推断新人物等价关系
+- `memory_maintenance.py`：长期记忆维护层；按 actor registry 的精确 alias 做跨 state / event / summary chunk / keeper archive canonicalization，并清理“人物已在场但旧风险仍称其在门外等待”的 stale signal/thread。该层只做确定性维护，不通过正文推断新人物等价关系；`rebuild_derived` 会先清空 summary chunk 缓存再用 heuristic 重建，并用无 LLM 的 keeper archive rebuild 修复派生缓存污染
 - `memory_agent.py`：跨轮相关记忆召回工具；对历史 turn pair 做 token overlap 评分，选出与当前场景/玩家输入最相关的若干段对话作为 memory bundle
 - `keeper_contract.py`：Keeper 字段常量定义（`SCENE_CORE_FIELDS` 等），供 keeper 系列模块共享
 - `keeper_record_retriever.py`：Keeper 归档记录检索；从 archive 中按 topic / location / query 相关度取回有效记录，供 selector 与 context_builder 使用
 - `mid_context_agent.py`：中段摘要生成 agent；当对话窗口中段需要 keeper archive 刷新时，生成结构化的场景摘要并写入 archive
 - `continuity_hints.py`：连续性提示加载封装；从 `runtime_store` 读取 continuity_hints，供上下文装配层使用
-- `event_ledger.py`：事件账本；产出阶段事件摘要并保存 `time_anchor/location_anchor`，不再负责人物短期状态写回
+- `event_ledger.py`：事件账本；产出阶段事件摘要并保存 `time_anchor/location_anchor`，不再负责人物短期状态写回。统一记忆事务模式下使用 heuristic ledger，不复用 keeper signals 作为事件摘要来源
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
-- `opening.py`：opening 菜单与开局状态机；其 state 写入是阶段 checkpoint，最终 turn state 仍由 `handler_message.py` 统一提交
+- `opening.py`：opening 菜单与开局状态机；菜单/direct-start 仍可保存阶段 checkpoint，但 opening choice 进入首个 narrator 回合时可跳过 checkpoint，由 `handler_message.py` 在该 turn 结束时统一提交最终 state
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
 - `character_manager.py`：角色卡管理 API 处理层；角色卡列表枚举、切换、删除与封面/缩略图读取
@@ -66,7 +66,7 @@
 - narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / scene_objective / items / knowledge / keeper archive hits / recent window 前段提纲 / 最近完整正文 / user input`
 - `player_profile` 当前由统一 JSON schema 渲染为短 prompt block；用户自然语言源文本只用于整理和审计，不直接进入 narrator prompt
 - `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近完整正文 + 前段提纲 + 本轮输入为准
-- `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲和事件时间轴进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回
+- `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲和事件时间轴进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回；summary chunk 进入 prompt 前会经过 quarantine，明显主角名漂移的 chunk 不会注入
 - 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
 - `state_keeper` 优先，在线失败时以 `state_fragment` 形成 `fragment-baseline` 兜底；`state_updater` 主要保留给离线工具链
 - arbiter 已接入主链，不再只是文档占位
@@ -82,10 +82,9 @@
 - 会话归档功能已取消：新游戏只创建新 session，不再把旧 session 移动到 `archive-*`；session list 也不再返回 `archived` 字段。历史 `archive-*` 目录仅作为旧数据存在，不进入当前会话列表
 - `state_keeper` 已加入低信号拒收与回归检查
 - `state_fragment` 已前移到 narrator / state_keeper 主链，并在失败分支提供 `fragment-baseline`
-- `state_keeper_candidate` 当前可作为 `skeleton keeper` sidecar 先产出最小骨架，并并入 `state_fragment` 再交给完整 keeper
-- skeleton keeper 当前每个完整回复后都会运行，避免非合并轮长期沿用旧 `state_fragment` 造成硬锚点滞后；完整 fill keeper 仍按合并轮运行
-- 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment + skeleton` 形成基线，再只补物品、情报与信号；默认每 2 轮运行一次，不再接管 `time / location / main_event / onstage_npcs / immediate_goal` 这类当前硬锚点
-- actor registry 当前在每个完整 narrator 回复后运行：narrator 后处理只允许创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份视为锁定，不允许后续覆盖；持续承担行动链、关系压力或信息承载功能的匿名个体也可用正文稳定称呼建 actor；LLM 失败时不从旧 `scene_entities` fallback 建 actor，避免把旧污染写成不可变设定
+- 统一记忆事务当前默认启用：每个完整 runtime 回合都由 full `state_keeper` 承担唯一 LLM 记忆 patch；skeleton keeper、actor registry LLM、possession retry LLM、event ledger LLM、summary chunk LLM 在统一模式下关闭，避免多路 LLM 对同一轮剧情各自写回
+- 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment` 形成基线，再只补物品、情报与信号；统一模式下每轮运行，不再由 skeleton/fill 双 LLM 分摊同一轮记忆解释权
+- actor registry 当前在每个完整 narrator 回复后运行：narrator 后处理只允许创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份视为锁定，不允许后续覆盖；统一模式下不调用 LLM 新建 actor，只保留确定性 alias、mention、binding 和关系落点维护，避免把旧污染写成不可变设定
 - actor registry 对“实名揭示”有窄口径例外：若已有 generic actor 后续在 narrator 正文中明确自报姓名或被点名，且上下文能唯一绑定到该 generic actor，则只追加实名到 `aliases` 并更新 mention turn，不改写原 `name / personality / appearance / identity`
 - actor registry 会接收 fill keeper 的 `npc_relationships` 临时 patch，把“初识 / 相知 / 好友 / 队友 / 盟友 / 敌对 / 戒备”等自然标签写入既有 NPC actor 的 `relationship_to_protagonist`。关系标签是长期关系面，不改写 NPC 基础设定；必须有本轮 narrator 正文证据，不能从玩家单方面声明直接成立。
 - memory maintenance 会在 actor registry 后运行，把已知 exact alias 迁移到 canonical actor name；冲突 alias 会被跳过，避免两个不同 actor 因同一称呼被自动合并

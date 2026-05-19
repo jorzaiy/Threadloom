@@ -192,13 +192,14 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 
 写回管线的 LLM 调用策略：
 
-- **skeleton keeper**：在普通完整 runtime 回合提取 5 个核心字段（time/location/main_event/onstage_npcs/goal）。当前第一轮和 keeper bootstrap 轮次由 full keeper / fragment baseline 承接，之后 skeleton 在 fill 与非 fill 轮次都可运行，确保 onstage_npcs 不会因 fill keeper 跳过而丢失在场人物。
-- **state keeper fill**：每 N 轮做一次完整状态提取；当前 `config/runtime.json` 默认 `memory.consolidate_every_turns=2`，代码兜底值为 3。fill 补充 scene_objective、signals、objects、knowledge_scope，以及有正文证据的 NPC 与主角关系标签。当 fill 轮次为物件密集轮（`object_heavy_turn`）且 fill keeper 未输出 `possession_state` 时，会自动触发一次 focused possession retry（专用 LLM prompt 只问物品状态变化），防止跨场景长回复中物品位置遗漏。当 fill keeper 输出 `scene_objective.status=resolved` 时，`immediate_goal` 会被自动重置为"待确认"，由下一轮 skeleton 重新填充。
-- **actor registry**：每轮从叙事中提取新角色候选。
-- **event ledger**：每轮生成事件摘要，并从 narrator 回复头或当前 state 记录 `time_anchor/location_anchor`。当前实现每个已提交完整回合都会调用 event ledger；若要在 fill 轮次复用 state_keeper signal 并跳过独立 LLM，需要另行实现。事件摘要的 `actors` 字段除了从 `onstage_npcs` 匹配外，还会从 actors registry 中提取在 narrator reply 中出现的 NPC 名字，避免因 onstage 列表不完整而丢失参与者。
-- **summary chunks**：每 12 轮生成历史分块摘要，并记录该固定窗口的 `time_start/time_end`，让长程召回保留事件时间范围。
+- **统一记忆事务（默认）**：`memory.unified_transaction_enabled` 缺省为开启。每个完整 runtime 回合都只让 full `state_keeper` 作为唯一 LLM 记忆写回者，输出增量 patch，再由 deterministic merge / normalize / canonicalize 层提交。统一模式下，skeleton keeper LLM、actor registry LLM、focused possession retry LLM、event ledger LLM、summary chunk LLM 都不再参与本轮写回，避免多个模型各自解释同一轮剧情。
+- **state keeper fill**：统一事务模式下每个完整回合运行；legacy 模式下仍可按 `memory.consolidate_every_turns` 调度。fill 补充 scene_objective、signals、objects、knowledge_scope，以及有正文证据的 NPC 与主角关系标签。当 keeper 输出 `finish_reason=length` 时，本轮 keeper 结果视为失败，不允许半截 JSON 落盘。
+- **actor registry**：统一模式下只运行确定性绑定、alias 更新、knowledge/possession actor_id 绑定，不再调用 LLM 创建新 actor；legacy 模式仍可用 LLM 提取新角色候选。
+- **event ledger**：统一模式下使用 heuristic event ledger，不复用 `state_keeper` 的 `main_event / signal` 作为事件摘要，避免旧的 keeper_signals shortcut 造成空洞或重复事件摘要。legacy 模式仍可调用 event ledger LLM。
+- **summary chunks**：统一模式下新 chunk 用 heuristic fallback 生成，保留原始 turn pair 细节，避免长程摘要 LLM 再次引入人物名漂移。legacy 模式下若 chunk LLM 返回 `finish_reason=length`，也会降级为 heuristic chunk 并记录 `llm_rejected_reason=length`。
+- **opening choice**：选择开局进入首个 narrator 回合时不再先保存一次 pre-keeper state；最终 opening turn state 由 handler 在 keeper、arbiter、thread、actor 绑定和维护层之后统一提交。
 
-名称规范化只在 actor_registry 绑定后由 `memory_maintenance` 统一执行一次，state_keeper 内部不再做独立的 semantic_cleanup。
+名称规范化只在 actor_registry 绑定后由 `memory_maintenance` 统一执行一次，state_keeper 内部不再做独立的 semantic_cleanup。`context_builder` 在注入 summary chunks 前还会 quarantine 明显的主角名复合漂移（如“主角名 + 多余字”的伪人物名），并在 `context_audit.quarantined_summary_chunks` 中记录原因，防止旧坏 chunk 继续进入 narrator prompt。
 
 Persona 写回的职责边界：`persona_updater` 负责人物 seed 的 scene/archive/longterm 流转、重要度计数与近期观察沉淀。NPC 是否值得保留 persona seed 的判断优先依赖 `important_npc_tracker` 的锁定结果，辅以出场连续性和用户关注度启发式。`actor_registry` 仍负责不可变人物基础设定，不应被 persona 的短期观察覆盖。Persona observation 只提供最近表现/关系压力/表达层风格的轻量提示，不能替代角色卡或 actor registry。外貌、语气、习惯动作和性格表现只从 assistant 正文中抽取，不读取用户 prompt 原文，也不让 narrator 直接提交 JSON sidecar。
 
@@ -251,7 +252,7 @@ NPC 与主角关系由 fill keeper 通过 `npc_relationships` 只输出本轮增
 - `state.json` 恢复到该轮生成前的 `pre_turn.state`
 - session-local `persona/*` 恢复到该轮生成前的 `pre_turn.persona_layers`
 - 删除该 turn 的 `event_summaries` 项
-- 清空 `summary_chunks` 与 `keeper_record_archive` 派生缓存，避免误触输出继续参与 selector/context
+- 按删除后的 pair count 修剪 `summary_chunks` 与 `keeper_record_archive` 派生缓存，保留更早的合法 summary / keeper 记录，避免误触输出继续参与 selector/context
 - 用删除后的 history/state 重建 `summary.md`
 - 清理指向该 turn 的幂等缓存与 audit，并回退 `meta.last_turn_id`
 
