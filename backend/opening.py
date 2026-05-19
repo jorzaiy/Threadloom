@@ -135,7 +135,7 @@ def build_opening_choice_reply(choice: str) -> str:
     return '\n'.join(lines)
 
 
-def initialize_opening_state(session_id: str) -> dict:
+def initialize_opening_state(session_id: str, *, persist: bool = True) -> dict:
     bootstrap = opening_bootstrap()
     hooks_present = has_opening_hooks()
     state = {
@@ -157,11 +157,12 @@ def initialize_opening_state(session_id: str) -> dict:
     # Opening writes are phase checkpoints: they persist menu/direct-start state
     # before the narrator turn. Handler_message.py still owns the final turn
     # commit after keeper, arbiter, thread, and actor merges complete.
-    save_state(session_id, state)
+    if persist:
+        save_state(session_id, state)
     return state
 
 
-def initialize_opening_choice_state(session_id: str, choice: str) -> dict:
+def initialize_opening_choice_state(session_id: str, choice: str, *, persist: bool = True) -> dict:
     title, detail = parse_hook(choice)
     bootstrap = opening_bootstrap()
     state = {
@@ -182,5 +183,6 @@ def initialize_opening_choice_state(session_id: str, choice: str) -> dict:
     }
     # Persist the chosen opening before generating the first scene. This is a
     # checkpoint, not the authoritative end-of-turn commit.
-    save_state(session_id, state)
+    if persist:
+        save_state(session_id, state)
     return state

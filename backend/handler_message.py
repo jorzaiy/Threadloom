@@ -530,7 +530,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             append_history(session_id, assistant_item)
 
     def finalize_opening_choice(choice: str) -> dict[str, Any]:
-        state = initialize_opening_choice_state(session_id, choice)
+        state = initialize_opening_choice_state(session_id, choice, persist=False)
         opening_prompt = build_opening_choice_reply(choice)
         context = build_runtime_context(session_id, user_text=opening_prompt)
         scene = context.get('scene_facts', {})
@@ -582,10 +582,6 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             return finalize_response(response, trace=trace)
         state['opening_started'] = True
         state['state_keeper_bootstrapped'] = False
-        # First authoritative turn commit after keeper/arbiter/thread/NPC
-        # merges. A later actor-registry pass may enrich the same turn state.
-        save_state(session_id, state)
-
         state_error = None
         state_keeper_trace = {}
         state_keeper_diagnostics = None
@@ -914,11 +910,13 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         context['state_fragment'] = state_fragment
         turn_trace['runtime']['state_fragment_reply_skeleton'] = copy.deepcopy(state_fragment)
     cfg = load_runtime_config()
+    memory_cfg = cfg.get('memory', {}) if isinstance(cfg.get('memory', {}), dict) else {}
+    unified_memory_transaction = bool(memory_cfg.get('unified_transaction_enabled', True))
     consolidate_every = cfg.get('memory', {}).get('consolidate_every_turns', 3)
     is_consolidation_turn = consolidate_every > 0 and current_turn_num % consolidate_every == 0
     force_full_keeper_for_objects = _is_object_heavy_turn(text, reply, state, state_fragment)
-    _will_run_fill = is_first_turn or needs_keeper_bootstrap or is_consolidation_turn or force_full_keeper_for_objects
-    should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and (not is_first_turn) and (not needs_keeper_bootstrap)
+    _will_run_fill = unified_memory_transaction or is_first_turn or needs_keeper_bootstrap or is_consolidation_turn or force_full_keeper_for_objects
+    should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and not unified_memory_transaction and (not is_first_turn) and (not needs_keeper_bootstrap)
     if should_run_skeleton:
         try:
             skeleton_result = call_skeleton_keeper(state, state_fragment, reply, return_trace=True)
@@ -1007,7 +1005,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state_keeper_diagnostics = None
     state_keeper_trace = {}
 
-    if is_first_turn or needs_keeper_bootstrap or is_consolidation_turn or force_full_keeper_for_objects:
+    if _will_run_fill:
         try:
             state, state_keeper_trace = call_state_keeper(
                 session_id,
@@ -1019,6 +1017,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             state_keeper_diagnostics = state.get('state_keeper_diagnostics', {})
             if force_full_keeper_for_objects:
                 state_keeper_diagnostics['forced_full_keeper_reason'] = 'object_heavy_turn'
+            if unified_memory_transaction:
+                state_keeper_diagnostics['unified_memory_transaction'] = True
             if is_first_turn or needs_keeper_bootstrap:
                 state_keeper_diagnostics['bootstrap_turn'] = True
             state['state_keeper_bootstrapped'] = True
@@ -1054,7 +1054,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
     # --- Fix 5: retry possession extraction when object_heavy_turn but keeper missed it ---
-    if force_full_keeper_for_objects and completion_status == 'complete' and not state_error:
+    if force_full_keeper_for_objects and completion_status == 'complete' and not state_error and not unified_memory_transaction:
         keeper_payload = state_keeper_trace.get('payload', {}) if isinstance(state_keeper_trace, dict) else {}
         if not keeper_payload.get('possession_state'):
             retry_result = retry_possession_keeper(
@@ -1119,6 +1119,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         user_text=text,
         recent_pairs=recent_pairs,
         player_name=context.get('player_profile_json', {}).get('name', '') or context.get('player_profile_json', {}).get('courtesyName', ''),
+        use_llm=not unified_memory_transaction,
     )
     state, memory_canonicalization_changes = canonicalize_state_memory(state)
     state, stale_memory_changes = resolve_stale_state_threads(state)
@@ -1127,7 +1128,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     # contains its own LLM-failure fallback so it does not raise out, which lets
     # us collapse the prior intermediate save into this final write.
     save_state(session_id, state)
-    summary_chunk_result = update_summary_chunks(session_id)
+    summary_chunk_result = update_summary_chunks(session_id, use_llm=not unified_memory_transaction)
     event_ledger = build_event_ledger_with_llm(
         user_text=text,
         narrator_reply=reply,
@@ -1136,6 +1137,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         location=str(state.get('location', '') or ''),
         recent_pairs=recent_pairs,
         current_state=state,
+        use_llm=not unified_memory_transaction,
     )
     time_anchor, location_anchor = extract_time_location_anchor(
         reply,
@@ -1237,6 +1239,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'summary_text': summary_text,
         'summary_chunks': copy.deepcopy(summary_chunk_result),
         'event_ledger': copy.deepcopy(event_ledger),
+        'unified_memory_transaction': unified_memory_transaction,
         'persona_counts': copy.deepcopy(persona_counts),
         'event_summary_item': copy.deepcopy(event_summary_item),
     }
