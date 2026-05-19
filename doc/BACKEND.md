@@ -25,12 +25,12 @@
 - `name_sanitizer.py`：实体名清洗与人物性校验；过滤时间、空间、规则、栏目、盲区等抽象/结构标签，提供 `sanitize_runtime_name()` 与 `looks_like_bad_entity_fragment()` 等共享校验函数
 - `state_bridge.py`：root `memory/state.md` 到 session-local `state.json` 的桥接；负责 state 清洗、稳定合并、当前时间粗时段归一化、抽象/非人物 entity 过滤、onstage 当前证据校验、thread actor canonicalize/prune、`relevant_npcs` 收敛、object lifecycle、possession/visibility 合法覆盖、当前场景物件 stale guard 与 `knowledge_scope` 本轮 delta 标准化；同时承载纯 entity/object/signal 标准化 helper，供 keeper/fallback 路径复用
 - `state_fragment.py`：state fragment 构建；以 skeleton keeper 输出与 arbiter 结果为基线生成 `state_fragment`，作为 narrator 与 fill keeper 的结构化锚点；`build_state_from_fragment()` 在非合并轮替代 full fill keeper 做轻量 state 更新
-- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护事件级 `scene_objective`、物品、持有关系、情报、信号，以及有正文证据的 `npc_relationships` 增量，不再维护 NPC 基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成；若模型返回 `finish_reason=length`，该 keeper 输出会被视为失败，避免半截 JSON 进入记忆层
+- `state_keeper.py`：优先用统一模型调用链提取结构化 state（数据驱动，不依赖特定角色卡）；fill prompt 当前维护核心场景修正、事件级 `scene_objective`、物品、持有关系、情报、信号、`turn_event_summary`、有正文证据的 `npc_relationships` 增量，以及 `persona_patches` 表达层人格补丁；不维护 NPC 姓名/身份/外貌等基础设定；fill 输出按增量 patch 处理，不应全量重写 object / knowledge 层；`persona_patches` 只允许写入既有非主角 `actor_id` 的语气、行为模式、决策偏好、习惯动作和受压反应，且会清洗换行、prompt block 标记和指令式文本；`call_state_keeper()` 只返回归一化 state，不直接落盘，最终持久化由 `handler_message.py` 在 arbiter/thread/actor 合并后统一完成；若模型返回 `finish_reason=length`，该 keeper 输出会被视为失败，避免半截 JSON 进入记忆层
 - `state_updater.py`：离线 replay / rebuild 工具链中的保守兜底；在线主链失败时优先走 `state_fragment.build_state_from_fragment()` 的 `fragment-baseline`
 - `summary_updater.py`：围绕当前 state + 最近 turn 生成 session-local summary；当前主要作为写回 / 调试产物，不再进入 narrator 主输入
 - `summary_chunks.py`：固定 12 轮分段 dense summary；旧 chunk 不重写，供 selector 在 12 轮外检索回流；chunk 保存 `time_start/time_end` 作为窗口时间范围；`actors_mentioned` 会过滤非人物/抽象话题，并对源窗口中已知的主角名做保守一致性修复，避免 selector 以后按伪 actor 或主角错字召回。统一记忆事务模式下，新 chunk 使用 heuristic 生成；legacy LLM chunk 若返回 `finish_reason=length` 会降级 heuristic 并记录拒收原因
 - `lorebook_distiller.py`：角色卡导入 / 手动重建时把 `lorebook.json` 固化为 `lorebook-foundation.json` 与 `lorebook-index.json`
-- `persona_updater.py` / `persona_runtime.py`：session-local persona 流转、重要度计数、近期观察沉淀与展示骨架；observation 只来自 assistant 叙事中与 NPC 相关的短片段，不把用户 prompt 原文固化为 NPC 事实；抽象话题和结构标签不会生成 persona seed
+- `persona_updater.py` / `persona_runtime.py`：legacy session-local persona 流转、重要度计数、近期观察沉淀与展示骨架；observation 只来自 assistant 叙事中与 NPC 相关的短片段，不把用户 prompt 原文固化为 NPC 事实；抽象话题和结构标签不会生成 persona seed。统一记忆事务模式下，在线主链跳过该 display-name keyed 写回，改由 `state_keeper.persona_patches -> state.actor_persona_hooks` 维护 actor-id keyed 表达钩子，避免 persona updater 另跑一套历史启发式写回污染同一轮记忆
 - `arbiter_runtime.py` / `arbiter_state.py`：最小 arbiter 主链与状态合并
 - `turn_analyzer.py`：用户输入 + scene signal 的统一分析层
 - `thread_tracker.py`：active threads 更新；按类型分级保留（`THREAD_RETENTION_CONFIG`），含 `cooling_down` 中间态和 `resolved_events` 归档；最终 actor 索引由 state normalization 对齐和剪枝
@@ -84,6 +84,7 @@
 - `state_fragment` 已前移到 narrator / state_keeper 主链，并在失败分支提供 `fragment-baseline`
 - 统一记忆事务当前默认启用：每个完整 runtime 回合都由 full `state_keeper` 承担唯一 LLM 记忆 patch；skeleton keeper、actor registry LLM、possession retry LLM、event ledger LLM、summary chunk LLM 在统一模式下关闭，避免多路 LLM 对同一轮剧情各自写回
 - 完整 `state_keeper` 当前已切到 `fill-mode`：先以 `state_fragment` 形成基线，再只补物品、情报与信号；统一模式下每轮运行，不再由 skeleton/fill 双 LLM 分摊同一轮记忆解释权
+- 统一模式下 NPC 表达层人格也走同一次 `state_keeper` 输出：`persona_patches` 经 actor_id / display_name 精确校验后合并到 `state.actor_persona_hooks`，narrator 在 `【角色注册表】` 中按 actor_id 注入这些语气、行为和习惯动作提示；旧 persona seed 仍可作为 NPC profile fallback 读取，但不会作为 `【NPC 表现层人格】` 自动注入当前 prompt
 - actor registry 当前在每个完整 narrator 回复后运行：narrator 后处理只允许创建新 actor，已有 actor 的姓名、别称、性格、外貌、身份视为锁定，不允许后续覆盖；统一模式下不调用 LLM 新建 actor，只保留确定性 alias、mention、binding 和关系落点维护，避免把旧污染写成不可变设定
 - actor registry 对“实名揭示”有窄口径例外：若已有 generic actor 后续在 narrator 正文中明确自报姓名或被点名，且上下文能唯一绑定到该 generic actor，则只追加实名到 `aliases` 并更新 mention turn，不改写原 `name / personality / appearance / identity`
 - actor registry 会接收 fill keeper 的 `npc_relationships` 临时 patch，把“初识 / 相知 / 好友 / 队友 / 盟友 / 敌对 / 戒备”等自然标签写入既有 NPC actor 的 `relationship_to_protagonist`。关系标签是长期关系面，不改写 NPC 基础设定；必须有本轮 narrator 正文证据，不能从玩家单方面声明直接成立。

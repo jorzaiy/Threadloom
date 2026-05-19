@@ -32,11 +32,11 @@
 - 防止 relevant NPC / lore 选择长期失焦
 - 用较早结构记录补足窗口外连续性
 
-当前实现补充说明：selector 选中 NPC profile target 后，优先读取角色卡 source 下的 markdown profile；若缺失，会回落到当前 session 的 `persona/scene`、`persona/longterm`、`persona/archive` JSON seed，并把其中的身份、persona hooks 与近期观察片段格式化为 narrator 的 NPC profile。这样可以避免“persona 已经生成但 narrator 仍显示 profile missing”的断链。
+当前实现补充说明：selector 选中 NPC profile target 后，优先读取角色卡 source 下的 markdown profile；若缺失，会回落到当前 session 的 `persona/scene`、`persona/longterm`、`persona/archive` JSON seed，并把其中的身份、persona hooks 与近期观察片段格式化为 narrator 的 NPC profile。这样可以避免“persona 已经生成但 narrator 仍显示 profile missing”的断链。统一记忆事务模式下，旧 persona seed 不再作为 `【NPC 表现层人格】` 自动注入；当前回合表达层一致性优先来自 `state.actor_persona_hooks`，并在角色注册表中按 actor_id 注入。
 
 Selector 对 12 轮外固定 summary chunk 的回流采用“当前 turn 强锚点优先”原则。人物名、地点、物件、事件短语和关系线可作为有效锚点；泛化虚词、短动作残片、称呼碎片和旧情报账本的弱 overlap 只能辅助排序，不能单独触发远期摘要注入。召回规则必须保持角色卡无关，不通过写死具体人名、session id 或剧情专属关键词来强化某个个案。
 
-Session-local persona seed 仍不是完整人物传记。它每轮可更新重要度、前后台层级和近期观察，但 observation 只从 assistant 叙事中抽取与该 NPC 相关的短片段，不把用户 prompt 原文写入人物详情，也不把同一片段重复塞进多个字段。NPC 的外貌印象、语气、习惯动作和性格表现也走这条“narrator 正文可观察表现 -> persona observation”的窄通道沉淀；narrator 可以自然写出表现层细节，但不能直接输出结构化人物卡或决定是否持久建档。
+Session-local persona seed 仍不是完整人物传记。legacy 非统一模式下，它每轮可更新重要度、前后台层级和近期观察，但 observation 只从 assistant 叙事中抽取与该 NPC 相关的短片段，不把用户 prompt 原文写入人物详情，也不把同一片段重复塞进多个字段。统一记忆事务模式下，在线人格写回改为 `state_keeper.persona_patches`：同一次 keeper LLM 只为既有非主角 `actor_id` 写表达层钩子（语气、行为模式、决策偏好、习惯动作、受压反应），经 actor_id/display_name 校验和 prompt-injection 清洗后落到 `state.actor_persona_hooks`。NPC 的外貌印象、语气、习惯动作和性格表现仍必须先在 narrator 正文中可观察出现；narrator 可以自然写出表现层细节，但不能直接输出结构化人物卡或决定是否持久建档。
 
 ### 深刷新（设计目标，当前未实现独立 20 轮调度器）
 
