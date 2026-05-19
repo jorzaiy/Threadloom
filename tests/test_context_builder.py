@@ -7,7 +7,7 @@ sys.path.insert(0, str(ROOT / 'backend'))
 
 import json
 
-from context_builder import _format_persona_profile_content, _slim_character_core, load_lorebook_source_hits, load_npc_profiles, npc_profile_load_audit, select_lorebook_text_for_turn, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
+from context_builder import _format_persona_profile_content, _slim_character_core, filter_valid_summary_chunks, load_lorebook_source_hits, load_npc_profiles, npc_profile_load_audit, select_lorebook_text_for_turn, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
 from persona_runtime import build_persona_seed  # noqa: E402
 from persona_updater import _observed_context  # noqa: E402
 from runtime_store import save_persona_seed  # noqa: E402
@@ -24,6 +24,18 @@ def test_recent_history_keeps_opening_assistant_before_first_pair():
 
     assert select_recent_history_window([opening], 12) == [opening]
     assert _format_recent_window([opening], 12) == '[叙事] 训练场开局。'
+
+
+def test_summary_chunk_quarantine_rejects_protagonist_compound(monkeypatch):
+    monkeypatch.setattr('context_builder.protagonist_names', lambda: ['陆小环'])
+
+    valid, quarantined = filter_valid_summary_chunks([
+        {'chunk_id': 'chunk_0001', 'dense_summary': ['小六子递来消息。']},
+        {'chunk_id': 'chunk_0002', 'dense_summary': ['陆小环子递来消息。']},
+    ])
+
+    assert [item['chunk_id'] for item in valid] == ['chunk_0001']
+    assert quarantined == [{'chunk_id': 'chunk_0002', 'reason': 'protagonist_name_compound:陆小环子'}]
 
 
 def test_recent_history_still_keeps_complete_pairs():

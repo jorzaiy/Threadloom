@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import re
 from importlib import import_module
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from player_profile import load_effective_player_profile, render_runtime_player_
 from selector import build_selector_decision
 from runtime_store import filter_committed_history_items, is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history, load_persona_index, load_state, load_summary, load_summary_chunks
 from paths import APP_ROOT, SHARED_ROOT, read_json_file, resolve_layered_source
+from name_sanitizer import protagonist_names
 
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
@@ -773,6 +775,35 @@ def count_complete_turn_pairs(items: list[dict]) -> int:
     return pair_count
 
 
+def _summary_chunk_quarantine_reason(chunk: dict) -> str:
+    text = json.dumps(chunk, ensure_ascii=False)
+    for protagonist in protagonist_names():
+        name = str(protagonist or '').strip()
+        if len(name) < 2:
+            continue
+        for token in re.findall(r'[\u4e00-\u9fff]{2,8}', text):
+            if token != name and name in token:
+                start = token.find(name)
+                compound = token[start:start + len(name) + 1]
+                return f'protagonist_name_compound:{compound}'
+    return ''
+
+
+def filter_valid_summary_chunks(chunks: list[dict]) -> tuple[list[dict], list[dict]]:
+    valid = []
+    quarantined = []
+    for chunk in chunks or []:
+        if not isinstance(chunk, dict):
+            quarantined.append({'chunk_id': '', 'reason': 'not_object'})
+            continue
+        reason = _summary_chunk_quarantine_reason(chunk)
+        if reason:
+            quarantined.append({'chunk_id': str(chunk.get('chunk_id', '') or ''), 'reason': reason})
+            continue
+        valid.append(chunk)
+    return valid, quarantined
+
+
 def _slim_character_core(data: dict) -> dict:
     if not isinstance(data, dict):
         return {}
@@ -853,7 +884,8 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     canon_text = load_canon(session_id)
     summary_text = load_summary(session_id)
     event_summaries = load_event_summaries(session_id).get('items', [])
-    summary_chunks = load_summary_chunks(session_id).get('chunks', [])
+    raw_summary_chunks = load_summary_chunks(session_id).get('chunks', [])
+    summary_chunks, quarantined_summary_chunks = filter_valid_summary_chunks(raw_summary_chunks if isinstance(raw_summary_chunks, list) else [])
     session_context = load_context(session_id)
     character_core = _slim_character_core(read_json(resolve_source(sources['character_core'])))
     player_profile_json = load_effective_player_profile()
@@ -1092,7 +1124,10 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         'lorebook_npc_candidates': merged_lorebook_candidates,
         'system_npc_candidates': system_npc_candidates,
         'continuity_candidates': continuity_candidates,
-        'context_audit': selector_decision,
+        'context_audit': {
+            **selector_decision,
+            'quarantined_summary_chunks': quarantined_summary_chunks,
+        },
         'scene_facts': {
             'time': state_json.get('time', '待确认'),
             'location': state_json.get('location', '待确认'),
