@@ -34,6 +34,20 @@
 
 仍建议观察 5-10 个真实回合后再继续 Phase 3 完整版：也就是更大的 `merge_candidate` schema、evidence quote required、stable ID resolver、duplicate reject / alias merge / unresolved queue。当前版本已切掉最大污染源，但尚未实现完整的候选合并审批队列。
 
+### 2026-05-19 Actor Persona Hooks
+
+后续针对 NPC 性格、行为模式和语言特点的持续性做了补强：统一记忆事务模式下，NPC 表达层人格不再由 display-name keyed `persona_updater` 每轮启发式写回，而是纳入同一次 full `state_keeper` LLM 输出。
+
+当前边界：
+
+- 新增 `persona_patches`，只允许为既有非主角 `actor_id` 写表达层钩子：语气、行为模式、决策偏好、习惯动作、受压反应、证据和置信度。
+- `persona_patches` 必须带 `display_name`，且必须与 actor registry 中该 `actor_id` 的 `name / aliases` 精确匹配；未知 actor、主角、名称不匹配或宽泛子串匹配都会被丢弃。
+- hook 文本会被压成单行描述，并清除 prompt block 标记、控制字符和明显指令式片段；narrator 渲染时也会再次清洗，避免 LLM 派生文本变成新 prompt 指令。
+- `state.actor_persona_hooks` 按 actor_id 注入 `【角色注册表】`，只约束同一 actor_id 的表达和行为倾向，不代表人物当前在场，也不能覆盖姓名、身份、外貌等不可变基础设定。
+- 旧 session persona seed 仍可作为 NPC profile fallback 读取，但 unified 模式下不再自动进入 `【NPC 表现层人格】`，避免旧 display-name 记忆继续影响当前 actor-id 绑定人格。
+
+验证：persona / memory / narrator / context / actor / regenerate targeted suite `162 passed`，五路 review 后补上了旧 persona 注入隔离、persona hook prompt-injection 清洗、display_name 强校验和对应回归测试。
+
 ## 2026-04-16 Live HTTP Soak
 
 这轮新增了一次真实 HTTP 长跑验证，重点不再是“链路能不能跑”，而是：
