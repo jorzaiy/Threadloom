@@ -311,7 +311,8 @@ def repair_memory(session_id: str, *, dry_run: bool = True, rebuild_derived: boo
         save_event_summaries(session_id, events)
 
     if rebuild_derived and not dry_run:
-        chunks = update_summary_chunks(session_id)
+        save_summary_chunks(session_id, {'version': 1, 'chunks': []})
+        chunks = update_summary_chunks(session_id, use_llm=False)
         report['changes'].append({'artifact': 'summary_chunks', 'action': 'rebuild_missing', 'created': bool(chunks.get('created'))})
     else:
         chunks, chunk_changes = canonicalize_summary_chunks(load_summary_chunks(session_id), mapping)
