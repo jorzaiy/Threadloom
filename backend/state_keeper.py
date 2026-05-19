@@ -1676,6 +1676,9 @@ def _call_state_keeper_llm(user_prompt: str, *, max_attempts: int = 2) -> tuple[
         if not isinstance(usage, dict):
             usage = {}
         usage['prompt_chars'] = len(STATE_KEEPER_FILL_SYSTEM) + len(prompt)
+        finish_reason = str(usage.get('finish_reason', '') or '').strip().lower()
+        if finish_reason == 'length':
+            raise ValueError('state keeper output truncated by length')
         if str(reply_text or '').strip():
             try:
                 _parse_fill_payload(str(reply_text or ''))

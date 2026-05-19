@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'backend'))
 
-from backend.summary_chunks import _structured_keywords
+from backend.summary_chunks import _build_chunk_with_llm, _structured_keywords
 
 
 class SummaryChunkKeywordTests(unittest.TestCase):
@@ -34,6 +34,37 @@ class SummaryChunkKeywordTests(unittest.TestCase):
         self.assertIn('城主府后灵田', keywords)
         self.assertNotIn('陆小环在', keywords)
         self.assertNotIn('人界苍梧', keywords)
+
+    def test_can_build_summary_chunk_without_llm(self):
+        chunk = _build_chunk_with_llm(
+            chunk_id='chunk_0001',
+            turn_start=1,
+            turn_end=1,
+            pairs=[('用算筹布阵', '青铜算筹落在阵眼，灵气随之聚拢。')],
+            use_llm=False,
+        )
+
+        self.assertEqual(chunk['provider'], 'heuristic')
+        self.assertEqual(chunk['turn_start'], 1)
+        self.assertIn('用算筹布阵', chunk['dense_summary'][0])
+
+    def test_length_truncated_summary_chunk_falls_back_with_reason(self):
+        import backend.summary_chunks as summary_chunks
+
+        original = summary_chunks.call_role_llm
+        summary_chunks.call_role_llm = lambda *_args, **_kwargs: ('{"dense_summary":["半截', {'finish_reason': 'length'})
+        try:
+            chunk = _build_chunk_with_llm(
+                chunk_id='chunk_0001',
+                turn_start=1,
+                turn_end=1,
+                pairs=[('问小六子', '小六子递来消息。')],
+            )
+        finally:
+            summary_chunks.call_role_llm = original
+
+        self.assertEqual(chunk['provider'], 'heuristic')
+        self.assertEqual(chunk['llm_rejected_reason'], 'length')
 
 
 if __name__ == '__main__':

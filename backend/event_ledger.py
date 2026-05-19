@@ -376,7 +376,7 @@ def _ledger_from_keeper_signals(keeper_signals: dict, prev_state: dict, onstage_
     }
 
 
-def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_state: dict, onstage_names: list[str], location: str, recent_pairs: list[tuple[str, str]] | None = None, current_state: dict | None = None, keeper_signals: dict | None = None) -> dict:
+def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_state: dict, onstage_names: list[str], location: str, recent_pairs: list[tuple[str, str]] | None = None, current_state: dict | None = None, keeper_signals: dict | None = None, use_llm: bool = True) -> dict:
     fallback = build_event_ledger(
         user_text=user_text,
         narrator_reply=narrator_reply,
@@ -388,6 +388,8 @@ def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_sta
     )
     if keeper_signals is not None:
         return _ledger_from_keeper_signals(keeper_signals, prev_state, onstage_names, location, fallback)
+    if not use_llm:
+        return fallback
     try:
         cfg = resolve_provider_model('state_keeper_candidate')
         reply, _usage = call_model(

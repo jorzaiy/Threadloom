@@ -279,7 +279,9 @@ def _normalize_chunk(payload: dict, *, chunk_id: str, turn_start: int, turn_end:
     return out
 
 
-def _build_chunk_with_llm(*, chunk_id: str, turn_start: int, turn_end: int, pairs: list[tuple[str, str]]) -> dict:
+def _build_chunk_with_llm(*, chunk_id: str, turn_start: int, turn_end: int, pairs: list[tuple[str, str]], use_llm: bool = True) -> dict:
+    if not use_llm:
+        return _fallback_chunk(chunk_id=chunk_id, turn_start=turn_start, turn_end=turn_end, pairs=pairs, provider='heuristic')
     prompt = json.dumps({
         'chunk_id': chunk_id,
         'turn_start': turn_start,
@@ -290,14 +292,18 @@ def _build_chunk_with_llm(*, chunk_id: str, turn_start: int, turn_end: int, pair
         ],
     }, ensure_ascii=False, indent=2)
     try:
-        reply, _usage = call_role_llm('state_keeper_candidate', SUMMARY_CHUNK_SYSTEM, prompt)
+        reply, usage = call_role_llm('state_keeper_candidate', SUMMARY_CHUNK_SYSTEM, prompt)
+        if isinstance(usage, dict) and str(usage.get('finish_reason', '') or '').strip().lower() == 'length':
+            chunk = _fallback_chunk(chunk_id=chunk_id, turn_start=turn_start, turn_end=turn_end, pairs=pairs, provider='heuristic')
+            chunk['llm_rejected_reason'] = 'length'
+            return chunk
         payload = parse_json_response(reply)
         return _normalize_chunk(payload, chunk_id=chunk_id, turn_start=turn_start, turn_end=turn_end, pairs=pairs, provider='llm')
     except Exception:
         return _fallback_chunk(chunk_id=chunk_id, turn_start=turn_start, turn_end=turn_end, pairs=pairs, provider='heuristic')
 
 
-def update_summary_chunks(session_id: str, *, chunk_size: int = SUMMARY_CHUNK_SIZE) -> dict:
+def update_summary_chunks(session_id: str, *, chunk_size: int = SUMMARY_CHUNK_SIZE, use_llm: bool = True) -> dict:
     history = load_history(session_id)
     pairs = _turn_pairs(history)
     store = load_summary_chunks(session_id)
@@ -312,7 +318,7 @@ def update_summary_chunks(session_id: str, *, chunk_size: int = SUMMARY_CHUNK_SI
         if chunk_id in existing_ids:
             continue
         chunk_pairs = pairs[turn_start - 1:turn_end]
-        chunk = _build_chunk_with_llm(chunk_id=chunk_id, turn_start=turn_start, turn_end=turn_end, pairs=chunk_pairs)
+        chunk = _build_chunk_with_llm(chunk_id=chunk_id, turn_start=turn_start, turn_end=turn_end, pairs=chunk_pairs, use_llm=use_llm)
         chunks.append(chunk)
         existing_ids.add(chunk_id)
         changed = True
