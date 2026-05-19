@@ -11,7 +11,7 @@ try:
     from .continuity_hints import normalized_hint_entries
     from .important_npc_tracker import update_important_npcs
     from .thread_tracker import apply_thread_tracker
-    from .runtime_store import append_event_summary, append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
+    from .runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, upsert_event_summary, web_runtime_settings
     from .actor_registry import update_actor_registry
     from .summary_updater import update_summary
     from .summary_chunks import update_summary_chunks
@@ -36,7 +36,7 @@ except ImportError:
     from continuity_hints import normalized_hint_entries
     from important_npc_tracker import update_important_npcs
     from thread_tracker import apply_thread_tracker
-    from runtime_store import append_event_summary, append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, web_runtime_settings
+    from runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, upsert_event_summary, web_runtime_settings
     from actor_registry import update_actor_registry
     from summary_updater import update_summary
     from summary_chunks import update_summary_chunks
@@ -1137,7 +1137,9 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         location=str(state.get('location', '') or ''),
         recent_pairs=recent_pairs,
         current_state=state,
+        keeper_signals=keeper_payload if unified_memory_transaction and isinstance(keeper_payload, dict) else None,
         use_llm=not unified_memory_transaction,
+        require_turn_event_summary=unified_memory_transaction,
     )
     time_anchor, location_anchor = extract_time_location_anchor(
         reply,
@@ -1156,9 +1158,15 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         actors_registry=state.get('actors', {}),
     )
     if event_summary_item.get('summary'):
-        append_event_summary(session_id, event_summary_item)
+        upsert_event_summary(session_id, event_summary_item)
     summary_text = update_summary(session_id)
-    persona_counts = update_persona(session_id, context.get('continuity_candidates', []))
+    if unified_memory_transaction:
+        persona_counts = {
+            'skipped': 'unified_memory_transaction',
+            'actor_persona_hooks': len(state.get('actor_persona_hooks', {}) if isinstance(state.get('actor_persona_hooks', {}), dict) else {}),
+        }
+    else:
+        persona_counts = update_persona(session_id, context.get('continuity_candidates', []))
     turn_audit = _build_turn_audit(
         context,
         turn_id=turn_id,

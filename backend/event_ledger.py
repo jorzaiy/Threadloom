@@ -175,6 +175,33 @@ def _compress_event_summary_text(text: str, limit: int = 72) -> str:
     return value
 
 
+def _summary_supported_by_reply(summary: str, narrator_reply: str) -> bool:
+    summary_text = _normalize(summary)
+    reply_text = _normalize(narrator_reply)
+    if not summary_text or not reply_text:
+        return False
+    phrase_hits = []
+    ngram_hits = []
+    for phrase in re.split(r'[；，、。,.\s]+', summary_text):
+        phrase = phrase.strip()
+        if not phrase or phrase in {'本轮', '当前', '主角', '继续', '关键物件'}:
+            continue
+        if phrase in reply_text:
+            phrase_hits.append(phrase)
+            continue
+        for idx in range(0, max(0, len(phrase) - 1)):
+            token = phrase[idx:idx + 2]
+            if token and token in reply_text and token not in ngram_hits:
+                ngram_hits.append(token)
+    if not phrase_hits and not ngram_hits:
+        return any(part and part in reply_text for part in re.split(r'[；，、]', summary_text)[:2])
+    if len(phrase_hits) >= 2:
+        return True
+    if phrase_hits and len(ngram_hits) >= 2:
+        return True
+    return len(ngram_hits) >= 4
+
+
 def _scene_score(text: str, onstage_names: list[str]) -> int:
     value = _normalize(text)
     score = 0
@@ -356,8 +383,28 @@ def _coerce_ledger_payload(payload: dict) -> dict:
     }
 
 
-def _ledger_from_keeper_signals(keeper_signals: dict, prev_state: dict, onstage_names: list[str], location: str, fallback: dict) -> dict:
+def _ledger_from_keeper_signals(keeper_signals: dict, prev_state: dict, onstage_names: list[str], location: str, fallback: dict, *, require_turn_event_summary: bool = False) -> dict:
     """Build event ledger from state_keeper fill output, skipping LLM call."""
+    event_summary = keeper_signals.get('turn_event_summary', {}) if isinstance(keeper_signals.get('turn_event_summary', {}), dict) else {}
+    if event_summary.get('summary'):
+        main_event = str(keeper_signals.get('main_event', '') or event_summary.get('summary', '') or '').strip()
+        prev_loc = str(prev_state.get('location', '') or '').strip()
+        changed = bool(event_summary.get('scene_shift')) or bool(location and prev_loc and location != prev_loc)
+        return {
+            'ledger_version': 3,
+            'provider': 'unified_extraction',
+            'summary_text': str(event_summary.get('summary', '') or '').strip()[:150],
+            'scene_shift': {'changed': changed, 'score': 4 if changed else 0},
+            'main_event_candidates': [{'text': main_event, 'fragment_score': 0, 'scene_score': 5}] if main_event else [],
+            'risk_candidates': [],
+            'clue_candidates': [str(item).strip() for item in (event_summary.get('clues', []) or []) if str(item).strip()][:2],
+            'summary_actors': [str(item).strip() for item in (event_summary.get('actors', []) or []) if str(item).strip()][:3],
+            'summary_objects': [str(item).strip() for item in (event_summary.get('objects', []) or []) if str(item).strip()][:6],
+            'discarded_fragments': [],
+            'fallback_heuristic': fallback,
+        }
+    if require_turn_event_summary:
+        return fallback
     main_event = str(keeper_signals.get('main_event', '') or '').strip()
     risks = [str(r).strip() for r in (keeper_signals.get('immediate_risks', []) or []) if str(r).strip()][:2]
     clues = [str(c).strip() for c in (keeper_signals.get('carryover_clues', []) or []) if str(c).strip()][:2]
@@ -376,7 +423,7 @@ def _ledger_from_keeper_signals(keeper_signals: dict, prev_state: dict, onstage_
     }
 
 
-def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_state: dict, onstage_names: list[str], location: str, recent_pairs: list[tuple[str, str]] | None = None, current_state: dict | None = None, keeper_signals: dict | None = None, use_llm: bool = True) -> dict:
+def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_state: dict, onstage_names: list[str], location: str, recent_pairs: list[tuple[str, str]] | None = None, current_state: dict | None = None, keeper_signals: dict | None = None, use_llm: bool = True, require_turn_event_summary: bool = False) -> dict:
     fallback = build_event_ledger(
         user_text=user_text,
         narrator_reply=narrator_reply,
@@ -387,7 +434,7 @@ def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_sta
         current_state=current_state,
     )
     if keeper_signals is not None:
-        return _ledger_from_keeper_signals(keeper_signals, prev_state, onstage_names, location, fallback)
+        return _ledger_from_keeper_signals(keeper_signals, prev_state, onstage_names, location, fallback, require_turn_event_summary=require_turn_event_summary)
     if not use_llm:
         return fallback
     try:
@@ -417,6 +464,9 @@ def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[
     summary = _normalize(str(ledger.get('summary_text', '') or ''))
     if _looks_like_header_only_event(summary):
         summary = ''
+    if ledger.get('provider') == 'unified_extraction' and not _summary_supported_by_reply(summary, narrator_reply):
+        fallback = ledger.get('fallback_heuristic', {}) if isinstance(ledger.get('fallback_heuristic', {}), dict) else {}
+        summary = _normalize(str(fallback.get('summary_text', '') or ''))
     if not summary:
         main_text = next((item.get('text', '') for item in (ledger.get('main_event_candidates', []) or []) if isinstance(item, dict) and item.get('text') and not _looks_like_header_only_event(str(item.get('text', '') or ''))), '')
         summary = _normalize(main_text)
@@ -438,7 +488,12 @@ def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[
             if str(item).strip() and str(item).strip().rstrip('。') in source_text
         ]
     actor_source_text = ' '.join([summary] + normalized_clues)
-    actors = [name for name in onstage_names[:3] if name and name in actor_source_text]
+    ledger_actors = [str(name).strip() for name in (ledger.get('summary_actors', []) or []) if str(name).strip()]
+    actors = [name for name in ledger_actors[:3] if name in narrator_reply or name in actor_source_text]
+    if len(actors) < 3:
+        for name in onstage_names[:3]:
+            if name and name in actor_source_text and name not in actors:
+                actors.append(name)
     # Fallback: extract actors from narrator_reply via actors_registry if onstage_names missed them
     if len(actors) < 3 and actors_registry and narrator_reply:
         actor_names_seen = set(actors)
@@ -467,6 +522,11 @@ def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[
                     if len(actors) >= 3:
                         break
 
+    ledger_objects = [str(item).strip() for item in (ledger.get('summary_objects', []) or []) if str(item).strip()]
+    objects = ledger_objects[:6]
+    if not objects:
+        objects = [str(item.get('label', '') or '').strip() for item in (tracked_objects or [])[:2] if isinstance(item, dict) and str(item.get('label', '') or '').strip()]
+
     return {
         'event_id': f'evt_{turn_id[-4:]}',
         'turn_id': turn_id,
@@ -474,7 +534,7 @@ def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[
         'time_anchor': _normalize(time_anchor),
         'location_anchor': _normalize(location_anchor),
         'actors': actors,
-        'objects': [str(item.get('label', '') or '').strip() for item in (tracked_objects or [])[:2] if isinstance(item, dict) and str(item.get('label', '') or '').strip()],
+        'objects': objects,
         'clues': normalized_clues,
         'scene_shift': bool(ledger.get('scene_shift', {}).get('changed')),
         'provider': ledger.get('provider', 'heuristic'),

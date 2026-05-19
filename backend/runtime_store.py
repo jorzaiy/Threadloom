@@ -327,6 +327,29 @@ def append_event_summary(session_id: str, item: dict) -> None:
     save_event_summaries(session_id, payload)
 
 
+def upsert_event_summary(session_id: str, item: dict) -> None:
+    payload = load_event_summaries(session_id)
+    turn_id = str(item.get('turn_id', '') or '').strip() if isinstance(item, dict) else ''
+    event_id = str(item.get('event_id', '') or '').strip() if isinstance(item, dict) else ''
+    items = []
+    replaced = False
+    for existing in payload.get('items', []) or []:
+        if not isinstance(existing, dict):
+            continue
+        same_turn = turn_id and str(existing.get('turn_id', '') or '').strip() == turn_id
+        same_event = event_id and str(existing.get('event_id', '') or '').strip() == event_id
+        if same_turn or same_event:
+            if not replaced:
+                items.append(item)
+                replaced = True
+            continue
+        items.append(existing)
+    if not replaced:
+        items.append(item)
+    payload['items'] = items[-80:]
+    save_event_summaries(session_id, payload)
+
+
 def load_canon(session_id: str) -> str:
     path = session_paths(session_id)['canon']
     return path.read_text(encoding='utf-8') if path.exists() else '# Canon\n\n## 世界长期事实\n- 待确认\n'
@@ -477,6 +500,7 @@ def build_state_snapshot(state: dict) -> dict:
         'object_visibility': state.get('object_visibility', []),
         'actors': state.get('actors', {}),
         'actor_context_index': state.get('actor_context_index', {}),
+        'actor_persona_hooks': state.get('actor_persona_hooks', {}),
         'knowledge_records': state.get('knowledge_records', []),
     }
 
