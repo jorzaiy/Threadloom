@@ -7,7 +7,7 @@ sys.path.insert(0, str(ROOT / 'backend'))
 
 import json
 
-from context_builder import _format_persona_profile_content, _slim_character_core, filter_valid_summary_chunks, load_lorebook_source_hits, load_npc_profiles, npc_profile_load_audit, select_lorebook_text_for_turn, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
+from context_builder import _format_persona_profile_content, _slim_character_core, filter_valid_summary_chunks, load_lorebook_source_hits, load_npc_profiles, npc_profile_load_audit, select_lorebook_text_for_turn, select_persona_summaries_for_runtime, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
 from persona_runtime import build_persona_seed  # noqa: E402
 from persona_updater import _observed_context  # noqa: E402
 from runtime_store import save_persona_seed  # noqa: E402
@@ -221,6 +221,20 @@ def test_session_persona_json_loads_as_npc_profile_when_targeted(tmp_path, monke
     assert loaded[0]['source'] == 'session_persona'
     assert '线索提供者' in loaded[0]['content']
     assert '测试甲低声提醒主角保管账册' in loaded[0]['content']
+
+
+def test_unified_runtime_skips_legacy_persona_summary_injection(tmp_path, monkeypatch):
+    session_root = tmp_path / 'runtime-data' / 'sessions'
+    import runtime_store
+
+    monkeypatch.setattr(runtime_store, 'resolve_session_dir', lambda session_id, create=False: session_root / session_id)
+    save_persona_seed('generic-session', 'scene', {
+        'display_name': '测试甲',
+        'persona_seed': {'archetype': {'value': '旧人格'}, 'runtime_hooks': {'speech_rhythm': {'value': '旧语气'}}},
+    })
+
+    assert select_persona_summaries_for_runtime(['测试甲'], session_id='generic-session', unified_memory_transaction=True) == []
+    assert select_persona_summaries_for_runtime(['测试甲'], session_id='generic-session', unified_memory_transaction=False)[0]['name'] == '测试甲'
 
 
 def test_persona_seed_accumulates_recent_behavior_fields_from_observed_turns():

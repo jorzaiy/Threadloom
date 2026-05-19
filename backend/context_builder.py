@@ -656,6 +656,12 @@ def load_persona_summaries(names: list[str], limit: int = 6, session_id: str | N
     return out[:limit]
 
 
+def select_persona_summaries_for_runtime(names: list[str], *, session_id: str | None = None, unified_memory_transaction: bool = False) -> list[dict]:
+    if unified_memory_transaction:
+        return []
+    return load_persona_summaries(names, session_id=session_id)
+
+
 def _format_persona_profile_content(seed: dict) -> str:
     identity = seed.get('identity', {}) if isinstance(seed.get('identity', {}), dict) else {}
     persona_seed = seed.get('persona_seed', {}) if isinstance(seed.get('persona_seed', {}), dict) else {}
@@ -898,7 +904,8 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     onstage = state_json.get('onstage_npcs', [])
     relevant = state_json.get('relevant_npcs', [])
 
-    persona = load_persona_summaries(onstage + relevant, session_id=session_id)
+    unified_memory_transaction = bool(memory_cfg.get('unified_transaction_enabled', True))
+    persona = select_persona_summaries_for_runtime(onstage + relevant, session_id=session_id, unified_memory_transaction=unified_memory_transaction)
     recent_history_all = load_history(session_id)
     current_pair_count = count_complete_turn_pairs(recent_history_all)
     npc_registry = load_npc_registry(session_id)
@@ -1147,6 +1154,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
             'scene_objective': state_json.get('scene_objective', {}),
             'actors': state_json.get('actors', {}),
             'actor_context_index': state_json.get('actor_context_index', {}),
+            'actor_persona_hooks': state_json.get('actor_persona_hooks', {}),
             'resolved_events': state_json.get('resolved_events', []),
             'arbiter_signals': arbiter_signals,
             'active_threads': active_threads,
