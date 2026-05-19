@@ -128,8 +128,10 @@ class KeeperArchiveWindowTests(unittest.TestCase):
         self.assertTrue(_is_mid_context_object_relevant({'label': '铜板', 'kind': 'currency', 'story_relevant': True}))
         self.assertFalse(_is_mid_context_object_relevant({'label': '零钱', 'kind': 'currency'}))
 
+        history = _history(5)
+        history[1]['content'] += ' 他把包和铜牌都放到桌上。'
         digest = build_mid_window_digest(
-            history=_history(5),
+            history=history,
             hard_anchors={
                 'tracked_objects': [
                     {'label': '包', 'kind': 'container', 'story_relevant': True},

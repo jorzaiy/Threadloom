@@ -183,14 +183,7 @@ def _heuristic_digest(mid_pairs: list[tuple[dict, dict]], hard_anchors: dict, fr
         'location_anchor': anchors['location_anchor'] or _anchor_from_window_or_blank(str(hard.get('location', '') or '').strip(), mid_pairs),
         'stable_entities': entities[:5],
         'ongoing_events': _dedupe(events, limit=4),
-        'tracked_objects': [
-            {
-                'label': str(item.get('label', '') or '').strip(),
-                'kind': str(item.get('kind', '') or 'item').strip() or 'item',
-            }
-            for item in (hard.get('tracked_objects', []) or [])[:3]
-            if _is_mid_context_object_relevant(item)
-        ],
+        'tracked_objects': _window_tracked_objects(hard.get('tracked_objects', []) or [], combined),
         'open_loops': _dedupe(loops, limit=4),
         'history_digest': [
             {
@@ -218,6 +211,26 @@ def _is_mid_context_object_relevant(item: dict) -> bool:
     if len(label) <= 1 and kind in {'', 'item', 'misc', 'unknown'}:
         return False
     return True
+
+
+def _window_tracked_objects(items: list, window_text: str, limit: int = 3) -> list[dict]:
+    text = str(window_text or '')
+    out = []
+    for item in items:
+        if not isinstance(item, dict) or not _is_mid_context_object_relevant(item):
+            continue
+        label = str(item.get('label', '') or '').strip()
+        aliases = [str(alias or '').strip() for alias in (item.get('aliases', []) or []) if str(alias or '').strip()]
+        surfaces = [label] + aliases
+        if not any(surface and surface in text for surface in surfaces):
+            continue
+        out.append({
+            'label': label,
+            'kind': str(item.get('kind', '') or 'item').strip() or 'item',
+        })
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _score_events(mid_pairs: list[tuple[dict, dict]]) -> list[str]:
