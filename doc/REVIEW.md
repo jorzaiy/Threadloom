@@ -34,6 +34,20 @@
 
 仍建议观察 5-10 个真实回合后再继续 Phase 3 完整版：也就是更大的 `merge_candidate` schema、evidence quote required、stable ID resolver、duplicate reject / alias merge / unresolved queue。当前版本已切掉最大污染源，但尚未实现完整的候选合并审批队列。
 
+### 2026-05-21 Profile Detail Recall, Object Lifecycle, and Test Cleanup
+
+本轮继续收紧长 session 中“旧资料过量注入”和“物件生命周期误判”的问题，并清理了几份不会被正常 pytest 维护的 live/manual 脚本。
+
+已完成：
+
+- 玩家档案常驻 prompt 继续保持 slim，只保留公开身份、可见外貌、稳定能力、性格和偏好等低干扰摘要；背景、心理、世界适配和私密边界被拆成 selector 可检索的 profile detail section，只有本轮出现身世回忆、能力使用、外貌检视、身份挑战或私密边界等强锚点时才注入 `【命中玩家档案细节】`。
+- `【命中玩家档案细节】` 明确标注为资料数据而非指令，且 `private / narrator_only` 内容不会自动变成 NPC 已知事实；turn trace 中该块会被 redacted，只保留 prompt block size 统计，避免调试 artifact 暴露私密资料。
+- 事件索引召回改为 selector 命中后才进入 `【命中事件索引】`；若 event hit 已覆盖同一主题，宽泛 summary chunk 会被压制，低压休息、等待、移动等弱动作不会单独拉回旧压力摘要。
+- 物件 lifecycle 增加“持有声明优先”保护：同一轮 payload 若仍声明某物有 holder、status 或 location，就不能同时把该物标为 `lost / archived` 并移入 `graveyard_objects`；`consumed / destroyed` 仍按明确消耗或销毁处理。
+- 删除 obsolete live/manual test scripts：`tests/test_model_comparison.py`、`tests/test_model_compare_simple.py`、`tests/test_skeleton_impact.py`、`tests/test_selector_quality.py`。这些脚本依赖本地 HTTP 服务、会改配置或使用旧 session 路径，不属于当前可重复 pytest 回归集。
+
+验证：`python3 -m pytest --collect-only -q` 成功收集 `350` 个测试；`python3 -m pytest -q` 结果为 `348 passed, 1 skipped, 1 failed`，唯一失败仍是既有的 `test_user_profile_route_uses_multi_user_context_before_loading_profile`，与本轮脚本删除和 lifecycle/profile recall 修改无关。
+
 ### 2026-05-19 Actor Persona Hooks
 
 后续针对 NPC 性格、行为模式和语言特点的持续性做了补强：统一记忆事务模式下，NPC 表达层人格不再由 display-name keyed `persona_updater` 每轮启发式写回，而是纳入同一次 full `state_keeper` LLM 输出。

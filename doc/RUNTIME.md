@@ -12,7 +12,7 @@
 - `runtime-rules`
 - active preset
 - 当前角色卡核心与世界约束字段
-- 统一 JSON 玩家档案渲染出的短 `【玩家档案】`；自然语言源文本只用于设置页整理和审计，不直接进入 narrator
+- 统一 JSON 玩家档案渲染出的短 `【玩家档案】`；自然语言源文本只用于设置页整理和审计，不直接进入 narrator。详细 profile 数组会拆成可检索 section，本轮若强锚点命中身世、外貌、能力、心理、私密边界等主题，selector 可额外注入 `【命中玩家档案细节】`。
 - `state`
 - `scene persona seeds`
 - 最近窗口：默认读取 `12` 对 complete history，其中靠近当前的 `6` 对以完整正文进入 narrator，前段回合以逐回合 event outline 承接
@@ -209,7 +209,7 @@ NPC 与主角关系由 fill keeper 通过 `npc_relationships` 只输出本轮增
 
 
 `tracked_objects` 支持 `aliases` 字段：当 narrator 正文中出现物件的昵称或简称（如主角给物件起的名字），fill keeper 会将其记入 `aliases` 数组。selector 和 `_is_object_heavy_turn` 在匹配物件时同时检查 label 和 aliases，确保即使 narrator 使用别名也能正确触发物件相关逻辑。aliases 只记录稳定的专有称呼，不记录代词或集体名词。
-事件时间轴不是新的剧情事实来源，只把已经出现在 narrator 回复头或当前 state 中的时间/地点结构化保存。`event_summaries[].time_anchor` 用于 narrator prompt 的 `【事件时间轴】`，提醒模型按事件自身时间承接旧事；缺失时间只表示未记录，不允许模型自行补成“昨天/刚才”。`summary_chunks[].time_start/time_end` 记录固定 12 轮窗口的起止叙事时间，供远期摘要召回时维持时间顺序。
+事件摘要不是新的剧情事实来源，只把已经出现在 narrator 回复头、当前 state 或本轮正文中的事实结构化保存。`event_summaries[].time_anchor` 先作为 selector 索引；命中后才进入 narrator prompt 的 `【命中事件索引】`，提醒模型按事件自身时间承接旧事。缺失时间只表示未记录，不允许模型自行补成“昨天/刚才”。`summary_chunks[].time_start/time_end` 记录固定窗口的起止叙事时间，仅作为归档 fallback；普通回合不再默认注入固定 12 轮外历史。
 
 `scene_objective` 是当前事件/场景段的稳定目标，区别于每轮可变的 `immediate_goal`。它回答“这一段事件为什么存在、围绕什么测试或推进”，例如训练段的资源争夺、规则理解或风险控制；`immediate_goal` 仍只表示主角下一拍要处理的事。fill keeper 只在目标缺失、明确新事件开启或旧事件明确结束时更新；普通对白、观察、移动和短暂心理变化应沿用当前目标。narrator 只读取 active objective，用它约束本轮不要偏离事件主轴。
 
@@ -413,7 +413,7 @@ def handle_message(payload: dict) -> dict:
 - narrator 物件细节约束：物件来源、剩余数量、当前位置、谁看见过/知道它，必须来自最近正文、本轮用户输入或注入的物件/知情证据；没有证据时只能模糊承接，不得编造购买地点、食用进度、存放位置或旁观者知情。
 - summary chunk 名称一致性：固定 12 轮摘要在归一化时会用源窗口中出现过的主角名修复一字漂移，避免“主角名错字”被写进 `dense_summary / key_events / actors_mentioned / keywords` 并成为后续召回锚点。
 
-调试面板对应观察点：看 `Prompt Blocks` 是否有 `【重要物件与持有关系】` 或 `【召回的12轮外历史】`，看 selector 的 `event_hits / summary_chunk_hits / inject_summary` 是否被当前强锚点触发，不能只因为普通物件名出现就判定应该召回旧历史。
+调试面板对应观察点：看 `Prompt Blocks` 是否有 `【重要物件与持有关系】`、`【命中事件索引】` 或 `【召回的归档提纲】`，看 selector 的 `event_hits / summary_chunk_hits / inject_summary` 是否被当前强锚点触发。普通物件名、低压休息/等待/移动动作不应单独召回旧历史；若 `event_hits` 已覆盖同一主题，宽泛 summary chunk 通常应被压制。
 
 ## 当前 persona 门槛
 
