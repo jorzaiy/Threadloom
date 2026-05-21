@@ -328,7 +328,7 @@ def test_active_tracked_object_evidence_is_in_prompt_without_summary_recall():
 
     assert '【重要物件与持有关系】' in system_prompt
     assert '油纸包饼 (item) / 持有者=主角 / 状态=saved / 可见性=private' in system_prompt
-    assert '【召回的12轮外历史】' not in system_prompt
+    assert '【召回的归档提纲】' not in system_prompt
 
 
 def test_summary_chunk_actor_only_pressure_is_not_recalled_for_quiet_turn():
