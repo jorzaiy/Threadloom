@@ -9,7 +9,7 @@ from keeper_record_retriever import retrieve_keeper_records
 from npc_bootstrap_agent import load_npc_registry
 from object_bootstrap_agent import load_object_registry
 from clue_bootstrap_agent import load_clue_registry
-from player_profile import load_effective_player_profile, render_runtime_player_profile_markdown
+from player_profile import build_player_profile_detail_sections, format_player_profile_detail_sections, load_effective_player_profile, render_runtime_player_profile_markdown
 from selector import build_selector_decision
 from runtime_store import filter_committed_history_items, is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history, load_persona_index, load_state, load_summary, load_summary_chunks
 from paths import APP_ROOT, SHARED_ROOT, read_json_file, resolve_layered_source
@@ -896,6 +896,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     character_core = _slim_character_core(read_json(resolve_source(sources['character_core'])))
     player_profile_json = load_effective_player_profile()
     player_profile_md = render_runtime_player_profile_markdown(player_profile_json)
+    player_profile_sections = build_player_profile_detail_sections(player_profile_json)
 
     preset_dir = resolve_source(sources['preset_dir'])
     active_preset_name = sources.get('active_preset', 'world-sim-balanced')
@@ -1070,8 +1071,23 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         event_summaries=event_summaries,
         summary_text=summary_text,
         summary_chunks=summary_chunks,
+        player_profile_sections=player_profile_sections,
         user_text=user_text,
     )
+    player_profile_detail_ids = [str(hit.get('section_id', '') or '').strip() for hit in (selector_decision.get('player_profile_detail_hits', []) or []) if str(hit.get('section_id', '') or '').strip()]
+    player_profile_detail_md = format_player_profile_detail_sections(player_profile_sections, player_profile_detail_ids)
+    selected_event_ids = {
+        str(hit.get('event_id', '') or '').strip()
+        for hit in (selector_decision.get('event_hits', []) or [])
+        if str(hit.get('event_id', '') or '').strip()
+    }
+    selected_event_summaries = [
+        item for item in event_summaries
+        if isinstance(item, dict) and (
+            str(item.get('event_id', '') or '').strip() in selected_event_ids
+            or str(item.get('turn_id', '') or '').strip() in selected_event_ids
+        )
+    ]
     inject_lorebook_text = opening_lorebook_turn or bool(selector_decision.get('inject_lorebook_text')) or bool(lorebook_index_hits.get('items'))
     if inject_lorebook_text:
         selector_decision['inject_lorebook_text'] = True
@@ -1102,6 +1118,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         'character_core': character_core,
         'player_profile_md': player_profile_md,
         'player_profile_json': player_profile_json,
+        'player_profile_detail_md': player_profile_detail_md,
         'canon': canon_text,
         'state_text': '',
         'active_preset': {
@@ -1170,5 +1187,6 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         'summary_chunks': summary_chunks,
         'selected_summary_chunks': [chunk for chunk in summary_chunks if str(chunk.get('chunk_id', '') or '') in {str(hit.get('chunk_id', '') or '') for hit in (selector_decision.get('summary_chunk_hits', []) or [])}] if bool(selector_decision.get('inject_summary')) else [],
         'event_summaries': event_summaries,
+        'selected_event_summaries': selected_event_summaries,
         'npc_roster': selector_decision.get('npc_roster', []),
     }

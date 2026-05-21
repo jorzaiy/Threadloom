@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'backend'))
 
-from backend.selector import build_selector_decision, event_summary_hits
+from backend.selector import build_selector_decision, event_summary_hits, player_profile_detail_hits
 
 
 class SelectorRecallTests(unittest.TestCase):
@@ -236,6 +236,123 @@ class SelectorRecallTests(unittest.TestCase):
         self.assertEqual(decision['event_hits'], [])
         self.assertEqual(decision['summary_chunk_hits'], [])
         self.assertFalse(decision['inject_summary'])
+
+    def test_event_hit_suppresses_broad_summary_chunk_for_same_topic(self):
+        decision = build_selector_decision(
+            state_json={
+                'location': '客栈二楼房间',
+                'main_event': '主角打坐恢复灵力。',
+                'onstage_npcs': [],
+                'relevant_npcs': ['灰眼男人'],
+                'tracked_objects': [],
+                'knowledge_records': [],
+            },
+            recent_history=[{'role': 'assistant', 'content': '主角回到房间后想起灰眼男人提出一百二十灵石。'}],
+            keeper_records={'records': []},
+            active_threads=[],
+            important_npcs=[],
+            onstage=[],
+            relevant=['灰眼男人'],
+            lorebook_entries=[],
+            system_npc_candidates=[],
+            lorebook_npc_candidates=[],
+            event_summaries=[{
+                'event_id': 'evt_0112',
+                'turn_id': 'turn-0112',
+                'summary': '灰眼男人提出一百二十灵石交易条件，主角暂未答应。',
+                'actors': ['灰眼男人'],
+                'keywords': ['灰眼男人', '一百二十灵石', '交易条件'],
+            }],
+            summary_text='',
+            summary_chunks=[{
+                'chunk_id': 'chunk_0008',
+                'turn_start': 85,
+                'turn_end': 96,
+                'actors_mentioned': ['灰眼男人'],
+                'dense_summary': ['主角与灰眼男人围绕铜片和交易条件反复试探。'],
+                'keywords': ['灰眼男人', '交易条件'],
+            }],
+            user_text='先打坐恢复一下灵力',
+        )
+
+        self.assertEqual(decision['event_hits'][0]['event_id'], 'evt_0112')
+        self.assertEqual(decision['summary_chunk_hits'], [])
+        self.assertFalse(decision['inject_summary'])
+
+    def test_turn_id_only_event_hit_suppresses_broad_summary_chunk(self):
+        decision = build_selector_decision(
+            state_json={
+                'location': '客栈二楼房间',
+                'main_event': '主角打坐恢复灵力。',
+                'onstage_npcs': [],
+                'relevant_npcs': ['灰眼男人'],
+                'tracked_objects': [],
+                'knowledge_records': [],
+            },
+            recent_history=[{'role': 'assistant', 'content': '主角回到房间后想起灰眼男人提出一百二十灵石。'}],
+            keeper_records={'records': []},
+            active_threads=[],
+            important_npcs=[{'primary_label': '灰眼男人', 'role_label': '交易对象'}],
+            onstage=[],
+            relevant=['灰眼男人'],
+            lorebook_entries=[],
+            system_npc_candidates=[],
+            lorebook_npc_candidates=[],
+            event_summaries=[{
+                'turn_id': 'turn-0112',
+                'summary': '灰眼男人提出一百二十灵石交易条件，主角暂未答应。',
+                'actors': ['灰眼男人'],
+                'keywords': ['灰眼男人', '一百二十灵石', '交易条件'],
+            }],
+            summary_text='',
+            summary_chunks=[{
+                'chunk_id': 'chunk_0008',
+                'turn_start': 85,
+                'turn_end': 96,
+                'actors_mentioned': ['灰眼男人'],
+                'dense_summary': ['主角与灰眼男人围绕铜片和交易条件反复试探。'],
+                'keywords': ['灰眼男人', '交易条件'],
+            }],
+            user_text='先打坐恢复一下灵力',
+        )
+
+        self.assertEqual(decision['event_hits'][0]['event_id'], 'turn-0112')
+        self.assertEqual(decision['summary_chunk_hits'], [])
+        self.assertFalse(decision['inject_summary'])
+        self.assertIn('灰眼男人', decision['npc_profile_targets'])
+        self.assertIn('灰眼男人', [item['name'] for item in decision['npc_roster']])
+
+    def test_player_profile_detail_hits_background_on_direct_memory_prompt(self):
+        hits = player_profile_detail_hits(
+            [{
+                'section_id': 'background',
+                'title': '背景细节',
+                'items': ['幼年在青州城外随散修叔父长大，熟悉野路子阵法。'],
+                'text': '幼年在青州城外随散修叔父长大，熟悉野路子阵法。',
+                'sensitivity': 'narrator_only',
+            }],
+            state_json={'main_event': '主角回忆自己的身世。'},
+            recent_history=[],
+            user_text='想起小时候在青州城外的过去',
+        )
+
+        self.assertEqual(hits[0]['section_id'], 'background')
+
+    def test_player_profile_detail_skips_private_on_quiet_turn_without_anchor(self):
+        hits = player_profile_detail_hits(
+            [{
+                'section_id': 'privateBoundaries',
+                'title': '私密边界细节',
+                'items': ['真实身份是逃亡继承人，不自动对 NPC 公开。'],
+                'text': '真实身份是逃亡继承人，不自动对 NPC 公开。',
+                'sensitivity': 'private',
+            }],
+            state_json={'main_event': '主角坐在客栈二楼休息。'},
+            recent_history=[{'role': 'assistant', 'content': '房间里很安静。'}],
+            user_text='先休息一会儿',
+        )
+
+        self.assertEqual(hits, [])
 
 
 if __name__ == '__main__':
