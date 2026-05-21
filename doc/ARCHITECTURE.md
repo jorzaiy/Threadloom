@@ -200,14 +200,14 @@
 
 1. 用户编辑自然语言设定，适合新用户和跨角色卡迁移。
 2. 后端用 State Keeper 模型整理为固定统一 JSON schema。
-3. runtime 只消费统一 JSON 渲染出的短 `【玩家档案】` prompt block。
+3. runtime 每轮常驻消费统一 JSON 渲染出的短 `【玩家档案】` prompt block；更详细的背景、心理、私密边界等数组项会作为可检索 profile detail，由 selector 在当前场景直接相关时注入 `【命中玩家档案细节】`。
 
 统一 JSON 只允许固定字段：`identity` 对象和 `appearance / abilities / personality / preferences / background / psychology / worldAdaptation / privateBoundaries` 字符串数组。高级用户可以编辑字段内容和数组项，但不能新增未知字段或改变字段类型。旧版嵌套角色卡 profile 会在读取时兼容转换，避免继续为每张角色卡扩展任意 JSON alias。
 
 补充说明：
 
 - `USER.md` 不再作为 RP narrator 主链输入
-- narrator 运行时只消费一份收短后的玩家档案摘要，避免完整人物设定每轮过度挤占上下文
+- narrator 运行时常驻消费一份收短后的玩家档案摘要，避免完整人物设定每轮过度挤占上下文；详细资料不是默认大段注入，而是按本轮身世回忆、能力使用、外貌检视、身份挑战、私密边界等强锚点 gated recall。
 - `player-profile.json` / `player-profile.md` 当前主要作为旧版兼容副本与可读导出；新的写入路径以 `player-profile.base.json`、`player-profile.override.json` 和对应 `.source.md` 为准
 
 ## 外部记忆层评估：mem0
@@ -276,6 +276,7 @@ mem0 的定位是 AI agent 的通用长期记忆层：从对话中自动提取�
 
 强约束层：
 - 玩家档案（runtime slim 版）
+- 命中的玩家档案细节（只供 narrator 维持主角连续性；private / narrator_only 事实不自动变成 NPC 已知）
 - 知情边界
 - 最近窗口（前段提纲 + 近端完整正文）
 

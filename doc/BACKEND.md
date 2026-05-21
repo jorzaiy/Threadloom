@@ -18,7 +18,7 @@
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `llm_manager.py`：统一 LLM 角色调用管理层；封装 `call_role_llm()`，按角色 key 查找模型配置并调用 `model_client`，供各 agent 统一使用
 - `safe_http.py`：SSRF 安全 HTTP 连接辅助；DNS 预解析 + IP pin，按 `_LOOPBACK_HOSTS` 白名单放行 loopback，拒绝私网/link-local 直连，防止 DNS rebinding 攻击
-- `player_profile.py`：玩家档案路径、统一 JSON schema 校验、旧格式兼容转换、State Keeper 模型自然语言整理、prompt preview 渲染；保存时固定 schema，避免任意嵌套 JSON 继续扩散到 runtime
+- `player_profile.py`：玩家档案路径、统一 JSON schema 校验、旧格式兼容转换、State Keeper 模型自然语言整理、prompt preview 渲染，以及 selector 可检索的详细 profile section 构建；保存时固定 schema，避免任意嵌套 JSON 继续扩散到 runtime
 - `server.py` 当前默认绑定 `127.0.0.1:8765`，可通过 `THREADLOOM_HOST` / `THREADLOOM_PORT` 覆盖，并统一设置基础安全响应头、JSON API `no-store` 与请求体大小上限
 - `local_model_client.py`：本地模型调用（含 429/503 自动重试）；调用方必须显式提供 `base_url` 与 `model`，不再内置旧本地模型默认值
 - `card_hints.py`：卡级语义提示加载器，从 `character-data.json["hints"]` 读取实体分类 token、NPC 角色映射、persona 原型等
@@ -64,7 +64,7 @@
 - 新 session 会继承 root `canon / summary / state`
 - state / summary / persona / threads / important NPC / actor registry 都已接入 session-local 写回
 - narrator 当前默认只吃低干扰上下文：`runtime_rules / preset / slim character_core / player_profile / actor registry / scene_objective / items / knowledge / keeper archive hits / recent window 前段提纲 / 最近完整正文 / user input`
-- `player_profile` 当前由统一 JSON schema 渲染为短 prompt block；用户自然语言源文本只用于整理和审计，不直接进入 narrator prompt
+- `player_profile` 当前由统一 JSON schema 渲染为短常驻 prompt block；用户自然语言源文本只用于整理和审计，不直接进入 narrator prompt。详细背景、心理、能力、私密边界等数组项会拆成 `player_profile_detail` section，只有 selector 按本轮强锚点命中时才进入 `【命中玩家档案细节】`。
 - `state` 的 `time/location/main_event/onstage` 不再进入 narrator prompt；当前事实以最近完整正文 + 前段提纲 + 本轮输入为准
 - `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲和事件时间轴进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回；summary chunk 进入 prompt 前会经过 quarantine，明显主角名漂移的 chunk 不会注入
 - 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
@@ -158,7 +158,7 @@
 
 调试浮动面板展示的是本轮注入和写回诊断，而不是完整记忆表。当前应重点看这些块：
 
-- `Prompt Blocks`：确认 `【重要物件与持有关系】`、`【召回的12轮外历史】`、`【keeper archive 命中】`、世界书块等是否真实进入 prompt，以及各自字符数。
+- `Prompt Blocks`：确认 `【重要物件与持有关系】`、`【命中事件索引】`、`【召回的归档提纲】`、`【keeper archive 命中】`、世界书块等是否真实进入 prompt，以及各自字符数。`【召回的归档提纲】` 只应在 selector 强锚点命中且事件索引不足以覆盖时出现，不再作为固定 12 轮历史默认入口。
 - `Lorebook Injection`：普通回合可能只注入 foundation / index / source 命中的小块。判断实际体量时优先看 `selected_summary_chars / source_hit_chars / index_hit_chars / foundation_chars / effective_total_chars`，不要把旧 `total_chars` 当作最终入 prompt 总量。
 - `Event Memory`：显示事件摘要数量、selector 是否注入 summary、`event_hits` 和最新事件摘要。selector 现在要求当前 turn 强锚点；普通日常物件词或弱 topic overlap 不应单独把旧 event / summary 拉回。
 - `Diagnostics`：保留 `state_keeper_diagnostics`、selector 完整决策、arbiter 结果、completion / finish reason、state/model error 等排错字段。
