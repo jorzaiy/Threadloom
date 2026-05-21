@@ -702,6 +702,18 @@ def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> 
     object_fields_used = False
     explicit_objects_by_label: dict[str, dict] = {}
 
+    raw_possessed_ids = {
+        str(item.get('object_id', '') or '').strip()
+        for item in (normalized.get('possession_state', []) or [])
+        if isinstance(item, dict)
+        and str(item.get('object_id', '') or '').strip()
+        and (
+            str(item.get('holder', '') or '').strip()
+            or str(item.get('status', '') or '').strip()
+            or str(item.get('location', '') or '').strip()
+        )
+    }
+
     tracked_objects = normalized.get('tracked_objects')
     if isinstance(tracked_objects, list):
         object_fields_used = True
@@ -709,10 +721,13 @@ def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> 
             coerced = _coerce_tracked_object_item(item, idx)
             if not coerced:
                 continue
+            object_id = str(coerced.get('object_id', '') or '').strip()
+            if object_id in raw_possessed_ids and str(coerced.get('lifecycle_status', '') or '').strip() in {'lost', 'archived'}:
+                coerced.pop('lifecycle_status', None)
+                coerced.pop('lifecycle_reason', None)
             coerced['label'] = _normalize_object_label(coerced.get('label', ''))
             objects_by_label[coerced['label']] = coerced
             explicit_objects_by_label[coerced['label']] = coerced
-            object_id = str(coerced.get('object_id', '') or '').strip()
             if object_id.startswith('obj_'):
                 try:
                     max_idx = max(max_idx, int(object_id.split('_', 1)[1]))

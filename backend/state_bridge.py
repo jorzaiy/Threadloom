@@ -1331,6 +1331,19 @@ def _stale_protagonist_possession_item(item: dict, object_label: str, support_te
     return updated
 
 
+def _active_object_claim_ids(items: list[dict]) -> set[str]:
+    claimed: set[str] = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        object_id = str(item.get('object_id', '') or '').strip()
+        if not object_id:
+            continue
+        if str(item.get('holder', '') or '').strip() or str(item.get('status', '') or '').strip() or str(item.get('location', '') or '').strip():
+            claimed.add(object_id)
+    return claimed
+
+
 def _merge_tracked_objects(prev_objects: list[dict], candidate_objects: list[dict]) -> list[dict]:
     prev_items = [item for item in (prev_objects or []) if isinstance(item, dict)]
     candidate_items = [item for item in (candidate_objects or []) if isinstance(item, dict)]
@@ -2219,7 +2232,11 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         tracked_objects = prev.get('tracked_objects', []) if isinstance(prev.get('tracked_objects', []), list) else []
     raw_candidate_tracked_objects = [dict(item) for item in tracked_objects if isinstance(item, dict)]
     prev_tracked_objects = prev.get('tracked_objects', []) if isinstance(prev.get('tracked_objects', []), list) else []
+    possession_state = current.get('possession_state', prev.get('possession_state', []))
+    if not isinstance(possession_state, list):
+        possession_state = prev.get('possession_state', []) if isinstance(prev.get('possession_state', []), list) else []
     tracked_objects = _merge_tracked_objects(prev_tracked_objects, tracked_objects)
+    active_claim_ids = _active_object_claim_ids(possession_state)
     normalized_objects = []
     seen_object_ids: set[str] = set()
     retired_candidates = {
@@ -2251,6 +2268,8 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         aliases = [str(alias or '').strip() for alias in (item.get('aliases', []) or []) if str(alias or '').strip()]
         if aliases:
             normalized_item['aliases'] = list(dict.fromkeys(aliases))[:8]
+        if lifecycle_status in {'lost', 'archived'} and object_id in active_claim_ids:
+            lifecycle_status = 'active'
         if lifecycle_status in {'consumed', 'destroyed', 'lost', 'archived'}:
             normalized_item['lifecycle_status'] = lifecycle_status
             normalized_item['lifecycle_reason'] = str(item.get('lifecycle_reason', '') or '').strip()
@@ -2290,9 +2309,6 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         }
         object_index.pop(object_id, None)
 
-    possession_state = current.get('possession_state', prev.get('possession_state', []))
-    if not isinstance(possession_state, list):
-        possession_state = prev.get('possession_state', []) if isinstance(prev.get('possession_state', []), list) else []
     normalized_possession = []
     seen_possession: set[str] = set()
     early_holder_lookup = _entity_lookup_by_name(

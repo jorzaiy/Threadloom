@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import copy
 import logging
+import re
 import time
 from typing import Any
 
@@ -72,6 +73,14 @@ def _trim_trace_text(text: str, limit: int = TRACE_PROMPT_LIMIT) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + '\n...[truncated]'
+
+
+def _redact_trace_prompt(text: str) -> str:
+    return re.sub(
+        r'(?s)【命中玩家档案细节】\n.*?(?=\n\n【|$)',
+        '【命中玩家档案细节】\n[redacted from turn trace; see prompt_block_stats for size]',
+        str(text or ''),
+    )
 
 
 def _state_keeper_failure_diagnostics(err: Exception, state_error: str) -> dict:
@@ -564,7 +573,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'arbiter': copy.deepcopy(arbiter),
                 'state_fragment_initial': copy.deepcopy(state_fragment),
                 'narrator': {
-                    'system_prompt': _trim_trace_text(system_prompt),
+                    'system_prompt': _trim_trace_text(_redact_trace_prompt(system_prompt)),
                     'user_prompt': _trim_trace_text(user_prompt),
                     'prompt_block_stats': copy.deepcopy(prompt_block_stats(system_prompt)),
                     'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
@@ -681,7 +690,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'arbiter': copy.deepcopy(arbiter),
             'state_fragment_initial': copy.deepcopy(state_fragment),
             'narrator': {
-                'system_prompt': _trim_trace_text(system_prompt),
+                'system_prompt': _trim_trace_text(_redact_trace_prompt(system_prompt)),
                 'user_prompt': _trim_trace_text(user_prompt),
                 'prompt_block_stats': copy.deepcopy(prompt_block_stats(system_prompt)),
                 'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
@@ -837,7 +846,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     system_prompt, user_prompt = build_narrator_input(context, text, arbiter_result=arbiter_result)
     prompt_stats = prompt_block_stats(system_prompt)
     turn_trace['runtime']['narrator'] = {
-        'system_prompt': _trim_trace_text(system_prompt),
+        'system_prompt': _trim_trace_text(_redact_trace_prompt(system_prompt)),
         'user_prompt': _trim_trace_text(user_prompt),
         'prompt_block_stats': copy.deepcopy(prompt_stats),
         'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},

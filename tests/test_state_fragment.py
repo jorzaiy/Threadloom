@@ -17,7 +17,7 @@ from backend.actor_registry import update_actor_registry
 from backend.arbiter_state import merge_arbiter_state
 from backend.state_keeper import _call_state_keeper_llm, _fill_user_prompt, _merge_keeper_fill, _parse_fill_payload, _restore_current_turn_onstage_marker
 from backend.state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, normalize_carryover_signals, normalize_keeper_object_label
-from backend.handler_message import _add_lightweight_knowledge_delta, _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _store_turn_audit
+from backend.handler_message import _add_lightweight_knowledge_delta, _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _redact_trace_prompt, _store_turn_audit
 from backend.summary_chunks import _fallback_chunk, _normalize_chunk
 from backend.memory_maintenance import actor_alias_map, canonicalize_event_summaries, canonicalize_state_memory, resolve_stale_state_threads
 from backend.name_sanitizer import looks_like_non_person_alias_fragment, looks_like_low_quality_signal_fragment
@@ -26,6 +26,18 @@ from backend.event_ledger import build_event_summary_item, extract_time_location
 
 
 class StateFragmentTest(unittest.TestCase):
+    def test_turn_trace_redacts_player_profile_detail_block(self):
+        prompt = '【玩家档案】\n- 名字：测试主角\n\n【命中玩家档案细节】\n### 背景细节 / visibility=narrator_only\n- 私密旧伤\n\n### 私密边界细节 / visibility=private\n- 真实身份\n\n【最近上下文】\n正文'
+
+        redacted = _redact_trace_prompt(prompt)
+
+        self.assertIn('【玩家档案】', redacted)
+        self.assertIn('【命中玩家档案细节】', redacted)
+        self.assertNotIn('私密旧伤', redacted)
+        self.assertNotIn('真实身份', redacted)
+        self.assertNotIn('### 私密边界细节', redacted)
+        self.assertIn('【最近上下文】', redacted)
+
     def test_shared_normalization_helpers_preserve_current_contract(self):
         self.assertEqual(entity_descriptor_signature('灰衣人'), '灰衣')
         self.assertTrue(entity_labels_compatible('灰衣人', '灰衣'))
@@ -595,6 +607,26 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(normalized['object_visibility'], [])
         self.assertEqual(normalized['graveyard_objects'][0]['object_id'], 'obj_01')
         self.assertEqual(normalized['graveyard_objects'][0]['lifecycle_status'], 'consumed')
+
+    def test_possessed_object_cannot_be_marked_lost_by_same_turn(self):
+        prev = {
+            'tracked_objects': [{'object_id': 'mud_shell_01', 'label': '泥壳', 'kind': 'item', 'story_relevant': True}],
+            'possession_state': [{'object_id': 'mud_shell_01', 'holder': '陆小环', 'status': '手持展示后收回袖中'}],
+        }
+        state = {
+            **prev,
+            'main_event': '灵貂衔着泥壳目送陆小环离去，泥壳仍在它嘴里。',
+            'tracked_objects': [{'object_id': 'mud_shell_01', 'label': '泥壳', 'kind': 'item', 'story_relevant': True, 'lifecycle_status': 'lost'}],
+            'possession_state': [{'object_id': 'mud_shell_01', 'holder': '陆小环', 'status': '包好收在袖中'}],
+            'object_visibility': [{'object_id': 'mud_shell_01', 'visibility': 'private', 'known_to': ['陆小环']}],
+        }
+
+        normalized = normalize_state_dict(state, prev_state=prev)
+
+        self.assertEqual(normalized['tracked_objects'][0]['object_id'], 'mud_shell_01')
+        self.assertNotIn('lifecycle_status', normalized['tracked_objects'][0])
+        self.assertEqual(normalized['possession_state'][0]['object_id'], 'mud_shell_01')
+        self.assertEqual(normalized.get('graveyard_objects', []), [])
 
     def test_memory_maintenance_canonicalizes_actor_alias_layers(self):
         state = {
