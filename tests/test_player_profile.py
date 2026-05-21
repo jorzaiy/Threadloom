@@ -126,9 +126,17 @@ def test_runtime_render_supports_nested_character_override_schema():
     assert '170cm左右（在男生中偏矮）' in rendered
     assert '黑客技术不错' in rendered
     assert '黑带水平' in rendered
-    assert '耐力极差' in rendered
-    assert '刻意压低声线说话' in rendered
-    assert '在学院中生存下去' in rendered
+    assert '耐力极差' not in rendered
+    assert '刻意压低声线说话' not in rendered
+    assert '在学院中生存下去' not in rendered
+
+    detail = player_profile.format_player_profile_detail_sections(
+        player_profile.build_player_profile_detail_sections(profile),
+        ['privateBoundaries', 'psychology'],
+    )
+    assert '耐力极差' in detail
+    assert '刻意压低声线说话' in detail
+    assert '在学院中生存下去' in detail
 
 
 def test_unified_profile_validation_rejects_schema_shape_changes():
@@ -163,7 +171,22 @@ def test_unified_profile_runtime_render_uses_flat_arrays():
     assert '名字：陆小环' in rendered
     assert '身份：散修' in rendered
     assert '灵识敏锐，能感知细微灵气波动。' in rendered
-    assert '真实来历不自动对 NPC 公开。' in rendered
+    assert '真实来历不自动对 NPC 公开。' not in rendered
+
+
+def test_unified_profile_detail_sections_keep_background_available_separately():
+    profile = player_profile.empty_unified_player_profile()
+    profile['identity']['name'] = '陆小环'
+    profile['background'] = ['幼年在青州城外随散修叔父长大，熟悉野路子阵法。']
+    profile['privateBoundaries'] = ['真实师承不自动对 NPC 公开。']
+
+    sections = player_profile.build_player_profile_detail_sections(profile)
+    rendered = player_profile.format_player_profile_detail_sections(sections, ['background', 'privateBoundaries'])
+
+    assert '### 背景细节 / visibility=narrator_only' in rendered
+    assert '幼年在青州城外随散修叔父长大' in rendered
+    assert '### 私密边界细节 / visibility=private' in rendered
+    assert '真实师承不自动对 NPC 公开' in rendered
 
 
 def test_unified_profile_merge_preserves_base_when_override_fields_blank():

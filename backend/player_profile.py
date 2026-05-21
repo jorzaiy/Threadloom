@@ -207,10 +207,6 @@ def render_unified_player_profile_markdown(profile: dict) -> str:
         ('abilities', '稳定能力'),
         ('personality', '性格锚点'),
         ('preferences', '偏好'),
-        ('background', '背景'),
-        ('psychology', '心理与剧情'),
-        ('worldAdaptation', '世界适配说明'),
-        ('privateBoundaries', '私密边界'),
     ):
         items = profile.get(key, [])
         if items:
@@ -218,6 +214,146 @@ def render_unified_player_profile_markdown(profile: dict) -> str:
     while lines and not lines[-1].strip():
         lines.pop()
     return '\n'.join(lines) + '\n' if lines else ''
+
+
+PROFILE_DETAIL_SECTION_TITLES = {
+    'appearance': '外貌细节',
+    'abilities': '能力细节',
+    'personality': '性格细节',
+    'preferences': '偏好细节',
+    'background': '背景细节',
+    'psychology': '心理与剧情细节',
+    'worldAdaptation': '世界适配细节',
+    'privateBoundaries': '私密边界细节',
+}
+
+
+def _profile_detail_section(section_id: str, title: str, items: list[str], *, sensitivity: str = 'narrator_only') -> dict | None:
+    clean = []
+    for item in items:
+        text = _clean_string(item)
+        if text and text not in clean:
+            clean.append(text)
+    if not clean:
+        return None
+    return {
+        'section_id': section_id,
+        'title': title,
+        'items': clean,
+        'sensitivity': sensitivity,
+        'text': '\n'.join(clean),
+    }
+
+
+def build_player_profile_detail_sections(profile: dict) -> list[dict]:
+    if not isinstance(profile, dict) or not profile:
+        return []
+    if is_unified_player_profile(profile):
+        normalized = validate_unified_player_profile(profile)
+        sections = []
+        for key in UNIFIED_PROFILE_ARRAY_KEYS:
+            sensitivity = 'private' if key == 'privateBoundaries' else 'narrator_only'
+            section = _profile_detail_section(key, PROFILE_DETAIL_SECTION_TITLES[key], normalized.get(key, []), sensitivity=sensitivity)
+            if section:
+                sections.append(section)
+        return sections
+
+    normalized = normalize_player_profile(profile)
+    sections = []
+    appearance = normalized.get('appearance', {}) if isinstance(normalized.get('appearance', {}), dict) else {}
+    character = _character_layer(normalized)
+    character_appearance = character.get('appearance', {}) if isinstance(character.get('appearance', {}), dict) else {}
+    appearance_items = [_compact_text(value) for value in appearance.values()]
+    appearance_items.extend(_compact_text(value) for value in character_appearance.values())
+    section = _profile_detail_section('appearance', '外貌细节', appearance_items)
+    if section:
+        sections.append(section)
+
+    ability_items = _profile_list_items(normalized.get('skills', []))
+    ability_items.extend(_profile_list_items(character.get('skills', [])))
+    cultivation = character.get('cultivation_info', {}) if isinstance(character.get('cultivation_info', {}), dict) else {}
+    ability_items.extend(_compact_text(value) for value in cultivation.values())
+    section = _profile_detail_section('abilities', '能力细节', ability_items)
+    if section:
+        sections.append(section)
+
+    personality_items = _profile_list_items(normalized.get('personality', []), label_keys=('trait', 'name', 'title'))
+    personality_items.extend(_profile_list_items(character.get('personality', []), label_keys=('trait', 'name', 'title')))
+    section = _profile_detail_section('personality', '性格细节', personality_items)
+    if section:
+        sections.append(section)
+
+    preferences = [str(item).strip() for item in (normalized.get('interests', []) or []) if str(item).strip()]
+    section = _profile_detail_section('preferences', '偏好细节', preferences)
+    if section:
+        sections.append(section)
+
+    background = normalized.get('background', {}) if isinstance(normalized.get('background', {}), dict) else {}
+    background_items = [_compact_text(value) for value in background.values()]
+    character_background = character.get('background', {})
+    if isinstance(character_background, dict):
+        background_items.extend(_compact_text(value) for value in character_background.values())
+    elif isinstance(character_background, list):
+        background_items.extend(_compact_text(value) for value in character_background)
+    section = _profile_detail_section('background', '背景细节', background_items)
+    if section:
+        sections.append(section)
+
+    psychology = normalized.get('psychology', {}) if isinstance(normalized.get('psychology', {}), dict) else {}
+    psychology_items = [_compact_text(value) for value in psychology.values()]
+    character_psychology = character.get('psychology', {}) if isinstance(character.get('psychology', {}), dict) else {}
+    psychology_items.extend(_compact_text(value) for value in character_psychology.values())
+    goals = [_compact_text(item) for item in character.get('goals', [])] if isinstance(character.get('goals', []), list) else []
+    psychology_items.extend(goals)
+    section = _profile_detail_section('psychology', '心理与剧情细节', psychology_items)
+    if section:
+        sections.append(section)
+
+    adaptation = normalized.get('worldAdaptation', {}) if isinstance(normalized.get('worldAdaptation', {}), dict) else {}
+    notes = adaptation.get('notes', []) if isinstance(adaptation.get('notes', []), list) else []
+    section = _profile_detail_section('worldAdaptation', '世界适配细节', [_compact_text(item) for item in notes])
+    if section:
+        sections.append(section)
+
+    private_items = [_compact_text(item) for item in normalized.get('weaknesses', [])] if isinstance(normalized.get('weaknesses', []), list) else []
+    if isinstance(character.get('weaknesses', []), list):
+        private_items.extend(_compact_text(item) for item in character.get('weaknesses', []))
+    disguise = character.get('disguise', {}) if isinstance(character.get('disguise', {}), dict) else {}
+    for key in ('techniques', 'weaknesses'):
+        value = disguise.get(key, [])
+        if isinstance(value, list):
+            private_items.extend(_compact_text(item) for item in value)
+        else:
+            private_items.append(_compact_text(value))
+    section = _profile_detail_section('privateBoundaries', '私密边界细节', private_items, sensitivity='private')
+    if section:
+        sections.append(section)
+    return sections
+
+
+def format_player_profile_detail_sections(sections: list[dict], section_ids: list[str], *, limit: int = 3, max_item_chars: int = 220) -> str:
+    wanted = [str(item or '').strip() for item in section_ids if str(item or '').strip()]
+    if not wanted:
+        return ''
+    by_id = {str(section.get('section_id', '') or ''): section for section in sections if isinstance(section, dict)}
+    blocks = []
+    for section_id in wanted[:limit]:
+        section = by_id.get(section_id)
+        if not isinstance(section, dict):
+            continue
+        title = str(section.get('title', '') or section_id).strip()
+        sensitivity = str(section.get('sensitivity', '') or 'narrator_only').strip()
+        lines = [f'### {title} / visibility={sensitivity}']
+        for item in (section.get('items', []) or [])[:6]:
+            text = str(item or '').strip()
+            if not text:
+                continue
+            if len(text) > max_item_chars:
+                text = text[:max_item_chars - 3] + '...'
+            lines.append(f'- {text}')
+        if len(lines) > 1:
+            blocks.append('\n'.join(lines))
+    return '\n\n'.join(blocks)
 
 
 def merge_unified_player_profiles(base: dict, override: dict) -> dict:
@@ -435,36 +571,13 @@ def _nested_character_runtime_sections(profile: dict) -> list[str]:
     nested_traits = _profile_list_items(character.get('personality', []), label_keys=('trait', 'name', 'title'))
     _append_bullets(lines, '角色卡性格锚点', nested_traits, limit=6)
 
-    weakness_items = [_compact_text(item) for item in character.get('weaknesses', [])] if isinstance(character.get('weaknesses', []), list) else []
-    _append_bullets(lines, '角色卡身体短板', weakness_items, limit=6)
-
-    disguise = character.get('disguise', {}) if isinstance(character.get('disguise', {}), dict) else {}
-    disguise_items = []
-    if disguise.get('level'):
-        disguise_items.append(f"伪装水平：{_compact_text(disguise.get('level'))}")
-    for key in ('techniques', 'weaknesses'):
-        value = disguise.get(key, [])
-        if isinstance(value, list):
-            disguise_items.extend(_compact_text(item) for item in value)
-        else:
-            text = _compact_text(value)
-            if text:
-                disguise_items.append(text)
-    _append_bullets(lines, '角色卡伪装约束', disguise_items, limit=8)
-
     personality = character.get('personality', {}) if isinstance(character.get('personality', {}), dict) else {}
     trait_items = []
-    for key in ('traits', 'hidden_traits'):
+    for key in ('traits',):
         value = personality.get(key, [])
         if isinstance(value, list):
             trait_items.extend(_compact_text(item) for item in value)
     _append_bullets(lines, '角色卡性格锚点', trait_items, limit=6)
-
-    background_items = [_compact_text(item) for item in character.get('background', [])] if isinstance(character.get('background', []), list) else []
-    _append_bullets(lines, '角色卡背景线索', background_items, limit=6)
-
-    goal_items = [_compact_text(item) for item in character.get('goals', [])] if isinstance(character.get('goals', []), list) else []
-    _append_bullets(lines, '角色卡剧情目标', goal_items, limit=5)
     return lines
 
 
@@ -873,16 +986,6 @@ def render_runtime_player_profile_markdown(profile: dict) -> str:
             trait_lines.append(f"- {trait}：{detail[:70] + '...' if len(detail) > 70 else detail}")
     if trait_lines:
         lines.extend(['## 性格锚点', *trait_lines, ''])
-
-    psychology = profile.get('psychology', {}) if isinstance(profile.get('psychology', {}), dict) else {}
-    story_use = str(psychology.get('storyUse', '') or '').strip()
-    if story_use:
-        lines.extend(['## 剧情适配', f'- {story_use}', ''])
-
-    adaptation = profile.get('worldAdaptation', {}) if isinstance(profile.get('worldAdaptation', {}), dict) else {}
-    notes = [str(item).strip() for item in (adaptation.get('notes', []) or []) if str(item).strip()][:3]
-    if notes:
-        lines.extend(['## 世界适配说明', *[f'- {item}' for item in notes], ''])
 
     lines.extend(_nested_character_runtime_sections(profile))
 
