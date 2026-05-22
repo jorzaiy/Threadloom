@@ -17,6 +17,9 @@ const debugFloatPanel = document.getElementById('debugFloatPanel');
 const debugBackdrop = document.getElementById('debugBackdrop');
 const debugCloseBtn = document.getElementById('debugCloseBtn');
 const debugToggleBtn = document.getElementById('debugToggleBtn');
+const sessionAuditBtn = document.getElementById('sessionAuditBtn');
+const sessionAuditNote = document.getElementById('sessionAuditNote');
+const sessionAuditResult = document.getElementById('sessionAuditResult');
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settingsPanel');
 const settingsBackdrop = document.getElementById('settingsBackdrop');
@@ -511,7 +514,9 @@ async function apiJson(url, options = {}) {
   }
   const res = await fetch(url, options);
   let data = null;
-  try { data = await res.json(); } catch (_e) { data = null; }
+  try { data = await res.json(); } catch (err) {
+    throw new Error(`响应不是有效 JSON：${url} (${err?.message || err})`);
+  }
   if (res.status === 401) {
     if (AUTH_BUSINESS_PATHS.has(url)) {
       // Pass the backend message through (e.g. "账户暂时锁定...").
@@ -526,6 +531,14 @@ async function apiJson(url, options = {}) {
     throw new Error(data?.error?.message || `request failed: ${url}`);
   }
   return data;
+}
+
+async function runStage(label, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    throw new Error(`${label}失败：${err?.message || err}`);
+  }
 }
 
 async function loadSessions() {
@@ -1738,6 +1751,51 @@ function renderDebug(debug) {
   debugEl.textContent = lines.join('\n');
 }
 
+function renderSessionAudit(audit) {
+  if (!sessionAuditResult) return;
+  if (!audit) {
+    sessionAuditResult.textContent = '尚未运行审计';
+    return;
+  }
+  const lines = [];
+  const severity = audit.severity || 'unknown';
+  const summary = audit.summary || {};
+  lines.push(`Severity: ${severity}`);
+  lines.push(`Issues: ${summary.issue_count || 0}`);
+  lines.push(`Style: ${summary.style_status || 'unknown'}`);
+  lines.push(`Polluted event summaries: ${summary.polluted_event_summary_count || 0}`);
+  lines.push(`Persona hook issues: ${summary.persona_hook_issue_count || 0}`);
+  lines.push('');
+  if (audit.style_drift) {
+    lines.push('Style Drift Metrics');
+    lines.push(`- assistant turns: ${audit.style_drift.assistant_turns || 0}`);
+    lines.push(`- avg chars: ${audit.style_drift.avg_chars || 0}`);
+    lines.push(`- avg micro-action score: ${audit.style_drift.avg_micro_action_score || 0}`);
+    lines.push(`- avg density / 1000 chars: ${audit.style_drift.avg_micro_action_density_per_1000_chars || 0}`);
+    lines.push('');
+  }
+  if (audit.issues?.length) {
+    lines.push('Findings');
+    for (const issue of audit.issues) {
+      lines.push(`- [${issue.severity || 'info'}] ${issue.type}: ${issue.message || ''}`);
+      if (issue.suggested_action) lines.push(`  建议：${issue.suggested_action}`);
+    }
+    lines.push('');
+  }
+  lines.push('Raw');
+  lines.push(JSON.stringify(audit, null, 2));
+  sessionAuditResult.textContent = lines.join('\n');
+}
+
+async function runSessionAudit() {
+  if (!sessionId()) throw new Error('当前没有选中的 session');
+  return apiJson('/api/session-audit', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: sessionId()}),
+  });
+}
+
 async function regenerateLast() {
   const data = await apiJson('/api/regenerate-last', {
     method: 'POST',
@@ -1971,7 +2029,7 @@ composer.addEventListener('submit', async (e) => {
   renderMessages(lastHistoryItems);
   scrollToLatest({ smooth: false });
   try {
-    const data = await apiJson('/api/message', {
+    const data = await runStage('提交消息', () => apiJson('/api/message', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -1980,24 +2038,31 @@ composer.addEventListener('submit', async (e) => {
         client_turn_id: clientTurnId,
         meta: {source: 'web', debug: webConfig.default_debug}
       })
-    });
+    }));
+    if (!data || typeof data !== 'object') {
+      throw new Error('提交消息失败：后端返回空响应');
+    }
+    if (!('reply' in data)) {
+      throw new Error('提交消息失败：后端响应缺少 reply');
+    }
     pendingClientTurnId = null;
     pendingUserMessage = null;
     shouldStickToBottom = true;
-    await loadHistory();
-    renderState(data.state_snapshot || {});
-    renderCharacterCard(data.character_card || lastCharacterCard);
-    renderDebug(data.debug || null);
-    updateSessionIndicator();
+    await runStage('刷新历史', () => loadHistory());
+    await runStage('渲染状态', () => renderState(data.state_snapshot || {}));
+    await runStage('渲染角色卡', () => renderCharacterCard(data.character_card || lastCharacterCard));
+    await runStage('渲染调试信息', () => renderDebug(data.debug || null));
+    await runStage('更新会话指示器', () => updateSessionIndicator());
     if (shouldStickToBottom) {
       scrollToLatest({ smooth: false });
     }
     setStatus('已更新', 'ok');
-  } catch {
+  } catch (err) {
+    console.error('message submit failed', err);
     pendingUserMessage = text;
     input.value = originalText;
     renderMessages(lastHistoryItems);
-    setStatus('发送失败', 'error');
+    setStatus(`发送失败：${err?.message || err}`, 'error');
   } finally {
     submitButton.disabled = false;
   }
@@ -2103,6 +2168,33 @@ debugToggleBtn?.addEventListener('click', () => {
 });
 debugCloseBtn?.addEventListener('click', closeDebugPanel);
 debugBackdrop?.addEventListener('click', closeDebugPanel);
+sessionAuditBtn?.addEventListener('click', async () => {
+  sessionAuditBtn.disabled = true;
+  setStatus('Session 审计中...', 'working');
+  if (sessionAuditNote) {
+    sessionAuditNote.textContent = '审计中...';
+    sessionAuditNote.dataset.kind = '';
+  }
+  try {
+    const data = await runSessionAudit();
+    applyWebConfig(data.web || {});
+    renderSessionAudit(data.audit);
+    if (sessionAuditNote) {
+      const severity = data.audit?.severity || 'unknown';
+      sessionAuditNote.textContent = `审计完成：${severity}`;
+      sessionAuditNote.dataset.kind = severity === 'ok' ? 'ok' : (severity === 'critical' ? 'error' : 'warning');
+    }
+    setStatus('Session 审计完成', 'ok');
+  } catch (err) {
+    if (sessionAuditNote) {
+      sessionAuditNote.textContent = err.message;
+      sessionAuditNote.dataset.kind = 'error';
+    }
+    setStatus(`审计失败：${err.message}`, 'error');
+  } finally {
+    sessionAuditBtn.disabled = false;
+  }
+});
 
 saveSiteConfigBtn?.addEventListener('click', async () => {
   try {

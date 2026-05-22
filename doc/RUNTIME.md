@@ -51,6 +51,18 @@ Session-local persona seed 仍不是完整人物传记。legacy 非统一模式�
 - 当前 relevant lore
 - `scene/archive/longterm` persona 的前后台分布
 
+### 手动 Session 审计（MVP）
+
+调试面板提供手动 `Session 审计` 入口，对当前 session 做只读诊断。审计结果写入 session-local `diagnostics/audit_latest.json` 与 `diagnostics/audit_reports.json`，不会进入 narrator prompt、state keeper、selector、summary、persona 或 event summary 主记忆层。
+
+当前 MVP 聚焦叙事风格漂移与污染源隔离信号：
+
+- 最近若干轮 narrator 输出的平均长度、身体微动作词密度与动作拆解模式。
+- `event_summaries` 中疑似把 narrator prose fragment 当结构化事件摘要保存的条目。
+- `state.actor_persona_hooks` 中疑似固化单轮微动作的表达层钩子。
+
+审计输出只包含 `severity`、指标、证据和建议动作；`safe_auto_repairs` 目前为空，不会自动改写主记忆。若后续需要自动修复，必须先转换为 typed repair（例如替换特定 event summary 或清理特定 alias），并继续禁止把审计解释文本写回 runtime 事实层。
+
 ### Step 0. 读取 runtime rules
 
 首先读取：
@@ -199,7 +211,7 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 - **summary chunks**：统一模式下新 chunk 用 heuristic fallback 生成，保留原始 turn pair 细节，避免长程摘要 LLM 再次引入人物名漂移。legacy 模式下若 chunk LLM 返回 `finish_reason=length`，也会降级为 heuristic chunk 并记录 `llm_rejected_reason=length`。
 - **opening choice**：选择开局进入首个 narrator 回合时不再先保存一次 pre-keeper state；最终 opening turn state 由 handler 在 keeper、arbiter、thread、actor 绑定和维护层之后统一提交。
 
-名称规范化只在 actor_registry 绑定后由 `memory_maintenance` 统一执行一次，state_keeper 内部不再做独立的 semantic_cleanup。`context_builder` 在注入 summary chunks 前还会 quarantine 明显的主角名复合漂移（如“主角名 + 多余字”的伪人物名），并在 `context_audit.quarantined_summary_chunks` 中记录原因，防止旧坏 chunk 继续进入 narrator prompt。
+名称规范化只在 actor_registry 绑定后由 `memory_maintenance` 统一执行一次，state_keeper 内部不再做独立的 semantic_cleanup。归一化层会优先使用 actor registry 的稳定 `name / aliases`，把 `scene_entities`、`important_npcs`、`active_threads.actors`、物件持有者和可见性名单里的描述性称呼收敛到同一 canonical NPC；同一 canonical 下的重复 scene/important 记录会合并，避免“药铺年轻男人 / 年轻男人”“背纹灵貂 / 灵貂”这类称呼变化继续分裂事实面。裸服务称呼（如 `掌柜`、`老板`、`伙计`）不作为跨场景 alias 使用，必须保留 `茶馆掌柜`、`药铺掌柜` 这类场景限定称呼，防止不同店铺人物互相串线。`context_builder` 在注入 summary chunks 前还会 quarantine 明显的主角名复合漂移（如“主角名 + 多余字”的伪人物名），并在 `context_audit.quarantined_summary_chunks` 中记录原因，防止旧坏 chunk 继续进入 narrator prompt。
 
 Persona 写回的职责边界：`persona_updater` 负责人物 seed 的 scene/archive/longterm 流转、重要度计数与近期观察沉淀。NPC 是否值得保留 persona seed 的判断优先依赖 `important_npc_tracker` 的锁定结果，辅以出场连续性和用户关注度启发式。`actor_registry` 仍负责不可变人物基础设定，不应被 persona 的短期观察覆盖。Persona observation 只提供最近表现/关系压力/表达层风格的轻量提示，不能替代角色卡或 actor registry。外貌、语气、习惯动作和性格表现只从 assistant 正文中抽取，不读取用户 prompt 原文，也不让 narrator 直接提交 JSON sidecar。
 
