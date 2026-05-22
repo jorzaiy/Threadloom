@@ -24,6 +24,8 @@ GLOBAL_RUNTIME_EXAMPLE = APP_ROOT / 'config' / 'runtime.example.json'
 GLOBAL_PROVIDERS_CONFIG = APP_ROOT / 'config' / 'providers.json'
 GLOBAL_PROVIDERS_EXAMPLE = APP_ROOT / 'config' / 'providers.example.json'
 SITE_PROVIDER_NAME = 'site'
+NARRATOR_MIN_OUTPUT_TOKENS = 6000
+STATE_KEEPER_MIN_OUTPUT_TOKENS = 3000
 SUPPORTED_PROVIDER_APIS = [
     {'value': 'openai-completions', 'label': 'OpenAI Chat Completions'},
     {'value': 'openai-responses', 'label': 'OpenAI Responses'},
@@ -63,7 +65,7 @@ STATE_KEEPER_CANDIDATE_DEFAULT = {
     'provider': SITE_PROVIDER_NAME,
     'model': '',
     'temperature': 0.0,
-    'max_output_tokens': 800,
+    'max_output_tokens': STATE_KEEPER_MIN_OUTPUT_TOKENS,
     'stream': False,
     'response_format': {'type': 'json_object'},
 }
@@ -721,14 +723,14 @@ def load_runtime_config() -> dict:
         'provider': SITE_PROVIDER_NAME,
         'model': narrator.get('model', ''),
         'temperature': float(narrator_defaults.get('temperature', 0.9) or 0.9),
-        'max_output_tokens': int(narrator_defaults.get('max_output_tokens', 1200) or 1200),
+        'max_output_tokens': max(int(narrator_defaults.get('max_output_tokens', NARRATOR_MIN_OUTPUT_TOKENS) or NARRATOR_MIN_OUTPUT_TOKENS), NARRATOR_MIN_OUTPUT_TOKENS),
         'stream': bool(narrator_defaults.get('stream', True)),
     }
     models['state_keeper'] = {
         'provider': SITE_PROVIDER_NAME,
         'model': state_keeper.get('model', ''),
         'temperature': float(state_keeper_defaults.get('temperature', 0.1) or 0.1),
-        'max_output_tokens': int(state_keeper_defaults.get('max_output_tokens', 480) or 480),
+        'max_output_tokens': max(int(state_keeper_defaults.get('max_output_tokens', STATE_KEEPER_MIN_OUTPUT_TOKENS) or STATE_KEEPER_MIN_OUTPUT_TOKENS), STATE_KEEPER_MIN_OUTPUT_TOKENS),
         'stream': bool(state_keeper_defaults.get('stream', False)),
         'response_format': {'type': 'json_object'},
     }
@@ -797,13 +799,17 @@ def resolve_provider_model(role: str = 'narrator') -> dict:
     resolved_provider = dict(provider)
     resolved_provider['baseUrl'] = _validate_remote_base_url(resolved_provider.get('baseUrl', ''))
     resolved_provider['apiKey'] = _resolve_api_key(resolved_provider.get('apiKey', ''))
-    max_output_tokens = role_cfg.get('max_output_tokens', 1200)
+    max_output_tokens = role_cfg.get('max_output_tokens', NARRATOR_MIN_OUTPUT_TOKENS if role == 'narrator' else 1200)
     override_max_tokens = str(os.environ.get(override_max_tokens_env, '') or '').strip()
     if override_max_tokens:
         try:
             max_output_tokens = int(override_max_tokens)
         except Exception:
             pass
+    if role == 'narrator':
+        max_output_tokens = max(int(max_output_tokens or 0), NARRATOR_MIN_OUTPUT_TOKENS)
+    elif role in {'state_keeper', 'state_keeper_candidate'}:
+        max_output_tokens = max(int(max_output_tokens or 0), STATE_KEEPER_MIN_OUTPUT_TOKENS)
     stream = bool(role_cfg.get('stream', role == 'narrator'))
     override_stream = str(os.environ.get(override_stream_env, '') or '').strip().lower()
     if override_stream in {'0', 'false', 'no'}:

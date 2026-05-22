@@ -22,12 +22,12 @@
   "model_defaults": {
     "narrator": {
       "temperature": 0.9,
-      "max_output_tokens": 1000,
+      "max_output_tokens": 6000,
       "stream": true
     },
     "state_keeper": {
       "temperature": 0.1,
-      "max_output_tokens": 480,
+      "max_output_tokens": 3000,
       "stream": false
     }
   },
