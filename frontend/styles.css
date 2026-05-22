@@ -1471,12 +1471,48 @@ button:active {
   color: var(--text-soft);
 }
 
-#debugDetail {
+#debugDetail,
+.session-audit-result {
   white-space: pre-wrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.65;
   color: #3b352f;
+}
+
+.session-audit-panel {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid rgba(127, 109, 91, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 253, 248, 0.62);
+}
+
+.session-audit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.session-audit-head strong,
+.session-audit-head small {
+  display: block;
+}
+
+.session-audit-head small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.session-audit-result {
+  max-height: 260px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(248, 244, 237, 0.72);
 }
 
 .debug-card .sidebar-summary {

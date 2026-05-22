@@ -124,6 +124,17 @@
           <details class="sidebar-details">
             <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">bug_report</span>调试诊断</summary>
             <div class="sidebar-details-body">
+              <div class="session-audit-panel">
+                <div class="session-audit-head">
+                  <div>
+                    <strong>Session 审计</strong>
+                    <small>手动检查叙事风格漂移与污染摘要</small>
+                  </div>
+                  <button id="sessionAuditBtn" class="subtle-btn" type="button">运行审计</button>
+                </div>
+                <div id="sessionAuditNote" class="inline-feedback"></div>
+                <pre id="sessionAuditResult" class="session-audit-result">尚未运行审计</pre>
+              </div>
               <pre id="debugDetail">发送一轮消息后显示</pre>
             </div>
           </details>
