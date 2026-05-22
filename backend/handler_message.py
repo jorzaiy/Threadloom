@@ -83,6 +83,22 @@ def _redact_trace_prompt(text: str) -> str:
     )
 
 
+def _message_stage(stage: str, *, session_id: str, turn_id: str, client_turn_id: str = '') -> None:
+    logger.info(
+        'MESSAGE_STAGE stage=%s session_id=%s turn_id=%s client_turn_id=%s',
+        stage,
+        session_id,
+        turn_id,
+        client_turn_id or '-',
+    )
+
+
+def _cache_processed_turn(session_id: str, meta: dict, client_turn_id: str, response: dict) -> None:
+    if client_turn_id:
+        meta['processed_client_turn_ids'][client_turn_id] = response
+    save_meta(session_id, meta)
+
+
 def _state_keeper_failure_diagnostics(err: Exception, state_error: str) -> dict:
     usage = err.usage if isinstance(err, StateKeeperCallError) and isinstance(err.usage, dict) else None
     raw_reply = err.raw_reply if isinstance(err, StateKeeperCallError) else ''
@@ -511,6 +527,11 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     meta = load_meta(session_id)
 
     if client_turn_id and client_turn_id in meta['processed_client_turn_ids']:
+        logger.info(
+            'MESSAGE_STAGE stage=idempotency_cache_hit session_id=%s client_turn_id=%s',
+            session_id,
+            client_turn_id,
+        )
         return meta['processed_client_turn_ids'][client_turn_id]
 
     turn_id = f"turn-{meta['last_turn_id'] + 1:04d}"
@@ -526,6 +547,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         prev_state=prev_state if isinstance(prev_state, dict) else {},
         meta=meta,
     )
+    _message_stage('received', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
 
     def finalize_response(response: dict[str, Any], *, trace: dict | None = None) -> dict[str, Any]:
         active_trace = trace if isinstance(trace, dict) else turn_trace
@@ -550,6 +572,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         context['state_fragment'] = state_fragment
         system_prompt, user_prompt = build_narrator_input(context, opening_prompt, arbiter_result=arbiter_result)
         reply, usage, narrator_retry_trace = _call_narrator_with_retries(system_prompt, user_prompt)
+        _message_stage('narrator_complete', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
         model_error = narrator_retry_trace.get('last_error') if narrator_retry_trace.get('all_failed') else None
         if narrator_retry_trace.get('all_failed'):
             response = {
@@ -647,12 +670,14 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             state['state_keeper_diagnostics'] = state_keeper_diagnostics
 
         append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
+        _message_stage('history_committed', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
         state = merge_arbiter_state(state, arbiter)
         state = apply_thread_tracker(state, user_text=opening_prompt, narrator_reply=reply, arbiter=arbiter)
         state['continuity_hints'] = normalized_hint_entries(session_id)
         state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
         state = resolve_important_npc_continuity(state)
         save_state(session_id, state)
+        _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
 
         response = {
             'session_id': session_id,
@@ -676,9 +701,8 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'state_keeper_diagnostics': copy.deepcopy(state_keeper_diagnostics) if isinstance(state_keeper_diagnostics, dict) else {},
             }
         meta['last_turn_id'] += 1
-        if client_turn_id:
-            meta['processed_client_turn_ids'][client_turn_id] = response
-        save_meta(session_id, meta)
+        _cache_processed_turn(session_id, meta, client_turn_id, response)
+        _message_stage('idempotency_cached', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
         trace = copy.deepcopy(turn_trace)
         trace['mode'] = 'opening-choice'
         trace['opening'] = {
@@ -713,6 +737,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             'state': copy.deepcopy(state),
             'state_snapshot': build_state_snapshot(state),
         }
+        _message_stage('response_ready', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
         return finalize_response(response, trace=trace)
 
     state = load_state(session_id)
@@ -852,6 +877,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
     }
     reply, usage, narrator_retry_trace = _call_narrator_with_retries(system_prompt, user_prompt)
+    _message_stage('narrator_complete', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     model_error = narrator_retry_trace.get('last_error') if narrator_retry_trace.get('all_failed') else None
     fallback_used = bool(narrator_retry_trace.get('all_failed'))
     turn_trace['runtime']['narrator']['reply'] = reply
@@ -1104,6 +1130,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
 
     turn_trace['runtime']['state_after_keeper'] = copy.deepcopy(state)
     append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply, 'completion_status': completion_status})
+    _message_stage('history_committed', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     state = merge_arbiter_state(state, arbiter)
     state = apply_thread_tracker(state, user_text=text, narrator_reply=reply, arbiter=arbiter)
     state['continuity_hints'] = normalized_hint_entries(session_id)
@@ -1137,7 +1164,23 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     # contains its own LLM-failure fallback so it does not raise out, which lets
     # us collapse the prior intermediate save into this final write.
     save_state(session_id, state)
+    _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+    committed_response = {
+        'session_id': session_id,
+        'turn_id': turn_id,
+        'reply': reply,
+        'usage': usage,
+        'state_snapshot': build_state_snapshot(state),
+        'web': web_runtime_settings(),
+        'post_commit_status': 'state_saved',
+    }
+    meta['last_turn_id'] += 1
+    if client_turn_id:
+        meta['processed_client_turn_ids'][client_turn_id] = committed_response
+    save_meta(session_id, meta)
+    _message_stage('idempotency_cached_state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     summary_chunk_result = update_summary_chunks(session_id, use_llm=not unified_memory_transaction)
+    _message_stage('summary_chunks_updated', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     event_ledger = build_event_ledger_with_llm(
         user_text=text,
         narrator_reply=reply,
@@ -1150,10 +1193,14 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         use_llm=not unified_memory_transaction,
         require_turn_event_summary=unified_memory_transaction,
     )
+    state_anchor_safe = not state_error and not (
+        isinstance(state_keeper_diagnostics, dict)
+        and state_keeper_diagnostics.get('provider_used') == 'fragment-baseline'
+    )
     time_anchor, location_anchor = extract_time_location_anchor(
         reply,
-        fallback_time=str(state.get('time', '') or ''),
-        fallback_location=str(state.get('location', '') or ''),
+        fallback_time=str(state.get('time', '') or '') if state_anchor_safe else '',
+        fallback_location=str(state.get('location', '') or '') if state_anchor_safe else '',
     )
     event_summary_item = build_event_summary_item(
         turn_id=turn_id,
@@ -1168,7 +1215,9 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if event_summary_item.get('summary'):
         upsert_event_summary(session_id, event_summary_item)
+    _message_stage('event_summary_updated', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     summary_text = update_summary(session_id)
+    _message_stage('summary_updated', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     if unified_memory_transaction:
         persona_counts = {
             'skipped': 'unified_memory_transaction',
@@ -1176,6 +1225,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         }
     else:
         persona_counts = update_persona(session_id, context.get('continuity_candidates', []))
+    _message_stage('persona_updated', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     turn_audit = _build_turn_audit(
         context,
         turn_id=turn_id,
@@ -1240,11 +1290,9 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'npc_profile_count': len(context.get('npc_profiles', []) or []),
             }
 
-    meta['last_turn_id'] += 1
     _store_turn_audit(meta, turn_audit)
-    if client_turn_id:
-        meta['processed_client_turn_ids'][client_turn_id] = response
-    save_meta(session_id, meta)
+    _cache_processed_turn(session_id, meta, client_turn_id, response)
+    _message_stage('idempotency_cached_final', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     turn_trace['post_turn'] = {
         'state': copy.deepcopy(state),
         'state_snapshot': build_state_snapshot(state),
@@ -1260,4 +1308,5 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'persona_counts': copy.deepcopy(persona_counts),
         'event_summary_item': copy.deepcopy(event_summary_item),
     }
+    _message_stage('response_ready', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     return finalize_response(response)
