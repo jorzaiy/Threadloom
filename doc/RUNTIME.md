@@ -36,6 +36,8 @@
 
 Selector 对 12 轮外固定 summary chunk 的回流采用“当前 turn 强锚点优先”原则。人物名、地点、物件、事件短语和关系线可作为有效锚点；泛化虚词、短动作残片、称呼碎片和旧情报账本的弱 overlap 只能辅助排序，不能单独触发远期摘要注入。召回规则必须保持角色卡无关，不通过写死具体人名、session id 或剧情专属关键词来强化某个个案。
 
+事件索引召回默认仍偏最近窗口，但当本轮用户或当前事件明确触发“来历 / 背景 / 过去 / 为什么 / 原因 / 听说”等背景追问时，selector 会额外执行长程 event recall：用当前 onstage / relevant NPC、用户显式主题、地点/物件锚点和场景限定服务称呼（如“药铺老板”⇄“药铺掌柜”）扫描更早的 `event_summaries`。长程命中只作为候选补充并继续经过 stale / mundane / sensitive guards，目标是在询问 NPC 来历、旧事件原因或物件来源时，把较早的 first-contact / origin 事件带回 narrator prompt，避免模型因只看到近几轮而自行编造相遇地点或原因。
+
 Session-local persona seed 仍不是完整人物传记。legacy 非统一模式下，它每轮可更新重要度、前后台层级和近期观察，但 observation 只从 assistant 叙事中抽取与该 NPC 相关的短片段，不把用户 prompt 原文写入人物详情，也不把同一片段重复塞进多个字段。统一记忆事务模式下，在线人格写回改为 `state_keeper.persona_patches`：同一次 keeper LLM 只为既有非主角 `actor_id` 写表达层钩子（语气、行为模式、决策偏好、习惯动作、受压反应），经 actor_id/display_name 校验和 prompt-injection 清洗后落到 `state.actor_persona_hooks`。NPC 的外貌印象、语气、习惯动作和性格表现仍必须先在 narrator 正文中可观察出现；narrator 可以自然写出表现层细节，但不能直接输出结构化人物卡或决定是否持久建档。
 
 ### 深刷新（设计目标，当前未实现独立 20 轮调度器）
@@ -188,6 +190,8 @@ Preset 只负责叙事表现，不负责改写事实层、状态写回或系统�
 ### Step 6. 调模型
 
 生成 RP 正文。
+
+Narrator 回复在写入 history 前会经过确定性质量门禁。除空回复、`finish_reason=length/error` 和明显半截句外，门禁还会拦截模板化叙事退化，例如反复出现 `X的方式是`、`X的方向是`、`不抖的方式是` 等把普通动作拆成解释模板的句式。若命中退化门禁，本轮不会落盘；retry 会在 system prompt 追加纠偏块，明确列出被拒绝片段并要求改写为自然叙事，减少嘴/舌/喉结/眼珠/手指/方向/方式等微动作堆叠，优先推进对白、事实、选择和行动结果。连续重试仍失败时，按 narrator unavailable 处理，不把坏输出写入最近窗口。
 
 输出：
 - `reply`
