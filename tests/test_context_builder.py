@@ -68,6 +68,39 @@ def test_recent_outline_bridges_pairs_before_full_prose_window():
     assert '叙事正文8' in full
 
 
+def test_recent_window_truncates_long_assistant_prose_to_prevent_style_feedback():
+    verbose = '嘴巴张了一下，喉结动了一下，手指攥紧又松开。' * 80
+    full = _format_recent_window([
+        {'role': 'user', 'content': '问他药铺掌柜是什么来历'},
+        {'role': 'assistant', 'content': verbose, 'completion_status': 'complete'},
+    ], limit_pairs=1)
+
+    assert '...[已截断]' in full
+    assert len(full) < len(verbose)
+    assert full.count('喉结动了一下') < 80
+
+
+def test_narrator_prompt_warns_recent_prose_is_not_style_sample():
+    system_prompt, _user_prompt = build_narrator_input(
+        {
+            'runtime_rules': 'runtime',
+            'character_core': {'name': '维克托'},
+            'scene_facts': {},
+            'recent_history': [
+                {'role': 'user', 'content': '继续'},
+                {'role': 'assistant', 'content': '嘴巴张了一下，喉结动了一下。' * 80},
+            ],
+            'recent_full_prose_turns': 1,
+            'active_preset': {},
+        },
+        '继续',
+    )
+
+    assert '不是文风样本' in system_prompt
+    assert '不要模仿最近叙事中过密的动作拆解' in system_prompt
+    assert '人物动作描写必须克制' in system_prompt
+
+
 def test_opening_lorebook_turn_prefers_full_source_summary_over_index():
     content = 'World_Setting: 现代架空\n' + ('背景。' * 120) + '\n- 学院为男校，不存在恋爱氛围'
     source_summary = summarize_lorebook_entries(

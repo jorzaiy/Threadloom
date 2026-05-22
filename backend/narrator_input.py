@@ -281,6 +281,16 @@ def _format_recent_history(history: list[dict], limit: int = 8) -> str:
     return '\n'.join(lines)
 
 
+def _truncate_recent_window_text(text: str, *, role: str) -> str:
+    value = str(text or '').strip()
+    if not value:
+        return ''
+    limit = 420 if role == 'user' else 720
+    if len(value) <= limit:
+        return value
+    return value[:limit - 16].rstrip() + '...[已截断]'
+
+
 def _format_recent_window(history: list[dict], limit_pairs: int = 6) -> str:
     if not history:
         return '暂无'
@@ -302,13 +312,13 @@ def _format_recent_window(history: list[dict], limit_pairs: int = 6) -> str:
     lines = []
     if not pairs:
         for item in leading_assistants[-max(1, limit_pairs):]:
-            assistant_text = str(item.get('content', '') or '').strip()
+            assistant_text = _truncate_recent_window_text(item.get('content', ''), role='assistant')
             if assistant_text:
                 lines.append(f"[叙事] {assistant_text}")
         return '\n'.join(lines) if lines else '暂无'
     for user_item, assistant_item in pairs:
-        user_text = str(user_item.get('content', '') or '').strip()
-        assistant_text = str(assistant_item.get('content', '') or '').strip()
+        user_text = _truncate_recent_window_text(user_item.get('content', ''), role='user')
+        assistant_text = _truncate_recent_window_text(assistant_item.get('content', ''), role='assistant')
         lines.append(f"[用户] {user_text}")
         lines.append(f"[叙事] {assistant_text}")
     return '\n'.join(lines)
@@ -654,6 +664,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         blocks.append(
             f'【最近{recent_full_pairs}轮完整上下文】\n'
             '本块与本轮用户输入是当前场景、行动链和短期状态的事实源；它们不得覆盖角色卡、世界设定锁、知情边界和已登记身份。\n'
+            '本块只用于读取“发生了什么”，不是文风样本；不要模仿最近叙事中过密的动作拆解、身体细节、重复顿挫或相同句式。若旧正文已经反复描写嘴、眼、手指、喉结、背脊等微动作，本轮应收束为一两处必要反应，把篇幅留给对白、信息推进或明确后果。\n'
             '尤其要核对上一轮叙事末尾已经改变的空间关系、视线范围、人物控制权和行动链；后续必须承接这些变化，除非正文给出可见、可理解的过渡，不得把人物或物件回滚到更早的位置、关系或动作阶段。\n'
             '如果最近几轮已经反复写过“观察—判断—不点破/不说破/只是看着”等同类镜头，本轮不要再换词重复同一心理观察；必须让外部世界发生可见的新动作、对白、时间推进、环境响应或 NPC 决策。\n'
             + recent_window_text
@@ -741,6 +752,7 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         '- 若主角存在伪装、化名、隐藏身份、真实性别、真实阵营或其他私密身份边界，NPC 只有在知情边界、知识记录或最近完整正文明确显示其已经获知时，才能在对白、称呼或判断中承接；否则只能按场内公开表象称呼与反应。\n'
         '- 若上一到三轮已经主要停留在观察、揣测、沉默、不点破、目光变化或心理判断，本轮必须推进一个客观可感知的变化；不要继续输出同义的“看着/判断/没有说破”。\n'
         '- 即使本轮处于回屋、关门、换位、烧水、整理、短暂观察等过渡段，也不要塌成一句摘要。至少写出具体环境变化、人物反应、动作后的余波，或场景中正在累积的细节变化，让场景继续“活着”。\n'
+        '- 人物动作描写必须克制：同一人物同一轮最多选一两处真正改变局势或表达态度的可见动作；不要连续拆写嘴巴张合、眼珠移动、喉结滚动、手指攥松、背脊绷塌等微动作来填充篇幅。\n'
         '- 只有当当前局势本来就存在追索、怀疑、风险、未决冲突或逼近感时，才继续强化压力；不要为了“有戏”而每轮硬塞危险感。\n'
         '- 如果本轮用户动作是吃饭、整理、学习、等待、行走、闲聊、休息、观察环境等低压行为，优先保持低压质感；可以保留背景线索，但不要自动追加倒计时、监视感、脚步逼近、被发现暗示或惩罚预告。\n'
         '- 如果用户明确选择舒服地看书、休息、发呆、晒太阳、吃东西、做题或消磨时间，不要擅自引入新的可疑脚步、暗门、钥匙声、窥视者、反光物、追踪者或“差点被发现”的钩子；除非本轮用户主动追查旧线索，否则让旧线索安静留在背景里。\n'
