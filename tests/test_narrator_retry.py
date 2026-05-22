@@ -80,6 +80,74 @@ def test_narrator_returns_unavailable_after_three_incomplete_replies(monkeypatch
     assert 'NARRATOR_INCOMPLETE_REJECTED' in caplog.text
 
 
+def test_narrator_retries_degenerated_direction_templates(monkeypatch):
+    malformed = (
+        '他的手抬起来了，抬的方向是自己的胸口。'
+        '眼珠子移开了，移的方向是窗纸。'
+        '嘴巴张了一下，张的方式是先停半息再合上。'
+    )
+    replies = [
+        (malformed, {'finish_reason': 'stop', 'model': 'narrator'}),
+        ('年轻男人按住胸口，低声说井底有问题。', {'finish_reason': 'stop', 'model': 'narrator'}),
+    ]
+    prompts = []
+
+    def fake_resolve_provider_model(role):
+        return _model_config(role)
+
+    def fake_call_model(_model_cfg, system_prompt, _user_prompt):
+        prompts.append(system_prompt)
+        return replies.pop(0)
+
+    monkeypatch.setattr(handler_message, 'resolve_provider_model', fake_resolve_provider_model)
+    monkeypatch.setattr(handler_message, 'call_model', fake_call_model)
+
+    reply, usage, trace = handler_message._call_narrator_with_retries('system', 'user')
+
+    assert reply == '年轻男人按住胸口，低声说井底有问题。'
+    assert usage['finish_reason'] == 'stop'
+    assert trace['all_failed'] is False
+    assert trace['attempts'][0]['ok'] is False
+    assert trace['attempts'][0]['incomplete_heuristic_rejected'] is True
+    assert trace['attempts'][0]['rejection_reason'] == 'degenerated_style_template'
+    assert trace['attempts'][0]['corrective_retry_prompt'] == 'style_template'
+    assert trace['attempts'][1]['ok'] is True
+    assert '上次回复已被系统拒绝：叙事句式退化' in prompts[1]
+    assert '严禁使用' in prompts[1]
+    assert 'X的方式是' in prompts[1]
+    assert malformed[:30] in prompts[1]
+
+
+def test_narrator_rejects_repeated_degenerated_templates(monkeypatch):
+    malformed = (
+        '他的声音不抖了——不抖的方式是舌头顶住上牙膛。'
+        '他的眼珠子移开了，移的方向是窗纸。'
+        '他的手抬起来了，抬的方向是胸口。'
+    )
+    attempts = []
+
+    def fake_resolve_provider_model(role):
+        return _model_config(role)
+
+    def fake_call_model(_model_cfg, _system_prompt, _user_prompt):
+        attempts.append(1)
+        return malformed, {'finish_reason': 'stop', 'model': 'narrator'}
+
+    monkeypatch.setattr(handler_message, 'resolve_provider_model', fake_resolve_provider_model)
+    monkeypatch.setattr(handler_message, 'call_model', fake_call_model)
+
+    reply, usage, trace = handler_message._call_narrator_with_retries('system', 'user')
+
+    assert reply == ''
+    assert usage['finish_reason'] == 'error'
+    assert trace['all_failed'] is True
+    assert len(attempts) == 3
+    for attempt in trace['attempts']:
+        assert attempt['ok'] is False
+        assert attempt['incomplete_heuristic_rejected'] is True
+        assert attempt['rejection_reason'] == 'degenerated_style_template'
+
+
 def test_history_filter_hides_partial_turn_pair():
     history = [
         {'role': 'assistant', 'content': '开场。'},

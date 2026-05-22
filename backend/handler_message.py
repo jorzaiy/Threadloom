@@ -21,7 +21,7 @@ try:
     from .opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
     from .model_config import resolve_provider_model, load_runtime_config
     from .model_client import call_model
-    from .model_client import looks_incomplete_reply
+    from .model_client import looks_incomplete_reply, narrator_reply_rejection_reason
     from .narrator_input import build_narrator_input, prompt_block_stats
     from .paths import normalize_session_id
     from .state_fragment import build_state_fragment, build_state_from_fragment, merge_reply_skeleton
@@ -46,7 +46,7 @@ except ImportError:
     from opening import build_opening_choice_reply, build_opening_reply, initialize_opening_choice_state, initialize_opening_state, is_opening_command, resolve_opening_choice
     from model_config import resolve_provider_model, load_runtime_config
     from model_client import call_model
-    from model_client import looks_incomplete_reply
+    from model_client import looks_incomplete_reply, narrator_reply_rejection_reason
     from narrator_input import build_narrator_input, prompt_block_stats
     from paths import normalize_session_id
     from state_fragment import build_state_fragment, build_state_from_fragment, merge_reply_skeleton
@@ -129,6 +129,21 @@ def _secondary_narrator_model_cfg(primary_cfg: dict, keeper_cfg: dict) -> dict:
     return secondary
 
 
+def _narrator_style_retry_prompt(system_prompt: str, rejected_reply: str, *, attempt_count: int) -> str:
+    excerpt = _trim_trace_text(str(rejected_reply or ''), 900)
+    severity = '第二次仍然' if attempt_count >= 2 else '上一次'
+    return (
+        system_prompt
+        + '\n\n【上次回复已被系统拒绝：叙事句式退化】\n'
+        + f'{severity}出现模板化动作拆解，说明你正在复读坏句式。现在必须收束并重写本轮，不要延续上次文本。\n'
+        + '严禁使用："X的方式是"、"X的方向是"、"不抖的方式是"、"抬的方向是"、"移的方向是"、"张的方式是"等解释模板。\n'
+        + '严禁连续拆写嘴巴、舌头、喉结、眼珠、手指、肩背、抖动、方向、方式来填充篇幅。\n'
+        + '本次回复必须更稳：用自然叙事直接写对白、事实、选择和行动结果；身体反应最多一两处，并且只能服务信息推进。\n'
+        + '如果角色要回答问题，优先把答案说出来；不要让动作说明替代剧情推进。\n'
+        + f'被拒绝片段摘录（不要模仿）：\n{excerpt}\n'
+    )
+
+
 def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_attempts: int = 3) -> tuple[str, dict, dict]:
     primary_cfg = resolve_provider_model('narrator')
     keeper_cfg = resolve_provider_model('state_keeper')
@@ -139,6 +154,7 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_att
     attempts = []
     last_error = None
     attempt_count = 0
+    current_system_prompt = system_prompt
     for role, model_cfg in model_plan:
         while attempt_count < max_attempts:
             attempt_count += 1
@@ -148,7 +164,7 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_att
                 'model': _model_label(model_cfg),
             }
             try:
-                reply, usage = call_model(model_cfg, system_prompt, user_prompt)
+                reply, usage = call_model(model_cfg, current_system_prompt, user_prompt)
             except Exception as err:
                 last_error = str(err)
                 attempt['ok'] = False
@@ -163,23 +179,29 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_att
                 attempt['finish_reason'] = finish_reason
                 attempts.append(attempt)
                 continue
-            heuristic_incomplete = looks_incomplete_reply(reply)
+            rejection_reason = narrator_reply_rejection_reason(reply)
+            heuristic_incomplete = bool(rejection_reason) or looks_incomplete_reply(reply)
             if finish_reason in ('length', 'error') or heuristic_incomplete:
                 last_error = 'incomplete narrator reply'
                 attempt['ok'] = False
                 attempt['error'] = last_error
                 attempt['finish_reason'] = finish_reason or 'incomplete'
                 attempt['incomplete_heuristic_rejected'] = bool(heuristic_incomplete)
+                attempt['rejection_reason'] = rejection_reason or str(finish_reason or 'incomplete')
                 attempt['reply_chars'] = len(str(reply or ''))
                 attempt['reply_excerpt'] = _trim_trace_text(reply, 500)
                 attempt['raw_reply'] = _trim_trace_text(reply, NARRATOR_FAILED_REPLY_TRACE_LIMIT)
+                if rejection_reason == 'degenerated_style_template':
+                    current_system_prompt = _narrator_style_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
+                    attempt['corrective_retry_prompt'] = 'style_template'
                 logger.warning(
-                    'NARRATOR_INCOMPLETE_REJECTED attempt=%s role=%s model=%s finish_reason=%s heuristic=%s reply_chars=%s reply_tail=%r',
+                    'NARRATOR_INCOMPLETE_REJECTED attempt=%s role=%s model=%s finish_reason=%s heuristic=%s reason=%s reply_chars=%s reply_tail=%r',
                     attempt_count,
                     role,
                     attempt.get('model'),
                     finish_reason,
                     heuristic_incomplete,
+                    attempt['rejection_reason'],
                     attempt['reply_chars'],
                     str(reply or '')[-500:],
                 )

@@ -161,22 +161,43 @@ def _extract_responses_text(data: dict) -> str:
     return '\n'.join(p for p in parts if p).strip()
 
 
-def _looks_incomplete_reply(text: str) -> bool:
+def narrator_reply_rejection_reason(text: str) -> str:
     body = str(text or '').rstrip()
     if not body:
-        return True
+        return 'empty'
+    if _looks_like_degenerated_narrator_template(body):
+        return 'degenerated_style_template'
     last_line = body.splitlines()[-1].strip()
     if not last_line:
-        return True
+        return 'empty_last_line'
     if len(last_line) <= 2:
-        return True
+        return 'too_short_last_line'
     if body.endswith(('。', '！', '？', '.', '!', '?', '」', '』', '"', '”', '…')):
-        return False
+        return ''
     if body.endswith(('，', '、', ',', ':', '：', '；', ';', '——', '—')):
-        return True
+        return 'dangling_punctuation'
     if len(body) >= 8 and re.search(r'[\u4e00-\u9fff]{2,}$', body):
-        return True
+        return 'unfinished_chinese_tail'
     if re.search(r'[\u4e00-\u9fffA-Za-z0-9]$', body):
+        return 'unfinished_tail'
+    return ''
+
+
+def _looks_incomplete_reply(text: str) -> bool:
+    return bool(narrator_reply_rejection_reason(text))
+
+
+def _looks_like_degenerated_narrator_template(text: str) -> bool:
+    body = str(text or '')
+    if not body:
+        return False
+    if '不抖的方式是' in body:
+        return True
+    template_hits = re.findall(
+        r'(?:抬|移|转|松|舔|钻|漏|沉|靠|散|走|爬|跑|跳|盯|顶|咬|攥|按|搁|蹲|站|坐|落|吸|贴|伸|收|探|灌|抖|绷|塌|张|合|放|拿|撤|滑|扇|竖|弯|偏|吞|咽|喝|看|听|说|问|答|开|闭|停|断|低|稳|碎|慢|快|轻|重)的(?:方式|方向)是',
+        body,
+    )
+    if len(template_hits) >= 3:
         return True
     return False
 
