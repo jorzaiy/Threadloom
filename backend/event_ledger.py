@@ -9,9 +9,9 @@ from local_model_client import parse_json_response
 from model_config import resolve_provider_model
 
 try:
-    from state_bridge import _looks_like_header_only_event
+    from state_bridge import _looks_like_header_only_event, _looks_like_location_only_event
 except ImportError:
-    from .state_bridge import _looks_like_header_only_event
+    from .state_bridge import _looks_like_header_only_event, _looks_like_location_only_event
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -36,9 +36,11 @@ def _looks_like_time_text(text: str) -> bool:
         return False
     if re.search(r'\d{2,4}年\d{1,2}月\d{1,2}日', value):
         return True
+    if re.search(r'[一二三四五六七八九十冬腊正\d]{1,3}月(?:初?[一二三四五六七八九十廿卅\d]{1,3})?', value):
+        return True
     if re.search(r'[\u4e00-\u9fff]{1,8}[一二三四五六七八九十百千万\d]{1,4}年', value):
         return True
-    return any(marker in value for marker in ('凌晨', '清晨', '早晨', '上午', '中午', '午后', '下午', '傍晚', '黄昏', '晚上', '夜里', '深夜'))
+    return any(marker in value for marker in ('子时', '丑时', '寅时', '卯时', '辰时', '巳时', '午时', '未时', '申时', '酉时', '戌时', '亥时', '凌晨', '清晨', '早晨', '上午', '中午', '午后', '下午', '傍晚', '黄昏', '晚上', '夜里', '深夜'))
 
 
 def _split_scene_header(text: str) -> tuple[str, str]:
@@ -47,12 +49,16 @@ def _split_scene_header(text: str) -> tuple[str, str]:
         return '', ''
     first_line = next((line.strip() for line in value.splitlines() if line.strip()), '')
     first_line = first_line.strip('*_`#>【】[]（）() ')
-    candidate = re.split(r'[。！？!?]', first_line, 1)[0].strip(' ，、；：')
+    sentences = [part.strip(' ，、；：') for part in re.split(r'[。！？!?]', first_line) if part.strip(' ，、；：')]
+    candidate = sentences[0] if sentences else ''
     if not candidate:
         return '', ''
     parts = [part.strip() for part in re.split(r'[，,、]', candidate) if part.strip()]
     if len(parts) < 2 or not any(_looks_like_time_text(part) for part in parts):
         return '', ''
+    if all(_looks_like_time_text(part) for part in parts):
+        location = sentences[1].strip() if len(sentences) > 1 else ''
+        return candidate, location
     location = parts[-1]
     time_anchor = '，'.join(parts[:-1]).strip()
     if not time_anchor:
@@ -119,6 +125,27 @@ def _fragment_score(text: str) -> int:
     if '→' in value:
         score += 3
     return score
+
+
+def _looks_like_micro_action_fragment(text: str) -> bool:
+    value = _normalize(text)
+    if not value:
+        return False
+    body_tokens = (
+        '嘴巴', '嘴唇', '下唇', '喉结', '眼珠', '眼睛', '眼睫', '睫毛', '瞳孔',
+        '手指', '指尖', '五指', '掌心', '肩膀', '背脊', '下巴', '耳根', '脸色',
+    )
+    micro_tokens = (
+        '张了', '合上', '动了一下', '滑了一下', '抖了一下', '缩了一下', '攥',
+        '松开', '绷', '塌', '白了一息', '半寸', '一寸', '两息', '三息', '盯着',
+    )
+    body_hits = sum(1 for token in body_tokens if token in value)
+    micro_hits = sum(1 for token in micro_tokens if token in value)
+    has_progress_verb = any(token in value for token in ('问', '说', '答', '告诉', '承认', '发现', '确认', '拿起', '收起', '离开', '进入', '递给', '交给'))
+    if body_hits >= 2 and micro_hits >= 2 and not has_progress_verb:
+        return True
+    clauses = sum(value.count(mark) for mark in ('，', '；', '、', '——'))
+    return body_hits >= 3 and clauses >= 3 and not has_progress_verb
 
 
 def _progress_score(text: str) -> int:
@@ -222,6 +249,8 @@ def core_value_quality(text: str, onstage_names: list[str]) -> int:
     value = _normalize(text)
     if not value:
         return -99
+    if _looks_like_location_only_event(value):
+        return -99
     return _scene_score(value, onstage_names) - _fragment_score(value)
 
 
@@ -271,7 +300,7 @@ def build_event_ledger(*, user_text: str, narrator_reply: str, prev_state: dict,
             'progress_score': progress_score,
             'idx': idx,
         }
-        if progress_score >= 2 and scene_score >= 2 and fragment_score <= 2:
+        if progress_score >= 2 and scene_score >= 2 and fragment_score <= 2 and not _looks_like_location_only_event(text, location) and not _looks_like_micro_action_fragment(text):
             main_event_candidates.append(item)
         else:
             discarded_fragments.append(item)
@@ -388,6 +417,8 @@ def _ledger_from_keeper_signals(keeper_signals: dict, prev_state: dict, onstage_
     event_summary = keeper_signals.get('turn_event_summary', {}) if isinstance(keeper_signals.get('turn_event_summary', {}), dict) else {}
     if event_summary.get('summary'):
         main_event = str(keeper_signals.get('main_event', '') or event_summary.get('summary', '') or '').strip()
+        if _looks_like_location_only_event(main_event, location):
+            main_event = str(event_summary.get('summary', '') or '').strip()
         prev_loc = str(prev_state.get('location', '') or '').strip()
         changed = bool(event_summary.get('scene_shift')) or bool(location and prev_loc and location != prev_loc)
         return {
@@ -406,6 +437,8 @@ def _ledger_from_keeper_signals(keeper_signals: dict, prev_state: dict, onstage_
     if require_turn_event_summary:
         return fallback
     main_event = str(keeper_signals.get('main_event', '') or '').strip()
+    if _looks_like_location_only_event(main_event, location):
+        main_event = ''
     risks = [str(r).strip() for r in (keeper_signals.get('immediate_risks', []) or []) if str(r).strip()][:2]
     clues = [str(c).strip() for c in (keeper_signals.get('carryover_clues', []) or []) if str(c).strip()][:2]
     prev_loc = str(prev_state.get('location', '') or '').strip()
@@ -462,13 +495,13 @@ def build_event_ledger_with_llm(*, user_text: str, narrator_reply: str, prev_sta
 
 def build_event_summary_item(*, turn_id: str, ledger: dict, onstage_names: list[str], tracked_objects: list[dict] | None = None, carryover_clues: list[str] | None = None, time_anchor: str = '', location_anchor: str = '', narrator_reply: str = '', actors_registry: dict | None = None) -> dict:
     summary = _normalize(str(ledger.get('summary_text', '') or ''))
-    if _looks_like_header_only_event(summary):
+    if _looks_like_header_only_event(summary) or _looks_like_location_only_event(summary, location_anchor):
         summary = ''
     if ledger.get('provider') == 'unified_extraction' and not _summary_supported_by_reply(summary, narrator_reply):
         fallback = ledger.get('fallback_heuristic', {}) if isinstance(ledger.get('fallback_heuristic', {}), dict) else {}
         summary = _normalize(str(fallback.get('summary_text', '') or ''))
     if not summary:
-        main_text = next((item.get('text', '') for item in (ledger.get('main_event_candidates', []) or []) if isinstance(item, dict) and item.get('text') and not _looks_like_header_only_event(str(item.get('text', '') or ''))), '')
+        main_text = next((item.get('text', '') for item in (ledger.get('main_event_candidates', []) or []) if isinstance(item, dict) and item.get('text') and not _looks_like_header_only_event(str(item.get('text', '') or '')) and not _looks_like_location_only_event(str(item.get('text', '') or ''), location_anchor)), '')
         summary = _normalize(main_text)
     summary = summary[:150]
 

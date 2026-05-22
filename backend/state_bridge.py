@@ -21,6 +21,10 @@ except ImportError:
 STRUCTURED_NAME_RE = re.compile(r'[\u4e00-\u9fff]{2,4}(?:·[\u4e00-\u9fff]{2,5})?')
 CONTINUITY_INFO_PHRASE_RE = re.compile(r'^[一二三四五六七八九十百千两几半多整\d]+(?:处|条|座|份|项|路|线|页|封|张|本|箱|匣|车|门|库|仓|道)?[\u4e00-\u9fff]{0,8}$')
 NON_PERSON_SUFFIXES = ('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '院', '厅', '阁', '府', '宫', '殿', '街', '巷', '亭', '轩', '井', '墙', '山')
+LOCATION_ONLY_SUFFIXES = ('场', '区', '室', '楼', '廊', '门', '路', '馆', '堂', '屋', '房', '店', '铺', '栈', '院', '厅', '阁', '府', '宫', '殿', '街', '巷', '亭', '轩', '井', '墙', '山', '岭', '坡', '林', '丛', '地', '谷', '崖', '洞', '坳', '畔', '岸', '旁', '边', '口', '内', '外', '前', '后', '里', '中', '上', '下', '终点', '入口', '出口')
+LOCATION_ONLY_KEYWORDS = ('驿站', '客栈', '酒楼', '茶馆', '码头', '渡口', '集市', '广场', '官道', '小道', '河边', '溪边', '湖畔', '山脚', '山顶', '洞穴', '营地', '帐篷', '城墙', '城门', '村口', '镇', '城', '寺', '庙', '人界', '修仙界', '魔界', '妖界', '灌木丛', '松林', '房间')
+LOCATION_ONLY_SUBJECT_MARKERS = ('她', '他', '它', '我', '你', '主角', '众人', '对方', '陆小环')
+LOCATION_ONLY_ACTION_MARKERS = ('起火', '燃起', '烧起', '倒塌', '坍塌', '爆炸', '响起', '传来', '出现', '站在', '坐在', '跪在', '躺在', '走进', '跑进', '冲进', '赶到', '追到', '抬手', '扣住', '推开', '拉开', '打向', '递给', '问起', '说道', '喊道', '看向', '盯着', '拿起', '放下', '收起', '按在', '吸收', '驱除', '归拢', '询问', '离开', '进入', '走到', '坐下', '站起')
 NON_PERSON_TOKENS = {
     '轻功', '自保', '一声', '规则', '结论', '现象', '世界', '逻辑', '认知', '交互', '概念', '目标', '问题', '决定',
     '对话', '关系', '后续', '物理', '错误', '能力', '剧情', '局势', '线索', '风险', '客厅', '时间', '空间', '答案',
@@ -44,6 +48,7 @@ ENTITY_DESCRIPTOR_SUFFIXES = (
     '制服人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
 )
 GENERIC_SHADOW_LABELS = {'暗影', '黑影', '影子', '人影'}
+AMBIGUOUS_SERVICE_ALIASES = {'掌柜', '老板', '老板娘', '店主', '掌柜的', '伙计', '小二', '账房', '管事'}
 PERSON_EVIDENCE_SUFFIXES = ENTITY_DESCRIPTOR_SUFFIXES + (
     '老汉', '老妇', '老人', '先生', '小姐', '姑娘', '掌柜', '老板', '东家', '伙计', '学徒', '官差', '衙役',
     '捕快', '巡捕', '守卫', '侍卫', '士兵', '弟子', '师父', '师兄', '师姐', '师弟', '师妹', '长老', '管事',
@@ -358,15 +363,64 @@ def _looks_like_header_only_event(value: str) -> bool:
     return True
 
 
+def _clean_event_anchor_text(value: str) -> str:
+    return ' '.join(str(value or '').split()).strip().strip('*_`#>【】[]（）()。.!！?？ ')
+
+
+def _looks_like_location_part(value: str) -> bool:
+    part = _clean_event_anchor_text(value).strip('，,、；;：: ')
+    if not part:
+        return False
+    return part.endswith(LOCATION_ONLY_SUFFIXES) or any(keyword in part for keyword in LOCATION_ONLY_KEYWORDS)
+
+
+def _looks_like_location_only_event(value: str, current_location: str = '') -> bool:
+    text = _clean_event_anchor_text(value)
+    location = _clean_event_anchor_text(current_location)
+    if not text or _looks_like_header_only_event(text):
+        return False
+    if any(marker in text for marker in LOCATION_ONLY_ACTION_MARKERS):
+        return False
+    if any(marker in text for marker in LOCATION_ONLY_SUBJECT_MARKERS):
+        return False
+    if location and (text == location or text.endswith(location) or location.endswith(text)):
+        return True
+    parts = [part.strip() for part in re.split(r'[，,、]', text) if part.strip()]
+    if len(parts) < 2:
+        return False
+    non_time_parts = [part for part in parts if not _looks_like_date_or_time_anchor(part)]
+    if not non_time_parts:
+        return False
+    return all(_looks_like_location_part(part) for part in non_time_parts)
+
+
+def _clean_main_event(value: str) -> str:
+    text = str(value or '').strip().strip('*_`#>【】[]（）()')
+    if not text:
+        return ''
+    text = re.sub(r'^(?:主要事件|主事件|当前事件|事件)\s*[:：]\s*', '', text).strip()
+    if _looks_like_location_only_event(text):
+        return ''
+    first_sentence = re.match(r'([^。！？!?]{1,80}[。！？!?])', text)
+    if first_sentence and _looks_like_header_only_event(first_sentence.group(1)):
+        text = text[first_sentence.end():].strip()
+    text = re.sub(r'^(?:主要事件|主事件|当前事件|事件)\s*[:：]\s*', '', text).strip()
+    if _looks_like_location_only_event(text):
+        return ''
+    return text
+
+
 def _looks_like_date_or_time_anchor(value: str) -> bool:
     text = str(value or '').strip()
     if not text:
         return False
     if re.search(r'\d{2,4}年\d{1,2}月\d{1,2}日', text):
         return True
+    if re.search(r'[一二三四五六七八九十冬腊正\d]{1,3}月(?:初?[一二三四五六七八九十廿卅\d]{1,3})?', text):
+        return True
     if re.search(r'[\u4e00-\u9fff]{1,8}[一二三四五六七八九十百千万\d]{1,4}年(?:[一二三四五六七八九十冬腊正\d]{1,3}月)?(?:初?[一二三四五六七八九十廿卅\d]{1,3})?', text):
         return True
-    return any(marker in text for marker in ('凌晨', '清晨', '早晨', '上午', '中午', '午后', '下午', '傍晚', '黄昏', '晚上', '夜里', '深夜'))
+    return any(marker in text for marker in ('子时', '丑时', '寅时', '卯时', '辰时', '巳时', '午时', '未时', '申时', '酉时', '戌时', '亥时', '凌晨', '清晨', '早晨', '上午', '中午', '午后', '下午', '傍晚', '黄昏', '晚上', '夜里', '深夜'))
 
 
 def _has_current_turn_person_evidence(name: str, current: dict[str, Any]) -> bool:
@@ -588,6 +642,12 @@ def entity_labels_compatible(left: str, right: str) -> bool:
         return True
     if left_text in GENERIC_SHADOW_LABELS or right_text in GENERIC_SHADOW_LABELS:
         return False
+    shorter = left_text if len(left_text) <= len(right_text) else right_text
+    longer = right_text if shorter == left_text else left_text
+    if shorter in AMBIGUOUS_SERVICE_ALIASES:
+        return False
+    if len(shorter) >= 2 and longer.endswith(shorter):
+        return True
     left_sig = _descriptor_signature(left_text)
     right_sig = _descriptor_signature(right_text)
     return bool(left_sig and right_sig and left_sig == right_sig)
@@ -689,6 +749,8 @@ def _filter_entity_aliases(primary: str, aliases: list[str], protected_names: se
     for alias in aliases or []:
         text = sanitize_runtime_name(alias)
         if not text or text == primary:
+            continue
+        if text in AMBIGUOUS_SERVICE_ALIASES:
             continue
         if not _looks_like_actor_alias(text):
             continue
@@ -2146,6 +2208,8 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             return True
         if field == 'main_event' and _looks_like_header_only_event(text):
             return True
+        if field == 'main_event' and _looks_like_location_only_event(text, current.get('location', '')):
+            return True
         if '→' in text:
             return True
         if text.count('：') + text.count(':') >= 1 and len(text) <= 20:
@@ -2169,6 +2233,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         else:
             current[key] = value.strip()
     current['time'] = coarsen_current_time(current.get('time', '')) or current.get('time', '待确认')
+    current['main_event'] = _clean_main_event(current.get('main_event', '')) or current.get('main_event', '')
 
     for key in ['main_event', 'immediate_goal']:
         if _looks_like_fragmentary_core_value(current.get(key, ''), key):

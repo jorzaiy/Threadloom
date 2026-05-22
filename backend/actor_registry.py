@@ -127,6 +127,7 @@ def _actor_names(actor: dict) -> set[str]:
 NPC_TITLE_SUFFIXES = (
     '教官', '老师', '先生', '小姐', '女士', '夫人', '长官', '队长', '局长', '主管', '管理员', '医生', '大夫',
 )
+AMBIGUOUS_SERVICE_ALIASES = {'掌柜', '老板', '老板娘', '店主', '掌柜的', '伙计', '小二', '账房', '管事'}
 
 
 def _name_surfaces(name: str) -> set[str]:
@@ -134,6 +135,8 @@ def _name_surfaces(name: str) -> set[str]:
     if not clean:
         return set()
     surfaces = {clean}
+    if clean in AMBIGUOUS_SERVICE_ALIASES:
+        return surfaces
     canonical = sanitize_runtime_name(get_canonical_name(clean))
     if canonical:
         surfaces.add(canonical)
@@ -436,6 +439,8 @@ def _clean_actor_aliases(aliases: list[str], actor_name: str = '') -> list[str]:
     for alias in aliases or []:
         text = sanitize_runtime_name(alias)
         if not text or text == primary or text in out:
+            continue
+        if text in AMBIGUOUS_SERVICE_ALIASES:
             continue
         if not _looks_like_person_alias(text):
             continue

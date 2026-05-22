@@ -27,6 +27,50 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
+AMBIGUOUS_SERVICE_ALIASES = {'掌柜', '老板', '老板娘', '店主', '掌柜的', '伙计', '小二', '账房', '管事'}
+
+
+def _clean_aliases(primary: str, aliases: list[str]) -> list[str]:
+    out: list[str] = []
+    for alias in aliases or []:
+        text = _clean_text(alias)
+        if not text or text == primary or text in AMBIGUOUS_SERVICE_ALIASES or text in out:
+            continue
+        out.append(text)
+    return out
+
+
+def _merge_records_by_primary(items: list[dict], *, key_prefix: str = '') -> list[dict]:
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        primary = _clean_text(item.get('primary_label'))
+        if not primary:
+            continue
+        if primary not in merged:
+            merged[primary] = dict(item)
+            order.append(primary)
+        else:
+            existing = merged[primary]
+            for field in ('onstage', 'present_now', 'locked', 'retained'):
+                if item.get(field):
+                    existing[field] = item.get(field)
+            for field in ('role_label', 'last_location', 'last_main_event', 'reference_source'):
+                if not _clean_text(existing.get(field)) and _clean_text(item.get(field)):
+                    existing[field] = item.get(field)
+            if 'importance_score' in item:
+                existing['importance_score'] = max(int(existing.get('importance_score', 0) or 0), int(item.get('importance_score', 0) or 0))
+        aliases = []
+        for source in (merged[primary].get('aliases', []), item.get('aliases', []), [item.get('primary_label', '')]):
+            aliases.extend(source if isinstance(source, list) else [source])
+        merged[primary]['aliases'] = _clean_aliases(primary, _dedupe([_clean_text(alias) for alias in aliases]))
+        if key_prefix:
+            merged[primary]['key'] = f'{key_prefix}{primary}'
+    return [merged[name] for name in order]
+
+
 def actor_alias_map(state: dict) -> dict[str, str]:
     """Return exact alias/name -> canonical actor name map from actor registry.
 
@@ -45,7 +89,7 @@ def actor_alias_map(state: dict) -> dict[str, str]:
         canonical_names.add(canonical)
         for alias in actor.get('aliases', []) if isinstance(actor.get('aliases', []), list) else []:
             text = _clean_text(alias)
-            if text:
+            if text and text not in AMBIGUOUS_SERVICE_ALIASES:
                 alias_candidates.setdefault(text, set()).add(canonical)
     mapping: dict[str, str] = {name: name for name in canonical_names}
     for alias, targets in alias_candidates.items():
@@ -53,6 +97,23 @@ def actor_alias_map(state: dict) -> dict[str, str]:
             continue
         mapping[alias] = next(iter(targets))
     return mapping
+
+
+def actor_aliases_by_canonical(state: dict) -> dict[str, list[str]]:
+    aliases_by_name: dict[str, list[str]] = {}
+    actors = state.get('actors', {}) if isinstance(state.get('actors', {}), dict) else {}
+    for actor in actors.values():
+        if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
+            continue
+        canonical = _clean_text(actor.get('name'))
+        if not canonical:
+            continue
+        aliases_by_name.setdefault(canonical, [])
+        for alias in actor.get('aliases', []) if isinstance(actor.get('aliases', []), list) else []:
+            text = _clean_text(alias)
+            if text and text != canonical and text not in AMBIGUOUS_SERVICE_ALIASES and text not in aliases_by_name[canonical]:
+                aliases_by_name[canonical].append(text)
+    return aliases_by_name
 
 
 def _canon_name(value: Any, mapping: dict[str, str]) -> str:
@@ -75,6 +136,7 @@ def canonicalize_state_memory(state: dict) -> tuple[dict, list[dict]]:
     current = copy.deepcopy(state) if isinstance(state, dict) else {}
     changes: list[dict] = []
     mapping = actor_alias_map(current)
+    actor_aliases = actor_aliases_by_canonical(current)
     if not mapping:
         return current, changes
 
@@ -97,7 +159,7 @@ def canonicalize_state_memory(state: dict) -> tuple[dict, list[dict]]:
         new_label = _canon_name(old_label, mapping)
         if new_label and new_label != old_label:
             aliases = entity.get('aliases', []) if isinstance(entity.get('aliases', []), list) else []
-            entity['aliases'] = _dedupe([old_label] + [_canon_name(item, mapping) for item in aliases])
+            entity['aliases'] = _dedupe([old_label] + [_clean_text(item) for item in aliases] + actor_aliases.get(new_label, []) + [_canon_name(item, mapping) for item in aliases])
             entity['primary_label'] = new_label
             entity['role_label'] = new_label if _clean_text(entity.get('role_label')) == old_label else entity.get('role_label', '')
             actor_id = _actor_id_for_name(current, new_label)
@@ -105,10 +167,17 @@ def canonicalize_state_memory(state: dict) -> tuple[dict, list[dict]]:
                 entity['possible_link'] = actor_id
             changes.append({'artifact': 'state', 'action': 'canonicalize', 'field': 'scene_entities.primary_label', 'before': old_label, 'after': new_label})
         elif new_label:
+            entity['aliases'] = _dedupe(list(entity.get('aliases', []) or []) + actor_aliases.get(new_label, []))
             actor_id = _actor_id_for_name(current, new_label)
             if actor_id and not entity.get('possible_link'):
                 entity['possible_link'] = actor_id
                 changes.append({'artifact': 'state', 'action': 'bind_actor', 'field': 'scene_entities.possible_link', 'label': new_label, 'actor_id': actor_id})
+
+    before_entities = current.get('scene_entities', []) if isinstance(current.get('scene_entities', []), list) else []
+    after_entities = _merge_records_by_primary(before_entities)
+    if after_entities != before_entities:
+        current['scene_entities'] = after_entities
+        changes.append({'artifact': 'state', 'action': 'merge_duplicate_records', 'field': 'scene_entities'})
 
     for thread in current.get('active_threads', []) if isinstance(current.get('active_threads', []), list) else []:
         if not isinstance(thread, dict):
@@ -128,8 +197,16 @@ def canonicalize_state_memory(state: dict) -> tuple[dict, list[dict]]:
             item['primary_label'] = new
             item['key'] = f'important:{new}'
             aliases = item.get('aliases', []) if isinstance(item.get('aliases', []), list) else []
-            item['aliases'] = _dedupe([old] + [_canon_name(alias, mapping) for alias in aliases])
+            item['aliases'] = _dedupe([old] + [_clean_text(alias) for alias in aliases] + actor_aliases.get(new, []) + [_canon_name(alias, mapping) for alias in aliases])
             changes.append({'artifact': 'state', 'action': 'canonicalize', 'field': 'important_npcs.primary_label', 'before': old, 'after': new})
+        elif new:
+            item['aliases'] = _dedupe(list(item.get('aliases', []) or []) + actor_aliases.get(new, []))
+
+    before_important = current.get('important_npcs', []) if isinstance(current.get('important_npcs', []), list) else []
+    after_important = _merge_records_by_primary(before_important, key_prefix='important:')
+    if after_important != before_important:
+        current['important_npcs'] = after_important
+        changes.append({'artifact': 'state', 'action': 'merge_duplicate_records', 'field': 'important_npcs'})
 
     for item in current.get('possession_state', []) if isinstance(current.get('possession_state', []), list) else []:
         if not isinstance(item, dict):

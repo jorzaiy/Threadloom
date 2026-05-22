@@ -15,7 +15,7 @@ try:
     from .llm_manager import call_role_llm
     from .local_model_client import parse_json_response
     from .runtime_store import load_state, seed_default_state
-    from .state_bridge import coarsen_current_time, derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
+    from .state_bridge import coarsen_current_time, derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict, _looks_like_location_only_event
     from .state_bridge import _merge_knowledge_scope as merge_knowledge_scope_delta
     from .model_config import load_runtime_config
     from .state_fragment import build_state_from_fragment
@@ -30,7 +30,7 @@ except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
     from runtime_store import load_state, seed_default_state
-    from state_bridge import coarsen_current_time, derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict
+    from state_bridge import coarsen_current_time, derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, infer_role_label, normalize_carryover_signals, normalize_keeper_object_label, normalize_state_dict, _looks_like_location_only_event
     from state_bridge import _merge_knowledge_scope as merge_knowledge_scope_delta
     from model_config import load_runtime_config
     from state_fragment import build_state_from_fragment
@@ -1182,7 +1182,7 @@ def _keeper_core_text_usable(field: str, text: str) -> bool:
     if field == 'location':
         return value not in {'某处', '此处', '这里', '原地', '当前位置'}
     if field == 'main_event':
-        return len(value) >= 8 and value not in {'闲聊。', '闲聊', '对话。', '对话'}
+        return len(value) >= 8 and value not in {'闲聊。', '闲聊', '对话。', '对话'} and not _looks_like_location_only_event(value)
     if field == 'immediate_goal':
         return len(value) >= 6 and value not in {'继续。', '继续', '待处理'}
     return True
@@ -1901,13 +1901,20 @@ def _validate_against_prev_state(payload: dict, prev_state: dict) -> None:
 
     if useful_now < 2:
         raise ValueError('state payload contains too little useful signal')
-    if useful_prev >= 4 and useful_now + 2 < useful_prev:
+    if useful_prev >= 4 and useful_now < 6 and useful_now + 2 < useful_prev:
         raise ValueError('state payload regressed too far from previous useful signal')
 
     prev_onstage = set(prev_state.get('onstage_npcs', []) or [])
     next_onstage = set(payload.get('onstage_npcs', []) or [])
     if prev_onstage and not next_onstage and _useful_entity_count(payload) == 0 and not _has_scene_shift(payload, prev_state):
         raise ValueError('state payload dropped all onstage entities without replacement')
+
+
+def _truncated_payload_recoverable(payload: dict) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    useful_signal = _useful_string_count(payload) + _useful_list_count(payload) + _useful_entity_count(payload)
+    return useful_signal >= 3
 
 
 def validate_state_payload(payload: dict, prev_state: dict | None = None) -> None:
@@ -1972,17 +1979,30 @@ def _call_state_keeper_llm(user_prompt: str, *, max_attempts: int = 2) -> tuple[
             usage = {}
         usage['prompt_chars'] = len(STATE_KEEPER_FILL_SYSTEM) + len(prompt)
         finish_reason = str(usage.get('finish_reason', '') or '').strip().lower()
-        if finish_reason == 'length':
-            raise ValueError('state keeper output truncated by length')
         if str(reply_text or '').strip():
             try:
-                _parse_fill_payload(str(reply_text or ''))
+                payload = _parse_fill_payload(str(reply_text or ''))
+                if finish_reason == 'length':
+                    if not _truncated_payload_recoverable(payload):
+                        if attempt >= max(1, max_attempts):
+                            raise ValueError('state keeper truncated output lacked recoverable payload')
+                        logger.warning('State-keeper output was truncated with too little recoverable payload; retrying once')
+                        prompt = user_prompt + '\n\n上一次输出因长度截断且可恢复字段太少。请重新输出更紧凑的严格 JSON 对象：至少包含 time/location/main_event/immediate_goal 中的本轮有效字段；数组最多 3 项；不要解释，不要代码块，不要在 JSON 前后添加文字。'
+                        continue
+                    usage['truncated_output'] = True
+                    usage['partial_payload_used'] = True
                 break
             except Exception:
+                if finish_reason == 'length' and attempt >= max(1, max_attempts):
+                    raise
                 if attempt >= max(1, max_attempts):
                     break
-                logger.warning('State-keeper returned unparsable output; retrying once')
-                prompt = user_prompt + '\n\n上一次输出无法解析。请重新输出严格 JSON 对象；不要解释，不要代码块，不要在 JSON 前后添加文字。'
+                if finish_reason == 'length':
+                    logger.warning('State-keeper output was truncated; retrying once with compact JSON instruction')
+                    prompt = user_prompt + '\n\n上一次输出因长度截断。请重新输出更紧凑的严格 JSON 对象：只保留本轮变化和必要字段；字符串用短句；数组最多 3 项；不要解释，不要代码块，不要在 JSON 前后添加文字。'
+                else:
+                    logger.warning('State-keeper returned unparsable output; retrying once')
+                    prompt = user_prompt + '\n\n上一次输出无法解析。请重新输出严格 JSON 对象；不要解释，不要代码块，不要在 JSON 前后添加文字。'
                 continue
         if attempt == 1:
             logger.warning('State-keeper returned empty output; retrying once')

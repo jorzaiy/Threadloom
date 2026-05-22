@@ -22,7 +22,7 @@ from backend.summary_chunks import _fallback_chunk, _normalize_chunk
 from backend.memory_maintenance import actor_alias_map, canonicalize_event_summaries, canonicalize_state_memory, resolve_stale_state_threads
 from backend.name_sanitizer import looks_like_non_person_alias_fragment, looks_like_low_quality_signal_fragment
 from backend.runtime_store import build_state_snapshot
-from backend.event_ledger import build_event_summary_item, extract_time_location_anchor
+from backend.event_ledger import build_event_ledger, build_event_summary_item, extract_time_location_anchor
 
 
 class StateFragmentTest(unittest.TestCase):
@@ -41,6 +41,10 @@ class StateFragmentTest(unittest.TestCase):
     def test_shared_normalization_helpers_preserve_current_contract(self):
         self.assertEqual(entity_descriptor_signature('灰衣人'), '灰衣')
         self.assertTrue(entity_labels_compatible('灰衣人', '灰衣'))
+        self.assertTrue(entity_labels_compatible('背纹灵貂', '灵貂'))
+        self.assertTrue(entity_labels_compatible('药铺年轻男人', '年轻男人'))
+        self.assertFalse(entity_labels_compatible('茶馆掌柜', '药铺掌柜'))
+        self.assertFalse(entity_labels_compatible('掌柜', '茶馆掌柜'))
         self.assertFalse(entity_labels_compatible('暗影', '暗'))
         self.assertEqual(normalize_keeper_object_label('纸封（坊署证物）'), '纸封')
 
@@ -143,6 +147,74 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(relationship['updated_turn'], 7)
         self.assertNotIn('npc_relationships', updated)
         self.assertNotIn('relationship_to_protagonist', updated['actors']['protagonist'])
+
+    def test_actor_registry_drops_ambiguous_service_aliases(self):
+        state = {
+            'actors': {
+                'protagonist': {'actor_id': 'protagonist', 'kind': 'protagonist', 'name': '主角', 'aliases': ['你', '主角']},
+                'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '茶馆掌柜', 'aliases': ['掌柜'], 'identity': '茶馆经营者'},
+                'npc_002': {'actor_id': 'npc_002', 'kind': 'npc', 'name': '药铺掌柜', 'aliases': ['掌柜'], 'identity': '药铺经营者'},
+            },
+        }
+
+        updated = update_actor_registry(state, narrator_reply='茶馆掌柜收起铜板。', turn_number=3, use_llm=False)
+
+        self.assertEqual(updated['actors']['npc_001']['aliases'], [])
+        self.assertEqual(updated['actors']['npc_002']['aliases'], [])
+
+    def test_memory_maintenance_merges_actor_alias_split_npcs(self):
+        state = {
+            'actors': {
+                'protagonist': {'actor_id': 'protagonist', 'kind': 'protagonist', 'name': '主角', 'aliases': ['你', '主角']},
+                'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '年轻男人', 'aliases': ['药铺年轻男人', '青灰色短褐年轻男人']},
+            },
+            'scene_entities': [
+                {'entity_id': 'scene_npc_01', 'primary_label': '年轻男人', 'aliases': ['年轻男人'], 'onstage': True},
+                {'entity_id': 'scene_npc_02', 'primary_label': '药铺年轻男人', 'aliases': ['药铺年轻男人', '掌柜'], 'onstage': False},
+            ],
+            'important_npcs': [
+                {'key': 'important:年轻男人', 'primary_label': '年轻男人', 'aliases': ['年轻男人'], 'importance_score': 4},
+                {'key': 'important:药铺年轻男人', 'primary_label': '药铺年轻男人', 'aliases': ['青灰色短褐年轻男人'], 'importance_score': 8},
+            ],
+            'active_threads': [
+                {'thread_id': 'thread_1', 'actors': ['药铺年轻男人']},
+            ],
+        }
+
+        updated, changes = canonicalize_state_memory(state)
+
+        self.assertTrue(changes)
+        self.assertEqual([item['primary_label'] for item in updated['scene_entities']], ['年轻男人'])
+        self.assertEqual(updated['scene_entities'][0]['aliases'], ['药铺年轻男人', '青灰色短褐年轻男人'])
+        self.assertEqual([item['primary_label'] for item in updated['important_npcs']], ['年轻男人'])
+        self.assertEqual(updated['important_npcs'][0]['key'], 'important:年轻男人')
+        self.assertEqual(updated['important_npcs'][0]['importance_score'], 8)
+        self.assertEqual(updated['active_threads'][0]['actors'], ['年轻男人'])
+
+    def test_memory_maintenance_ignores_stale_ambiguous_service_actor_alias(self):
+        state = {
+            'actors': {
+                'protagonist': {'actor_id': 'protagonist', 'kind': 'protagonist', 'name': '主角', 'aliases': ['你', '主角']},
+                'npc_001': {'actor_id': 'npc_001', 'kind': 'npc', 'name': '茶馆掌柜', 'aliases': ['掌柜']},
+            },
+            'onstage_npcs': ['掌柜'],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_01', 'primary_label': '掌柜', 'aliases': ['掌柜'], 'onstage': True},
+            ],
+            'important_npcs': [],
+            'active_threads': [
+                {'thread_id': 'thread_1', 'actors': ['掌柜']},
+            ],
+        }
+
+        mapping = actor_alias_map(state)
+        updated, changes = canonicalize_state_memory(state)
+
+        self.assertNotIn('掌柜', mapping)
+        self.assertEqual(updated['onstage_npcs'], ['掌柜'])
+        self.assertEqual(updated['scene_entities'][0]['primary_label'], '掌柜')
+        self.assertEqual(updated['active_threads'][0]['actors'], ['掌柜'])
+        self.assertFalse(any(change.get('before') == '掌柜' and change.get('after') == '茶馆掌柜' for change in changes))
 
     def test_normalize_state_preserves_scene_objective_across_turns(self):
         prev = {
@@ -435,6 +507,105 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertEqual(normalized['main_event'], event)
 
+    def test_main_event_time_sentence_falls_back_to_previous_event(self):
+        normalized = normalize_state_dict(
+            {
+                'time': '辰时',
+                'location': '青石镇，西侧民居废弃空地',
+                'main_event': '九幽历三千七百二十二年，四月十七，辰时。',
+                'immediate_goal': '继续牵引泥壳。',
+            },
+            prev_state={
+                'main_event': '陆小环以灵力线慢慢牵引井中泥壳。',
+                'immediate_goal': '继续观察根须反应。',
+            },
+        )
+
+        self.assertEqual(normalized['main_event'], '陆小环以灵力线慢慢牵引井中泥壳。')
+
+    def test_main_event_strips_time_sentence_and_label(self):
+        normalized = normalize_state_dict(
+            {
+                'time': '辰时',
+                'location': '青石镇，西侧民居废弃空地',
+                'main_event': '九幽历三千七百二十二年，四月十七，辰时。主要事件：陆小环继续牵引泥壳。',
+                'immediate_goal': '继续牵引泥壳。',
+            },
+            prev_state={
+                'main_event': '陆小环观察井中根须。',
+                'immediate_goal': '继续观察根须反应。',
+            },
+        )
+
+        self.assertEqual(normalized['main_event'], '陆小环继续牵引泥壳。')
+
+    def test_main_event_strips_leading_label(self):
+        normalized = normalize_state_dict(
+            {
+                'time': '辰时',
+                'location': '青石镇，西侧民居废弃空地',
+                'main_event': '主要事件：陆小环继续牵引泥壳。',
+                'immediate_goal': '继续牵引泥壳。',
+            },
+            prev_state={
+                'main_event': '陆小环观察井中根须。',
+                'immediate_goal': '继续观察根须反应。',
+            },
+        )
+
+        self.assertEqual(normalized['main_event'], '陆小环继续牵引泥壳。')
+
+    def test_location_only_main_event_falls_back_to_previous_event(self):
+        normalized = normalize_state_dict(
+            {
+                'time': '辰时',
+                'location': '人界，青石镇，客栈二楼房间',
+                'main_event': '人界，青石镇，客栈二楼房间。',
+                'immediate_goal': '继续观察年轻男人反应。',
+            },
+            prev_state={
+                'main_event': '陆小环使用泥壳追赶并吸收年轻男人经脉内散乱的残余灵力。',
+                'immediate_goal': '用泥壳吸收残余灵力。',
+            },
+        )
+
+        self.assertEqual(normalized['main_event'], '陆小环使用泥壳追赶并吸收年轻男人经脉内散乱的残余灵力。')
+
+    def test_location_action_main_event_is_preserved(self):
+        event = '客栈二楼房间传来敲门声。'
+
+        normalized = normalize_state_dict(
+            {
+                'time': '辰时',
+                'location': '人界，青石镇，客栈二楼房间',
+                'main_event': event,
+                'immediate_goal': '判断门外是谁。',
+            },
+            prev_state={
+                'main_event': '陆小环使用泥壳追赶并吸收年轻男人经脉内散乱的残余灵力。',
+                'immediate_goal': '用泥壳吸收残余灵力。',
+            },
+        )
+
+        self.assertEqual(normalized['main_event'], event)
+
+    def test_keeper_fill_rejects_location_only_main_event(self):
+        merged = _merge_keeper_fill(
+            {
+                'time': '九幽历三千七百二十二年，四月十七，辰时',
+                'location': '人界，青石镇，客栈二楼房间',
+                'main_event': '陆小环使用泥壳追赶并吸收年轻男人经脉内散乱的残余灵力。',
+                'immediate_goal': '用泥壳吸收残余灵力。',
+            },
+            {
+                'main_event': '人界，青石镇，客栈二楼房间。',
+                'immediate_goal': '继续询问药铺老板来历。',
+            },
+        )
+
+        self.assertEqual(merged['main_event'], '陆小环使用泥壳追赶并吸收年轻男人经脉内散乱的残余灵力。')
+        self.assertEqual(merged['immediate_goal'], '继续询问药铺老板来历。')
+
     def test_location_subject_event_is_not_header_only(self):
         event = '景和三年四月初四，上午，驿站起火。'
 
@@ -492,6 +663,19 @@ class StateFragmentTest(unittest.TestCase):
 
         self.assertEqual(normalized['main_event'], event)
         self.assertEqual(item['summary'], event)
+
+    def test_event_ledger_rejects_micro_action_fragment_as_main_event(self):
+        ledger = build_event_ledger(
+            user_text='问他药铺掌柜是什么来历',
+            narrator_reply='年轻男人的嘴巴张了一下，喉结动了一下，手指攥紧又松开，背脊绷得更直。年轻男人开口回答陆小环询问药铺掌柜的来历。',
+            prev_state={'location': '客栈二楼房间', 'onstage_npcs': ['年轻男人']},
+            onstage_names=['年轻男人'],
+            location='客栈二楼房间',
+        )
+
+        candidate_texts = [item['text'] for item in ledger['main_event_candidates']]
+        self.assertNotIn('年轻男人的嘴巴张了一下，喉结动了一下，手指攥紧又松开，背脊绷得更直', candidate_texts)
+        self.assertIn('年轻男人开口回答陆小环询问药铺掌柜的来历', candidate_texts)
 
     def test_event_summary_item_rejects_header_only_summary(self):
         item = build_event_summary_item(
