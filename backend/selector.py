@@ -47,6 +47,11 @@ PROFILE_DETAIL_TRIGGERS = {
     'privateBoundaries': ('秘密', '私密', '真实身份', '伪装', '弱点', '暴露', '识破', '隐瞒', '旧伤'),
 }
 
+BACKGROUND_EVENT_RECALL_TRIGGERS = (
+    '来历', '背景', '过去', '以前', '出身', '家里', '故乡', '回忆', '为什么', '怎么回事', '原因', '什么关系', '听说'
+)
+SERVICE_ROLE_SUFFIXES = ('老板', '掌柜', '店主', '老板娘', '掌柜的')
+
 
 def _valid_npc_name(name: str) -> bool:
     text = str(name or '').strip()
@@ -99,6 +104,86 @@ def _strong_keywords(items: list[str]) -> list[str]:
             continue
         out.append(token)
     return out
+
+
+def _background_event_recall_requested(user_text: str, current_text: str) -> bool:
+    value = f'{user_text}\n{current_text}'
+    return any(trigger in value for trigger in BACKGROUND_EVENT_RECALL_TRIGGERS)
+
+
+def _long_range_query_anchors(state_json: dict, user_text: str, current_text: str) -> set[str]:
+    anchors: set[str] = set()
+    for field in ('onstage_npcs', 'relevant_npcs'):
+        for item in state_json.get(field, []) or []:
+            text = str(item or '').strip()
+            if _valid_npc_name(text):
+                anchors.add(text)
+    for token in _topic_tokens(f'{user_text}\n{current_text}'):
+        if len(token) >= 2 and token not in GENERIC_TOPIC_TOKENS:
+            anchors.add(token)
+        for suffix in SERVICE_ROLE_SUFFIXES:
+            idx = token.find(suffix)
+            if idx > 0:
+                prefix = token[:idx]
+                for size in range(1, min(4, len(prefix)) + 1):
+                    base = prefix[-size:]
+                    alias = f'{base}{suffix}'
+                    anchors.add(base)
+                    anchors.add(alias)
+                    if suffix in {'老板', '老板娘'}:
+                        anchors.add(f'{base}掌柜')
+                    if suffix in {'掌柜', '掌柜的'}:
+                        anchors.add(f'{base}老板')
+    for match in re.findall(r'[\u4e00-\u9fff]{1,6}(?:老板娘|掌柜的|老板|掌柜|店主)', f'{user_text}\n{current_text}'):
+        anchors.add(match)
+        for suffix in SERVICE_ROLE_SUFFIXES:
+            if match.endswith(suffix) and len(match) > len(suffix):
+                base = match[:-len(suffix)]
+                anchors.add(base)
+                if suffix in {'老板', '老板娘'}:
+                    anchors.add(f'{base}掌柜')
+                if suffix in {'掌柜', '掌柜的'}:
+                    anchors.add(f'{base}老板')
+    if '井' in str(user_text or '') or '井' in str(current_text or ''):
+        anchors.add('井')
+    return {anchor for anchor in anchors if len(anchor) >= 1 and anchor not in GENERIC_TOPIC_TOKENS}
+
+
+def _long_range_event_candidates(event_summaries: list[dict], recent_events: list[dict], *, state_json: dict, user_text: str, current_text: str, limit: int = 24) -> list[dict]:
+    if not _background_event_recall_requested(user_text, current_text):
+        return []
+    recent_ids = {str(item.get('event_id') or item.get('turn_id') or '').strip() for item in recent_events if isinstance(item, dict)}
+    anchors = _long_range_query_anchors(state_json, user_text, current_text)
+    explicit_anchors = _long_range_query_anchors({}, user_text, '')
+    if not anchors:
+        return []
+    current_actor_names = {
+        str(name or '').strip()
+        for field in ('onstage_npcs', 'relevant_npcs')
+        for name in (state_json.get(field, []) or [])
+        if str(name or '').strip()
+    }
+    scored: list[tuple[float, int, dict]] = []
+    for idx, item in enumerate(event_summaries or []):
+        if not isinstance(item, dict):
+            continue
+        event_id = str(item.get('event_id') or item.get('turn_id') or '').strip()
+        if event_id in recent_ids:
+            continue
+        event_text = _event_text(item)
+        anchor_hits = [anchor for anchor in anchors if anchor and anchor in event_text]
+        explicit_anchor_hits = [anchor for anchor in explicit_anchors if anchor and anchor in event_text]
+        actor_hits = [str(actor or '').strip() for actor in (item.get('actors', []) or []) if str(actor or '').strip() in current_actor_names]
+        if not explicit_anchor_hits and len(anchor_hits) < 2:
+            continue
+        score = len(set(anchor_hits)) * 1.25 + len(set(explicit_anchor_hits)) * 2.0 + len(set(actor_hits)) * 0.75
+        if any(trigger in event_text for trigger in BACKGROUND_EVENT_RECALL_TRIGGERS):
+            score += 1.0
+        if score < 2.5:
+            continue
+        scored.append((score, _turn_index(item, idx + 1), item))
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    return [item for _score, _turn, item in scored[:limit]]
 
 
 def _looks_like_weak_mundane_query(text: str) -> bool:
@@ -232,11 +317,15 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
     carryover_tokens = _topic_tokens(carryover_text)
     weak_mundane_query = _looks_like_weak_mundane_query(user_text)
     recent_events = [item for item in event_summaries[-20:] if isinstance(item, dict)]
+    long_range_events = _long_range_event_candidates(event_summaries, recent_events, state_json=state_json, user_text=user_text, current_text=current_text)
+    long_range_ids = {str(item.get('event_id') or item.get('turn_id') or '').strip() for item in long_range_events if isinstance(item, dict)}
+    long_range_explicit_anchors = _long_range_query_anchors({}, user_text, '')
+    candidate_events = recent_events + long_range_events
     repeated_counts = _repeated_token_counts(recent_events)
-    latest_turn = max((_turn_index(item, idx + 1) for idx, item in enumerate(recent_events)), default=0)
+    latest_turn = max((_turn_index(item, idx + 1) for idx, item in enumerate(candidate_events)), default=0)
     hits = []
     seen_clues: set[str] = set()
-    for idx, item in enumerate(recent_events):
+    for idx, item in enumerate(candidate_events):
         if not isinstance(item, dict):
             continue
         event_tokens = _topic_tokens(_event_text(item))
@@ -267,6 +356,10 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
         recency_bonus = max(0.0, 2.0 - min(distance, 8) * 0.25)
         repeated_penalty = sum(1 for token in shared if repeated_counts.get(token, 0) >= 4) * 0.5
         score = (len(shared) * 0.75) + (len(current_shared) * 2.0) + len(location_shared) + actor_bonus + recency_bonus - repeated_penalty
+        event_id = str(item.get('event_id') or item.get('turn_id') or '').strip()
+        if event_id in long_range_ids:
+            explicit_anchor_hits = [anchor for anchor in long_range_explicit_anchors if anchor and anchor in event_text]
+            score += 2.0 + len(set(explicit_anchor_hits)) * 2.0
         if score <= 0:
             continue
         if clue_key:
@@ -274,7 +367,7 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
         hits.append({
             'event_id': item.get('event_id') or item.get('turn_id'),
             'score': score,
-            'reason': 'topic_overlap',
+            'reason': 'long_range_background' if event_id in long_range_ids else 'topic_overlap',
             'keyword_hits': (current_shared + [token for token in shared if token not in current_shared])[:8],
             'turn_index': turn_idx,
         })

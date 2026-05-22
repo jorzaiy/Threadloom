@@ -105,6 +105,64 @@ class SelectorRecallTests(unittest.TestCase):
 
         self.assertEqual(hits[0]['event_id'], 'evt_0002')
 
+    def test_event_recall_finds_older_background_origin_event_outside_recent_window(self):
+        events = [
+            {
+                'event_id': f'evt_{idx:04d}',
+                'turn_id': f'turn-{idx:04d}',
+                'summary': f'无关路人事件 {idx}。',
+                'actors': ['路人'],
+                'keywords': ['无关'],
+            }
+            for idx in range(1, 53)
+        ]
+        events.extend([
+            {
+                'event_id': 'evt_0053',
+                'turn_id': 'turn-0053',
+                'summary': '陆小环进入主街药铺买药，年轻男人在药铺附近看见她与灵貂，药铺掌柜在蓝布帘后观察。',
+                'actors': ['年轻男人', '药铺掌柜', '灵貂'],
+                'keywords': ['药铺掌柜', '药铺老板', '井', '来历', '年轻男人'],
+                'clues': ['年轻男人与陆小环在药铺线相遇'],
+            },
+            {
+                'event_id': 'evt_0057',
+                'turn_id': 'turn-0057',
+                'summary': '年轻男人追出药铺门外向陆小环求助，蓝布帘后的药铺掌柜影子动了一下。',
+                'actors': ['年轻男人', '药铺掌柜'],
+                'keywords': ['药铺掌柜', '药铺老板', '井', '来历'],
+                'clues': ['药铺掌柜与年轻男人求助有关'],
+            },
+        ])
+        events.extend([
+            {
+                'event_id': f'evt_{idx:04d}',
+                'turn_id': f'turn-{idx:04d}',
+                'summary': f'年轻男人在客栈二楼房间恢复，灵貂守着泥壳，近期动作 {idx}。',
+                'actors': ['年轻男人', '灵貂'],
+                'keywords': ['年轻男人', '灵貂', '泥壳'],
+            }
+            for idx in range(64, 84)
+        ])
+
+        hits = event_summary_hits(
+            events,
+            state_json={
+                'location': '人界，青石镇，客栈二楼房间',
+                'main_event': '陆小环询问年轻男人药铺掌柜的来历。',
+                'onstage_npcs': ['年轻男人', '灵貂'],
+                'relevant_npcs': ['药铺掌柜'],
+                'carryover_signals': [{'type': 'clue', 'text': '药铺掌柜来历待说明'}],
+            },
+            recent_history=[{'role': 'assistant', 'content': '年轻男人刚恢复，陆小环坐下询问药铺掌柜是什么来历。'}],
+            user_text='我对他不感兴趣，但是我想弄清楚井里的东西是什么，听说药铺老板对那口井很在意。',
+        )
+
+        hit_ids = [hit['event_id'] for hit in hits]
+        self.assertIn('evt_0053', hit_ids)
+        self.assertTrue(hit_ids.index('evt_0053') < 3)
+        self.assertNotIn('evt_0001', hit_ids)
+
     def test_event_recall_skips_carryover_only_stale_clue_hits_after_scene_shift(self):
         events = [
             {
