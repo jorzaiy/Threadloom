@@ -10,12 +10,23 @@
   --text-muted: #6a6057;
   --text-soft: #85776b;
   --primary: #405245;
+  --on-primary: #ffffff;
+  --primary-hover: #394b3d;
   --primary-soft: rgba(199, 222, 205, 0.56);
   --accent: #7a5c47;
   --danger: #ba1a1a;
   --ok: #496048;
   --shadow: 0 24px 60px rgba(33, 29, 25, 0.08);
   --shadow-soft: 0 8px 24px rgba(33, 29, 25, 0.05);
+
+  --bg-grad-1: rgba(209, 227, 211, 0.34);
+  --bg-grad-2: rgba(224, 208, 187, 0.22);
+  --bg-grad-3: #f9f6f1;
+
+  --chat-grad-1: rgba(255, 255, 255, 0.34);
+  --chat-grad-2: rgba(249, 246, 241, 0.08);
+  --chat-grad-3: rgba(211, 232, 213, 0.18);
+
   --reading-width: 58rem;
 }
 
@@ -39,16 +50,18 @@ body {
   background:
     radial-gradient(
       circle at top left,
-      rgba(209, 227, 211, 0.34),
+      var(--bg-grad-1),
       transparent 28%
     ),
     radial-gradient(
       circle at top right,
-      rgba(224, 208, 187, 0.22),
+      var(--bg-grad-2),
       transparent 26%
     ),
-    linear-gradient(180deg, #f9f6f1 0%, var(--background) 100%);
+    linear-gradient(180deg, var(--bg-grad-3) 0%, var(--background) 100%);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .material-symbols-outlined {
@@ -93,12 +106,12 @@ body {
   background:
     linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.34) 0%,
-      rgba(249, 246, 241, 0.08) 100%
+      var(--chat-grad-1) 0%,
+      var(--chat-grad-2) 100%
     ),
     radial-gradient(
       circle at top left,
-      rgba(211, 232, 213, 0.18),
+      var(--chat-grad-3),
       transparent 34%
     );
 }
@@ -113,12 +126,19 @@ body {
   left: 18px;
   max-width: min(36rem, calc(100vw - 36px));
   padding: 7px 11px 7px 9px;
-  border: 1px solid rgba(127, 109, 91, 0.14);
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(255, 253, 248, 0.68);
+  background: var(--surface);
   box-shadow: var(--shadow-soft);
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   z-index: 45;
+  transition: box-shadow 0.3s ease, background 0.3s ease, transform 0.3s ease;
+}
+
+.topbar:hover {
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
 }
 
 .topbar h1 {
@@ -293,7 +313,7 @@ button {
   border: 0;
   border-radius: 999px;
   background: var(--primary);
-  color: #fff;
+  color: var(--on-primary);
   font-family: "Inter", sans-serif;
   font-size: 10px;
   font-weight: 600;
@@ -302,19 +322,20 @@ button {
   padding: 9px 14px;
   cursor: pointer;
   transition:
-    transform 160ms ease,
+    transform 160ms cubic-bezier(0.34, 1.56, 0.64, 1),
     opacity 160ms ease,
     background 160ms ease,
     box-shadow 160ms ease;
-  box-shadow: 0 6px 16px rgba(64, 82, 69, 0.18);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
 }
 
 button:hover {
-  background: #394b3d;
+  background: var(--primary-hover);
+  transform: scale(1.02);
 }
 
 button:active {
-  transform: translateY(1px);
+  transform: scale(0.98);
 }
 
 .status-bar {
@@ -2010,7 +2031,7 @@ button:active {
   }
 
   .msg-body {
-    font-size: 14px;
+    font-size: 16px;
   }
 
   .msg.assistant .msg-body,

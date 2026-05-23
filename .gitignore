@@ -37,4 +37,5 @@ doc/test-reports/
 
 # Local dev scratch
 .playwright-mcp/
+.antigravitycli/
 homepage/
