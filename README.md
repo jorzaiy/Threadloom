@@ -1,5 +1,7 @@
 # Threadloom
 
+当前版本：1.2
+
 Threadloom 是一个面向长期角色扮演的 runtime-first Web 应用，支持本地自托管与可选多用户部署。
 
 它以 `canon`、`state`、`persona`、`threads`、recent window 和 keeper archive 作为多层事实面，而非把聊天记录当成唯一真相源。前端负责消息收发、会话切换与状态展示；后端负责上下文装配、裁定、叙事生成与事实写回。
