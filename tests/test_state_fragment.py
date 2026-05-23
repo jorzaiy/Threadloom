@@ -912,6 +912,51 @@ class StateFragmentTest(unittest.TestCase):
         self.assertIn('矮壮的学员', updated['actors']['npc_002']['aliases'])
         self.assertNotIn('李明', updated['actors']['npc_001']['aliases'])
 
+    def test_actor_registry_promotes_keeper_revealed_name_to_descriptive_actor(self):
+        state = {
+            'actors': {
+                'npc_qingshi_young_man': {
+                    'actor_id': 'npc_qingshi_young_man',
+                    'kind': 'npc',
+                    'name': '年轻男人',
+                    'aliases': ['青灰色短褐年轻男人'],
+                    'identity': '青石镇沈家人',
+                    'created_turn': 53,
+                },
+            },
+            'onstage_npcs': ['年轻男人', '灵貂'],
+            'scene_entities': [{
+                'entity_id': 'scene_npc_01',
+                'primary_label': '沈青',
+                'aliases': ['年轻男人', '那男子', '青灰色短褐年轻男人', '沈青'],
+                'role_label': '青石镇沈家人',
+                'onstage': True,
+            }],
+            'important_npcs': [{
+                'key': 'important:年轻男人',
+                'primary_label': '年轻男人',
+                'aliases': ['青灰色短褐年轻男人'],
+                'role_label': '当前互动核心人物',
+            }],
+            'knowledge_scope': {
+                'protagonist': {
+                    'learned': ['年轻男人真名沈青，父亲姓沈，青石镇沈家人'],
+                },
+            },
+        }
+
+        updated = update_actor_registry(state, narrator_reply='沈青垂眼承认真名。', turn_number=91, use_llm=False)
+
+        actor = updated['actors']['npc_qingshi_young_man']
+        self.assertEqual(actor['name'], '沈青')
+        self.assertIn('年轻男人', actor['aliases'])
+        self.assertIn('青灰色短褐年轻男人', actor['aliases'])
+        self.assertIn('沈青', updated['onstage_npcs'])
+        self.assertNotIn('年轻男人', updated['onstage_npcs'])
+        self.assertEqual(updated['important_npcs'][0]['primary_label'], '沈青')
+        self.assertEqual(updated['important_npcs'][0]['key'], 'important:沈青')
+        self.assertTrue(updated['actor_registry_diagnostics']['alias_updates'][0]['promoted_to_name'])
+
     def test_actor_registry_persists_protagonist_public_private_identity_boundary(self):
         profile = {
             'name': '测试主角',

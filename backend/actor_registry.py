@@ -635,6 +635,132 @@ def _upsert_revealed_actor_aliases(actors: dict, narrator_reply: str) -> list[di
     return updates
 
 
+def _candidate_keeper_name_pairs(state: dict) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+
+    def add_pair(old_name: object, new_name: object) -> None:
+        old_clean = sanitize_runtime_name(old_name)
+        new_clean = sanitize_runtime_name(new_name)
+        if not old_clean or not new_clean or old_clean == new_clean:
+            return
+        if not _looks_like_person_alias(old_clean) or not _looks_like_proper_person_name(new_clean):
+            return
+        pair = (old_clean, new_clean)
+        if pair not in pairs:
+            pairs.append(pair)
+
+    for entity in state.get('scene_entities', []) or []:
+        if not isinstance(entity, dict):
+            continue
+        primary = sanitize_runtime_name(entity.get('primary_label', ''))
+        if _looks_like_proper_person_name(primary):
+            for alias in entity.get('aliases', []) or []:
+                add_pair(alias, primary)
+        aliases = [sanitize_runtime_name(alias) for alias in (entity.get('aliases', []) or []) if sanitize_runtime_name(alias)]
+        for left in aliases:
+            if not _is_descriptive_actor_name(left):
+                continue
+            for right in aliases + [primary]:
+                if _looks_like_proper_person_name(right):
+                    add_pair(left, right)
+
+    knowledge_texts: list[str] = []
+    scope = state.get('knowledge_scope', {}) if isinstance(state.get('knowledge_scope', {}), dict) else {}
+    for section in scope.values():
+        if isinstance(section, dict):
+            for item in section.get('learned', []) or []:
+                knowledge_texts.append(str(item or ''))
+            for nested in section.values():
+                if isinstance(nested, dict):
+                    for item in nested.get('learned', []) or []:
+                        knowledge_texts.append(str(item or ''))
+    for record in state.get('knowledge_records', []) or []:
+        if isinstance(record, dict):
+            knowledge_texts.append(str(record.get('text', '') or ''))
+    for text in knowledge_texts:
+        for match in re.finditer(r'(?P<old>[\u4e00-\u9fff]{2,8})(?:真名|本名|名叫|叫作|叫做|自称)(?P<new>[\u4e00-\u9fff]{2,4})', text):
+            add_pair(match.group('old'), match.group('new'))
+    return pairs[:12]
+
+
+def _upsert_keeper_actor_aliases(actors: dict, state: dict) -> list[dict]:
+    updates: list[dict] = []
+    for old_name, new_name in _candidate_keeper_name_pairs(state):
+        actor_id = _find_actor_id_by_name(actors, old_name)
+        if not actor_id or actor_id == 'protagonist':
+            continue
+        if _find_actor_id_by_name(actors, new_name) not in {'', actor_id}:
+            continue
+        actor = actors.get(actor_id, {})
+        if not isinstance(actor, dict):
+            continue
+        actor_name = _actor_name(actor)
+        aliases = _clean_actor_aliases(_actor_aliases(actor), actor_name)
+        promoted = False
+        if _looks_like_proper_person_name(new_name) and _is_descriptive_actor_name(actor_name):
+            if actor_name and actor_name not in aliases and _looks_like_person_alias(actor_name):
+                aliases.insert(0, actor_name)
+            actor['name'] = new_name
+            promoted = True
+        elif new_name not in aliases and new_name != actor_name:
+            aliases.append(new_name)
+        actor['aliases'] = _clean_actor_aliases(aliases, actor.get('name', actor_name))
+        updates.append({'actor_id': actor_id, 'alias': new_name, 'source': 'keeper', 'matched': old_name, 'promoted_to_name': promoted})
+    return updates
+
+
+def _apply_promoted_actor_names(state: dict, actors: dict, updates: list[dict]) -> None:
+    replacements: dict[str, str] = {}
+    for update in updates:
+        if not update.get('promoted_to_name'):
+            continue
+        actor = actors.get(str(update.get('actor_id', '') or ''), {})
+        if not isinstance(actor, dict):
+            continue
+        new_name = _actor_name(actor)
+        if not new_name:
+            continue
+        matched = sanitize_runtime_name(update.get('matched', ''))
+        if matched:
+            replacements[matched] = new_name
+        for alias in _actor_aliases(actor):
+            if _is_descriptive_actor_name(alias):
+                replacements[alias] = new_name
+    if not replacements:
+        return
+
+    def replace_name(value: object) -> str:
+        clean = sanitize_runtime_name(value)
+        return replacements.get(clean, clean)
+
+    for key in ('onstage_npcs', 'relevant_npcs'):
+        items = state.get(key, []) if isinstance(state.get(key, []), list) else []
+        state[key] = [replace_name(item) for item in items if replace_name(item)]
+    for entity in state.get('scene_entities', []) or []:
+        if not isinstance(entity, dict):
+            continue
+        primary = replace_name(entity.get('primary_label', ''))
+        if primary:
+            old_primary = sanitize_runtime_name(entity.get('primary_label', ''))
+            aliases = [sanitize_runtime_name(alias) for alias in (entity.get('aliases', []) or []) if sanitize_runtime_name(alias)]
+            if old_primary and old_primary != primary and old_primary not in aliases:
+                aliases.append(old_primary)
+            entity['primary_label'] = primary
+            entity['aliases'] = _clean_actor_aliases(aliases, primary)
+    for item in state.get('important_npcs', []) or []:
+        if not isinstance(item, dict):
+            continue
+        primary = replace_name(item.get('primary_label', ''))
+        if primary and primary != sanitize_runtime_name(item.get('primary_label', '')):
+            aliases = [sanitize_runtime_name(alias) for alias in (item.get('aliases', []) or []) if sanitize_runtime_name(alias)]
+            old_primary = sanitize_runtime_name(item.get('primary_label', ''))
+            if old_primary and old_primary not in aliases:
+                aliases.append(old_primary)
+            item['primary_label'] = primary
+            item['key'] = f'important:{primary}'
+            item['aliases'] = sorted({alias for alias in aliases if alias and alias != primary})
+
+
 def _valid_actor_candidate(item: dict) -> dict | None:
     if not isinstance(item, dict):
         return None
@@ -907,6 +1033,8 @@ def update_actor_registry(state: dict, *, narrator_reply: str, turn_number: int,
         created_ids.append(actor_id)
 
     alias_updates = _upsert_revealed_actor_aliases(actors, narrator_reply)
+    alias_updates.extend(_upsert_keeper_actor_aliases(actors, current))
+    _apply_promoted_actor_names(current, actors, alias_updates)
     current['actors'] = actors
     mentioned = _mentioned_actor_ids(actors, f'{user_text}\n{narrator_reply}') | set(created_ids)
     mentioned.update(str(item.get('actor_id')) for item in alias_updates if item.get('actor_id'))
