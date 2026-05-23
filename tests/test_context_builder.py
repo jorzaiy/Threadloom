@@ -75,9 +75,22 @@ def test_recent_window_truncates_long_assistant_prose_to_prevent_style_feedback(
         {'role': 'assistant', 'content': verbose, 'completion_status': 'complete'},
     ], limit_pairs=1)
 
-    assert '...[已截断]' in full
+    assert '已截断' in full
     assert len(full) < len(verbose)
     assert full.count('喉结动了一下') < 80
+
+
+def test_recent_window_preserves_latest_assistant_tail_for_continuity():
+    front = '三人从楼梯口走来。' * 80
+    tail = '黑脸男人已经在邻桌坐下，把布包放到桌面，灵貂盯住布包。'
+    full = _format_recent_window([
+        {'role': 'user', 'content': '继续看'},
+        {'role': 'assistant', 'content': front + tail, 'completion_status': 'complete'},
+    ], limit_pairs=1)
+
+    assert '[前文已截断]...' in full
+    assert tail in full
+    assert full.count('三人从楼梯口走来') < 80
 
 
 def test_narrator_prompt_warns_recent_prose_is_not_style_sample():

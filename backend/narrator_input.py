@@ -281,13 +281,16 @@ def _format_recent_history(history: list[dict], limit: int = 8) -> str:
     return '\n'.join(lines)
 
 
-def _truncate_recent_window_text(text: str, *, role: str) -> str:
+def _truncate_recent_window_text(text: str, *, role: str, preserve_tail: bool = False) -> str:
     value = str(text or '').strip()
     if not value:
         return ''
     limit = 420 if role == 'user' else 720
     if len(value) <= limit:
         return value
+    if preserve_tail and role == 'assistant':
+        marker = '[前文已截断]...'
+        return marker + value[-(limit - len(marker)):].lstrip()
     return value[:limit - 16].rstrip() + '...[已截断]'
 
 
@@ -316,9 +319,14 @@ def _format_recent_window(history: list[dict], limit_pairs: int = 6) -> str:
             if assistant_text:
                 lines.append(f"[叙事] {assistant_text}")
         return '\n'.join(lines) if lines else '暂无'
-    for user_item, assistant_item in pairs:
+    latest_pair_index = len(pairs) - 1
+    for index, (user_item, assistant_item) in enumerate(pairs):
         user_text = _truncate_recent_window_text(user_item.get('content', ''), role='user')
-        assistant_text = _truncate_recent_window_text(assistant_item.get('content', ''), role='assistant')
+        assistant_text = _truncate_recent_window_text(
+            assistant_item.get('content', ''),
+            role='assistant',
+            preserve_tail=index == latest_pair_index,
+        )
         lines.append(f"[用户] {user_text}")
         lines.append(f"[叙事] {assistant_text}")
     return '\n'.join(lines)
