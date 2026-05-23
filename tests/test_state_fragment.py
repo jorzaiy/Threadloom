@@ -17,7 +17,8 @@ from backend.actor_registry import update_actor_registry
 from backend.arbiter_state import merge_arbiter_state
 from backend.state_keeper import _call_state_keeper_llm, _fill_user_prompt, _merge_keeper_fill, _parse_fill_payload, _restore_current_turn_onstage_marker
 from backend.state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, normalize_carryover_signals, normalize_keeper_object_label
-from backend.handler_message import _add_lightweight_knowledge_delta, _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _redact_trace_prompt, _store_turn_audit
+from backend.handler_message import _add_lightweight_knowledge_delta, _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _redact_trace_prompt, _store_turn_audit, _unsupported_prior_event_assertion_reason
+from backend.model_client import narrator_reply_rejection_reason
 from backend.summary_chunks import _fallback_chunk, _normalize_chunk
 from backend.memory_maintenance import actor_alias_map, canonicalize_event_summaries, canonicalize_state_memory, resolve_stale_state_threads
 from backend.name_sanitizer import looks_like_non_person_alias_fragment, looks_like_low_quality_signal_fragment
@@ -37,6 +38,72 @@ class StateFragmentTest(unittest.TestCase):
         self.assertNotIn('真实身份', redacted)
         self.assertNotIn('### 私密边界细节', redacted)
         self.assertIn('【最近上下文】', redacted)
+
+    def test_narrator_guard_rejects_composed_prior_cleanup_claim(self):
+        grounding = '\n'.join([
+            '沈青离开后，陆小环将灵貂翻过身。',
+            '井边暗红灰寒封土会产生甜苦腥味，镇民多年反复填埋清扫。',
+            '陆小环为沈青清理经脉内残余灵力。',
+        ])
+        reply = '从屋顶看下去，暗红灰寒的封土又浮上来了。昨天她和沈青离开的时候明明清理过，可这才隔了一夜。'
+
+        reason = _unsupported_prior_event_assertion_reason(reply, grounding)
+
+        self.assertEqual(reason, 'unsupported_prior_event_assertion')
+
+    def test_narrator_guard_allows_explicit_prior_cleanup_support(self):
+        grounding = '昨天她和沈青离开的时候明明清理过井边封土。'
+        reply = '昨天她和沈青离开的时候明明清理过井边封土，可这才隔了一夜。'
+
+        reason = _unsupported_prior_event_assertion_reason(reply, grounding)
+
+        self.assertEqual(reason, '')
+
+    def test_narrator_guard_rejects_composed_prior_visit_footprint_claim(self):
+        grounding = '\n'.join([
+            '沈青离开后，陆小环将灵貂翻过身。',
+            '井边暗红灰寒封土会产生甜苦腥味，镇民多年反复填埋清扫。',
+            '年轻男人鞋面和灰猫身上都有与井边暗红灰寒泥屑同源的气味。',
+        ])
+        reply = '上次来的时候是和沈青一起，井边的暗红封土被他踩过，鞋底带走了几片泥壳碎屑。'
+
+        reason = _unsupported_prior_event_assertion_reason(reply, grounding)
+
+        self.assertEqual(reason, 'unsupported_prior_event_assertion')
+
+    def test_narrator_guard_allows_non_assertive_prior_comparison(self):
+        grounding = '井边暗红灰寒封土会产生甜苦腥味，镇民多年反复填埋清扫。'
+        reply = '井台周围的封土比上次来的时候薄了些，甜苦腥味也淡了三分。'
+
+        reason = _unsupported_prior_event_assertion_reason(reply, grounding)
+
+        self.assertEqual(reason, '')
+
+    def test_narrator_guard_rejects_excessive_micro_detail_density(self):
+        reply = '\n\n'.join([
+            '年轻男人的嘴巴张开了，张到一半又合上。',
+            '合上的时候他的下唇抖了一下，抖完又被牙齿压住。',
+            '他的喉结动了一下，动完声音还是没出来。',
+            '眼珠子从陆小环脸上移到桌面，又从桌面移回她手边。',
+            '手指在膝盖上攥了一下，松开的时候布料皱了一小块。',
+            '肩膀塌了一分，背脊又直了一分。',
+            '鼻翼扇了两下，短的，轻的，像没敢真正吸气。',
+            '他的舌尖顶了一下下牙膛，停了两息才缩回去。',
+            '领口那片潮印子跟着呼吸起伏了一下，幅度小到几乎看不见。',
+            '他最后还是没有说话。',
+        ])
+
+        self.assertEqual(narrator_reply_rejection_reason(reply), 'excessive_micro_detail_density')
+
+    def test_narrator_guard_allows_sparse_functional_body_detail(self):
+        reply = '\n\n'.join([
+            '房间里安静下来。聚灵阵的青光稳定在桌面三寸内，没有再往外扩。',
+            '灵貂守在桌角，耳朵朝门外偏了一下，随即压低声音呜了一声。',
+            '陆小环的灵力回流得很慢，但丹田里总算重新聚起一线温意。',
+            '楼梯上的脚步停在二楼转角，没有立刻靠近。',
+        ])
+
+        self.assertEqual(narrator_reply_rejection_reason(reply), '')
 
     def test_shared_normalization_helpers_preserve_current_contract(self):
         self.assertEqual(entity_descriptor_signature('灰衣人'), '灰衣')

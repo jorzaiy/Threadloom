@@ -167,6 +167,8 @@ def narrator_reply_rejection_reason(text: str) -> str:
         return 'empty'
     if _looks_like_degenerated_narrator_template(body):
         return 'degenerated_style_template'
+    if _looks_like_excessive_micro_detail_density(body):
+        return 'excessive_micro_detail_density'
     last_line = body.splitlines()[-1].strip()
     if not last_line:
         return 'empty_last_line'
@@ -200,6 +202,50 @@ def _looks_like_degenerated_narrator_template(text: str) -> bool:
     if len(template_hits) >= 3:
         return True
     return False
+
+
+MICRO_DETAIL_BODY_TERMS = (
+    '嘴巴', '嘴唇', '唇', '下唇', '舌头', '舌尖', '牙膛', '喉结', '喉咙', '嗓子',
+    '眼珠', '眼睛', '眼尾', '瞳孔', '目光', '视线', '鼻翼', '鼻尖', '耳朵', '左耳', '右耳',
+    '手指', '指尖', '五指', '掌心', '手腕', '肩膀', '肩胛骨', '背脊', '脊背', '膝盖',
+    '布料', '衣料', '领口', '褶子', '潮印子',
+)
+MICRO_DETAIL_ACTION_TERMS = (
+    '张开', '合上', '抖', '动了一下', '动了半寸', '移到', '移回', '转了半寸', '顶了一下',
+    '舔了一下', '咽了口', '滚了一下', '塌了一分', '直了一分', '绷着', '绷直', '收紧',
+    '松开', '攥了一下', '按了一下', '扫了一下', '折了折', '扇了', '竖着', '压低', '压着',
+    '停了两息', '停了一息', '短的', '轻的', '碎到', '慢到', '小到', '半寸', '一分', '一寸',
+)
+
+
+def _micro_detail_sentence(sentence: str) -> bool:
+    clean = re.sub(r'\s+', '', str(sentence or ''))
+    if not clean:
+        return False
+    return any(term in clean for term in MICRO_DETAIL_BODY_TERMS) and any(term in clean for term in MICRO_DETAIL_ACTION_TERMS)
+
+
+def _looks_like_excessive_micro_detail_density(text: str) -> bool:
+    body = str(text or '')
+    sentences = [item for item in re.split(r'(?<=[。！？!?])', body) if item.strip()]
+    if len(sentences) < 8:
+        return False
+    detail_flags = [_micro_detail_sentence(sentence) for sentence in sentences]
+    detail_count = sum(1 for item in detail_flags if item)
+    if detail_count < 6:
+        return False
+    longest_run = 0
+    current_run = 0
+    for is_detail in detail_flags:
+        if is_detail:
+            current_run += 1
+            longest_run = max(longest_run, current_run)
+        else:
+            current_run = 0
+    ratio = detail_count / len(sentences)
+    if longest_run >= 5:
+        return True
+    return detail_count >= 8 and ratio >= 0.45
 
 
 def looks_incomplete_reply(text: str) -> bool:

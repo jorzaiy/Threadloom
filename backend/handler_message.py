@@ -144,6 +144,64 @@ def _narrator_style_retry_prompt(system_prompt: str, rejected_reply: str, *, att
     )
 
 
+def _narrator_micro_detail_retry_prompt(system_prompt: str, rejected_reply: str, *, attempt_count: int) -> str:
+    excerpt = _trim_trace_text(str(rejected_reply or ''), 900)
+    severity = '第二次仍然' if attempt_count >= 2 else '上一次'
+    return (
+        system_prompt
+        + '\n\n【上次回复已被系统拒绝：微动作细节过密】\n'
+        + f'{severity}把篇幅过多花在嘴唇、喉结、眼珠、手指、肩背、布料、呼吸等细小变化上。现在必须收束并重写本轮，不要延续上次文本。\n'
+        + '保留必要的感官与动作，但只留下真正表达态度或状态的少数关键句；不要连续拆写身体部位、半寸一分、张合抖动、停顿几息来填充篇幅。\n'
+        + '不要为了修正而强行加速剧情或硬塞新危险；按原本场景承接，只把无效微动作水分删掉。\n'
+        + f'被拒绝片段摘录（不要模仿）：\n{excerpt}\n'
+    )
+
+
+PRIOR_EVENT_TEMPORAL_MARKERS = ('昨天', '前天', '之前', '先前', '上次', '刚才', '早些时候', '离开的时候')
+PRIOR_EVENT_ASSERTION_MARKERS = ('明明', '已经', '曾经', '早就', '本来', '过', '一起')
+
+
+def _normal_text(text: str) -> str:
+    return re.sub(r'\s+', '', str(text or ''))
+
+
+def _unsupported_prior_event_assertion_reason(reply: str, grounding_text: str) -> str:
+    """Reject invented prior event claims unless prompt text explicitly supports them."""
+    body = str(reply or '')
+    source = _normal_text(grounding_text)
+    if not body.strip() or not source:
+        return ''
+    sentences = [item for item in re.split(r'(?<=[。！？!?])', body) if item.strip()]
+    for sentence in sentences:
+        clean = _normal_text(sentence)
+        if not clean:
+            continue
+        if not any(marker in clean for marker in PRIOR_EVENT_TEMPORAL_MARKERS):
+            continue
+        if not any(marker in clean for marker in PRIOR_EVENT_ASSERTION_MARKERS):
+            continue
+        if clean in source:
+            continue
+        claim_clause = re.split(r'[，,](?:可|但|却|只是|不过)', clean, maxsplit=1)[0]
+        if claim_clause and claim_clause in source:
+            continue
+        return 'unsupported_prior_event_assertion'
+    return ''
+
+
+def _narrator_grounding_retry_prompt(system_prompt: str, rejected_reply: str, *, attempt_count: int) -> str:
+    excerpt = _trim_trace_text(str(rejected_reply or ''), 900)
+    severity = '第二次仍然' if attempt_count >= 2 else '上一次'
+    return (
+        system_prompt
+        + '\n\n【上次回复已被系统拒绝：无证据既往事件断言】\n'
+        + f'{severity}把多个旧事实拼成了没有证据的“昨天/之前已经做过某事”。现在必须重写本轮，不要延续上次文本。\n'
+        + '严禁写“昨天/之前/上次/离开时”引出的已完成事件断言，例如“明明做过、已经做过、曾经做过、和某人一起去过、被某人踩过、带走过碎屑”，除非最近完整正文、命中事件索引或明确状态中逐字支持该事件。\n'
+        + '可以承接已证实事实，例如“镇民多年反复填埋清扫”“沈青鞋面有井边同源泥屑”或“封土又浮上来”；但不得改写成主角和沈青曾一起到井边、沈青亲自踩过井边封土或带走碎屑。\n'
+        + f'被拒绝片段摘录（不要承接其中无证据断言）：\n{excerpt}\n'
+    )
+
+
 def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_attempts: int = 3) -> tuple[str, dict, dict]:
     primary_cfg = resolve_provider_model('narrator')
     keeper_cfg = resolve_provider_model('state_keeper')
@@ -179,7 +237,7 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_att
                 attempt['finish_reason'] = finish_reason
                 attempts.append(attempt)
                 continue
-            rejection_reason = narrator_reply_rejection_reason(reply)
+            rejection_reason = narrator_reply_rejection_reason(reply) or _unsupported_prior_event_assertion_reason(reply, f'{system_prompt}\n{user_prompt}')
             heuristic_incomplete = bool(rejection_reason) or looks_incomplete_reply(reply)
             if finish_reason in ('length', 'error') or heuristic_incomplete:
                 last_error = 'incomplete narrator reply'
@@ -194,6 +252,12 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_att
                 if rejection_reason == 'degenerated_style_template':
                     current_system_prompt = _narrator_style_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
                     attempt['corrective_retry_prompt'] = 'style_template'
+                elif rejection_reason == 'excessive_micro_detail_density':
+                    current_system_prompt = _narrator_micro_detail_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
+                    attempt['corrective_retry_prompt'] = 'micro_detail_density'
+                elif rejection_reason == 'unsupported_prior_event_assertion':
+                    current_system_prompt = _narrator_grounding_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
+                    attempt['corrective_retry_prompt'] = 'grounding_prior_event'
                 logger.warning(
                     'NARRATOR_INCOMPLETE_REJECTED attempt=%s role=%s model=%s finish_reason=%s heuristic=%s reason=%s reply_chars=%s reply_tail=%r',
                     attempt_count,

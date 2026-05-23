@@ -111,7 +111,7 @@ def test_narrator_prompt_warns_recent_prose_is_not_style_sample():
 
     assert '不是文风样本' in system_prompt
     assert '不要模仿最近叙事中过密的动作拆解' in system_prompt
-    assert '人物动作描写必须克制' in system_prompt
+    assert '减少无剧情功能的微动作链' in system_prompt
 
 
 def test_opening_lorebook_turn_prefers_full_source_summary_over_index():
