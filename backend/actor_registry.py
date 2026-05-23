@@ -495,7 +495,7 @@ def _looks_like_dialogue_phrase_fragment(value: str) -> bool:
     name = sanitize_runtime_name(value)
     if not name:
         return True
-    if any(part in name for part in ('之前', '之后', '刚才', '现在', '以前', '以后', '一样')):
+    if any(part in name for part in ('之前', '之后', '刚才', '现在', '以前', '以后', '一样', '主动')):
         return True
     if '比' in name and not name.endswith('比'):
         return True
@@ -635,8 +635,9 @@ def _upsert_revealed_actor_aliases(actors: dict, narrator_reply: str) -> list[di
     return updates
 
 
-def _candidate_keeper_name_pairs(state: dict) -> list[tuple[str, str]]:
+def _candidate_keeper_name_pairs(state: dict, actors: dict | None = None) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
+    actors = actors if isinstance(actors, dict) else {}
 
     def add_pair(old_name: object, new_name: object) -> None:
         old_clean = sanitize_runtime_name(old_name)
@@ -680,12 +681,57 @@ def _candidate_keeper_name_pairs(state: dict) -> list[tuple[str, str]]:
     for text in knowledge_texts:
         for match in re.finditer(r'(?P<old>[\u4e00-\u9fff]{2,8})(?:真名|本名|名叫|叫作|叫做|自称)(?P<new>[\u4e00-\u9fff]{2,4})', text):
             add_pair(match.group('old'), match.group('new'))
+
+    revealed_names: list[str] = []
+
+    def add_revealed_name(value: object) -> None:
+        name = sanitize_runtime_name(value)
+        if _looks_like_proper_person_name(name) and name not in revealed_names:
+            revealed_names.append(name)
+
+    npc_local = scope.get('npc_local', {}) if isinstance(scope.get('npc_local', {}), dict) else {}
+    for name in npc_local:
+        add_revealed_name(name)
+    for event in state.get('resolved_events', []) or []:
+        if not isinstance(event, dict):
+            continue
+        label = str(event.get('label', '') or '')
+        for match in re.finditer(r'(?P<name>[\u4e00-\u9fff]{2,4}?)(?:主动)?(?:告知|说出|透露).*?(?:真名|本名)|(?P<alt>[\u4e00-\u9fff]{2,4}?)(?:真名|本名)', label):
+            add_revealed_name(match.group('name') or match.group('alt'))
+
+    active_ids = set()
+    index = state.get('actor_context_index', {}) if isinstance(state.get('actor_context_index', {}), dict) else {}
+    for actor_id in index.get('active_actor_ids', []) if isinstance(index.get('active_actor_ids', []), list) else []:
+        active_ids.add(str(actor_id))
+    for new_name in revealed_names:
+        if _find_actor_id_by_name(actors, new_name):
+            continue
+        candidates: list[tuple[int, str, dict]] = []
+        for actor_id, actor in actors.items():
+            if not isinstance(actor, dict) or actor.get('kind') == 'protagonist':
+                continue
+            actor_name = _actor_name(actor)
+            if not _is_descriptive_actor_name(actor_name):
+                continue
+            score = 0
+            if str(actor_id) in active_ids:
+                score += 3
+            text = ' '.join(str(actor.get(key, '') or '') for key in ('name', 'aliases', 'identity', 'appearance'))
+            if new_name[:1] and new_name[:1] in text:
+                score += 2
+            if any(term in text for term in ('年轻', '青年', '少年', '男子', '男人', '修士')):
+                score += 1
+            if score > 0:
+                candidates.append((score, str(actor_id), actor))
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        if len(candidates) == 1 or (len(candidates) > 1 and candidates[0][0] > candidates[1][0]):
+            add_pair(_actor_name(candidates[0][2]), new_name)
     return pairs[:12]
 
 
 def _upsert_keeper_actor_aliases(actors: dict, state: dict) -> list[dict]:
     updates: list[dict] = []
-    for old_name, new_name in _candidate_keeper_name_pairs(state):
+    for old_name, new_name in _candidate_keeper_name_pairs(state, actors):
         actor_id = _find_actor_id_by_name(actors, old_name)
         if not actor_id or actor_id == 'protagonist':
             continue
@@ -736,6 +782,11 @@ def _apply_promoted_actor_names(state: dict, actors: dict, updates: list[dict]) 
     for key in ('onstage_npcs', 'relevant_npcs'):
         items = state.get(key, []) if isinstance(state.get(key, []), list) else []
         state[key] = [replace_name(item) for item in items if replace_name(item)]
+    for thread in state.get('active_threads', []) or []:
+        if not isinstance(thread, dict):
+            continue
+        thread_actors = thread.get('actors', []) if isinstance(thread.get('actors', []), list) else []
+        thread['actors'] = [replace_name(item) for item in thread_actors if replace_name(item)]
     for entity in state.get('scene_entities', []) or []:
         if not isinstance(entity, dict):
             continue
@@ -759,6 +810,31 @@ def _apply_promoted_actor_names(state: dict, actors: dict, updates: list[dict]) 
             item['primary_label'] = primary
             item['key'] = f'important:{primary}'
             item['aliases'] = sorted({alias for alias in aliases if alias and alias != primary})
+    for item in state.get('possession_state', []) or []:
+        if isinstance(item, dict):
+            holder = replace_name(item.get('holder', ''))
+            if holder:
+                item['holder'] = holder
+    for item in state.get('object_visibility', []) or []:
+        if isinstance(item, dict):
+            known = item.get('known_to', []) if isinstance(item.get('known_to', []), list) else []
+            item['known_to'] = [replace_name(name) for name in known if replace_name(name)]
+    scope = state.get('knowledge_scope', {}) if isinstance(state.get('knowledge_scope', {}), dict) else {}
+    npc_local = scope.get('npc_local', {}) if isinstance(scope.get('npc_local', {}), dict) else {}
+    if npc_local:
+        merged: dict[str, dict] = {}
+        for raw_name, payload in npc_local.items():
+            name = replace_name(raw_name)
+            if not name:
+                continue
+            entry = merged.setdefault(name, {'learned': []})
+            learned = payload.get('learned', []) if isinstance(payload, dict) and isinstance(payload.get('learned', []), list) else []
+            for item in learned:
+                text = str(item or '').strip()
+                if text and text not in entry['learned']:
+                    entry['learned'].append(text)
+        scope['npc_local'] = merged
+        state['knowledge_scope'] = scope
 
 
 def _valid_actor_candidate(item: dict) -> dict | None:

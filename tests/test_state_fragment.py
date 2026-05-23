@@ -957,6 +957,56 @@ class StateFragmentTest(unittest.TestCase):
         self.assertEqual(updated['important_npcs'][0]['key'], 'important:沈青')
         self.assertTrue(updated['actor_registry_diagnostics']['alias_updates'][0]['promoted_to_name'])
 
+    def test_actor_registry_promotes_name_from_split_npc_local_holder(self):
+        state = {
+            'actors': {
+                'npc_qingshi_young_man': {
+                    'actor_id': 'npc_qingshi_young_man',
+                    'kind': 'npc',
+                    'name': '年轻男人',
+                    'aliases': ['青灰色短褐年轻男人'],
+                    'identity': '三天前下井触碰井底石片后被灌入凉湿灵力的青石镇年轻男子',
+                    'created_turn': 55,
+                },
+                'npc_lingdiao': {'actor_id': 'npc_lingdiao', 'kind': 'npc', 'name': '灵貂', 'aliases': []},
+            },
+            'important_npcs': [{
+                'key': 'important:年轻男人',
+                'primary_label': '年轻男人',
+                'aliases': ['那男子', '青灰色短褐年轻男人'],
+                'role_label': '触碰井底石片后被灌入凉湿灵力的求助者',
+            }],
+            'active_threads': [{'thread_id': 'thread_1', 'actors': ['年轻男人']}],
+            'object_visibility': [{'object_id': 'mud_shell_01', 'known_to': ['陆小环', '灵貂', '沈青']}],
+            'knowledge_scope': {
+                'npc_local': {
+                    '年轻男人': {'learned': ['陆小环认为黑狗血无用且不惧闹鬼']},
+                    '沈青': {'learned': ['陆小环似乎记得陈掌柜大后天出门的事']},
+                },
+            },
+            'resolved_events': [{
+                'label': '沈青主动告知真名，并确认陆小环为散修身份',
+                'kind': 'main',
+                'status': 'resolved',
+            }],
+            'actor_context_index': {
+                'active_actor_ids': ['protagonist', 'npc_lingdiao', 'npc_qingshi_young_man'],
+                'last_mentioned_turn': {'npc_qingshi_young_man': 91},
+            },
+        }
+
+        updated = update_actor_registry(state, narrator_reply='沈青站在原地。', turn_number=93, use_llm=False)
+
+        actor = updated['actors']['npc_qingshi_young_man']
+        self.assertEqual(actor['name'], '沈青')
+        self.assertIn('年轻男人', actor['aliases'])
+        self.assertEqual(updated['important_npcs'][0]['primary_label'], '沈青')
+        self.assertEqual(updated['active_threads'][0]['actors'], ['沈青'])
+        self.assertIn('沈青', updated['knowledge_scope']['npc_local'])
+        self.assertNotIn('年轻男人', updated['knowledge_scope']['npc_local'])
+        self.assertEqual(updated['object_visibility'][0]['known_to_actor_ids'], ['protagonist', 'npc_lingdiao', 'npc_qingshi_young_man'])
+        self.assertTrue(updated['actor_registry_diagnostics']['alias_updates'][0]['promoted_to_name'])
+
     def test_actor_registry_persists_protagonist_public_private_identity_boundary(self):
         profile = {
             'name': '测试主角',
