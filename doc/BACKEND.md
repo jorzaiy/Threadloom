@@ -69,6 +69,7 @@
 - `event` 不再写回 state；每轮 event summary 可作为 recent window 前段提纲和事件时间轴进入 narrator，12 轮外历史仍由固定 `summary_chunks` 通过 selector 条件召回；summary chunk 进入 prompt 前会经过 quarantine，明显主角名漂移的 chunk 不会注入
 - 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
 - `state_keeper` 优先，在线失败时以 `state_fragment` 形成 `fragment-baseline` 兜底；`state_updater` 主要保留给离线工具链
+- `state_keeper` 写出来的 state 在合并后会再走一层 `_apply_field_acceptance` per-field 校验：`onstage_npcs` 在 location 未变时被清空，或 location 与 main_event 不一致地切换，单独回退该字段到 prev_state，整张 state 不再因为一格崩坏而走 `fragment-baseline`。被拒字段会触发一次 corrective retry，结果落在 `state_keeper_diagnostics.field_acceptance` 与 `provider_used: llm-fill-partial`
 - arbiter 已接入主链，不再只是文档占位
 - partial reply 有独立处理路径，不再继续污染事实层
 - partial reply 当前会在生成阶段被阻断：`finish_reason=length/error` 或半句式结尾会触发 narrator 重试，重试耗尽后返回空回复错误；旧 partial 历史在 `/api/history` 和 prompt recent window 中会连同对应 user 输入一起过滤
@@ -77,6 +78,7 @@
 - 同一 `session_id` 的写请求现会串行执行，降低并发写冲突
 - session 访问会先检查当前角色卡作用域；如果同名 session 存在于其他角色卡下，`state/history/message/regenerate/delete` 等入口会拒绝继续使用，避免旧 session 在切卡后被当前角色卡上下文污染
 - `history` 读取缓存按解析后的 `history.jsonl` 绝对路径隔离，不再只按裸 `session_id` 复用，避免不同角色卡/用户下同名 session 串 history
+- `history.jsonl` 仍是 legacy 原始流水；每次 `save_history()` 会同步派生 `memory/history_manifest.json` 与 24 轮一片的 `memory/history_shards/turns-000001-000024.jsonl`。运行期 recent window 与旧事件回源优先读 shard，若 manifest 过期、缺 shard 或 shard 覆盖不完整则回退到 legacy `history.jsonl` 并重建派生 shard。
 - 角色卡导入与聊天导入使用请求局部 override；`character_assets` 与 `paths.active_character_id()` 的临时 override 不再是跨线程共享状态
 - persona root seed 默认只读取当前角色卡 source 下的 `runtime/persona-seeds`；缺失时不再静默回退到仓库共享 `runtime/persona-seeds`
 - 会话归档功能已取消：新游戏只创建新 session，不再把旧 session 移动到 `archive-*`；session list 也不再返回 `archived` 字段。历史 `archive-*` 目录仅作为旧数据存在，不进入当前会话列表

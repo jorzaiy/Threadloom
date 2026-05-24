@@ -76,6 +76,8 @@ persona_patches。
 
 不要维护 NPC 基础设定；姓名、别称、性格、外貌、身份由 actor registry 创建后锁定。
 不要记录短期人物状态；人物的临时处境、在场关系、行动阶段和当前位置只由最近窗口承载。
+用户把旧线索、人物、地点、物件或现象放在一起提问、猜测、类比、求证或推理时，这只是待验证假设；除非本轮叙事正文明确给出可观察的新结论，或明确引用了已证实证据，否则不得把它写成 carryover_signals、knowledge_scope、npc_relationships、turn_event_summary 或 scene_objective 的既定事实。
+叙事正文若使用“可能、似乎、像是、推测、怀疑、需要查证、不能确定”等不确定表达，写回时必须保留不确定性；不得改写成“已经证实、三方共同完成、某人曾经做过、目的明确”等完成式旧历史。
 
 time, location, main_event, onstage_npcs, immediate_goal 是当前场景核心字段。
 若叙事正文明确显示进入新房间/新互动/新在场人物/下一拍目标改变，必须输出这些字段纠正骨架；
@@ -1847,6 +1849,134 @@ def _clean_text(text: str) -> str:
     return re.sub(r'\s+', ' ', text or '').strip()
 
 
+def _apply_field_acceptance(
+    merged: dict,
+    baseline_state: dict,
+    prev_state: dict,
+    payload: dict,
+) -> tuple[dict, dict]:
+    """Per-field roll-back over a keeper-merged state.
+
+    Walks the fields keeper actually wrote (per ``payload``) and decides — for the
+    failure modes that previously caused whole-state rejection — whether to accept
+    the value or fall back to the previous turn's value. Returns the possibly-
+    adjusted state plus a ``field_acceptance`` map for trace diagnostics.
+
+    Status vocabulary:
+        - ``kept``: keeper's value accepted into merged state
+        - ``no_change``: keeper didn't touch the field
+        - ``rejected:<reason>``: keeper wrote something rejected; merged is unchanged
+        - ``prev_retained:<reason>``: keeper's value rolled back to prev_state
+        - ``rolled_back:<reason>``: cross-field consistency rollback
+    """
+    result = dict(merged)
+    acceptance: dict[str, str] = {}
+    prev = prev_state or {}
+
+    # 1) Core string fields. _merge_keeper_fill already drops unusable low-signal
+    #    text via _keeper_core_text_usable, so a payload key present but missing
+    #    from merged means the value was filtered. Detect this and record it as
+    #    a prev-retained rejection so the trace shows why.
+    for field in STRING_FIELDS:
+        if field not in payload:
+            acceptance[field] = 'no_change'
+            continue
+        keeper_raw = str(payload.get(field, '') or '').strip()
+        merged_value = str(result.get(field, '') or '').strip()
+        if keeper_raw and merged_value == keeper_raw:
+            acceptance[field] = 'kept'
+        elif _has_low_signal(keeper_raw):
+            acceptance[field] = 'prev_retained:low_signal_filtered'
+        elif keeper_raw and not _keeper_core_text_usable(field, keeper_raw):
+            acceptance[field] = 'prev_retained:core_text_unusable'
+        else:
+            acceptance[field] = 'kept'
+
+    # 2) NPC list fields. Keeper writing an empty list while prev had values and
+    #    no location shift is the most common drift mode — _merge_keeper_fill
+    #    writes the empty list verbatim, wiping baseline. Roll back here.
+    #
+    #    We deliberately use *location-only* shift detection rather than the
+    #    looser _has_scene_shift (which counts main_event changes too): keeper
+    #    rewrites main_event nearly every turn, so it is not a reliable scene-
+    #    transition signal.
+    location_current = _clean_text(str(result.get('location', '') or ''))
+    location_prev = _clean_text(str(prev.get('location', '') or ''))
+    location_shifted = bool(
+        location_current
+        and location_prev
+        and location_current != location_prev
+        and not _has_low_signal(location_current)
+    )
+    for field in ('onstage_npcs', 'relevant_npcs'):
+        if field not in payload:
+            acceptance[field] = 'no_change'
+            continue
+        keeper_value = payload.get(field)
+        merged_list = result.get(field, [])
+        if not isinstance(merged_list, list):
+            merged_list = []
+        prev_list = prev.get(field, []) if isinstance(prev.get(field, []), list) else []
+        cleared_to_empty = isinstance(keeper_value, list) and not merged_list and bool(prev_list)
+        if cleared_to_empty and not location_shifted:
+            result[field] = list(prev_list)
+            if field == 'onstage_npcs':
+                result.pop('_current_turn_onstage_npcs', None)
+            acceptance[field] = 'prev_retained:unsupported_clear'
+        else:
+            acceptance[field] = 'kept'
+
+    # 3) Cross-field consistency: location flipped but main_event did NOT, and
+    #    onstage was emptied. Real scene transitions almost always come with a
+    #    rewritten main_event; absent that, treat this as drift and revert both
+    #    location and onstage.
+    if (
+        location_shifted
+        and 'location' in payload
+        and 'onstage_npcs' in payload
+        and isinstance(payload.get('onstage_npcs'), list)
+        and not payload.get('onstage_npcs')
+    ):
+        event_current = _clean_text(str(result.get('main_event', '') or ''))
+        event_prev = _clean_text(str(prev.get('main_event', '') or ''))
+        main_event_changed = bool(
+            event_current
+            and event_prev
+            and event_current != event_prev
+            and not _has_low_signal(event_current)
+        )
+        if not main_event_changed:
+            result['location'] = prev.get('location', '')
+            prev_npcs = prev.get('onstage_npcs', [])
+            if isinstance(prev_npcs, list):
+                result['onstage_npcs'] = list(prev_npcs)
+            result.pop('_current_turn_onstage_npcs', None)
+            acceptance['location'] = 'rolled_back:partial_scene_shift'
+            acceptance['onstage_npcs'] = 'rolled_back:partial_scene_shift'
+
+    return result, acceptance
+
+
+def _build_keeper_corrective_prompt(base_prompt: str, field_acceptance: dict, prev_state: dict) -> str:
+    rejected = [
+        field
+        for field, status in field_acceptance.items()
+        if status.startswith('rejected') or status.startswith('rolled_back') or status.startswith('prev_retained')
+    ]
+    if not rejected:
+        return base_prompt
+    lines = ['', '【上一次回复字段问题】']
+    for field in rejected:
+        prev_value = (prev_state or {}).get(field, '')
+        if isinstance(prev_value, list):
+            preview = ', '.join(str(item) for item in prev_value[:3])
+        else:
+            preview = str(prev_value)[:80]
+        lines.append(f'- {field}: {field_acceptance[field]}（上一轮值="{preview}"）')
+    lines.append('请重写本轮 state；针对上面列出的字段补具体锚点，不要为了通过验证而强行更换不一致的旧值；其它字段保持本轮事实。')
+    return base_prompt + '\n' + '\n'.join(lines)
+
+
 def _has_low_signal(value: str) -> bool:
     text = _clean_text(value)
     return not text or any(token == text or token in text for token in LOW_SIGNAL_TOKENS)
@@ -1955,15 +2085,18 @@ def validate_state_payload(payload: dict, prev_state: dict | None = None) -> Non
     _validate_against_prev_state(payload, prev_state or {})
 
 
-def _with_diagnostics(state: dict, *, provider_requested: str, provider_used: str, usage: dict | None, fallback_used: bool, fallback_reason: str | None) -> dict:
+def _with_diagnostics(state: dict, *, provider_requested: str, provider_used: str, usage: dict | None, fallback_used: bool, fallback_reason: str | None, field_acceptance: dict | None = None) -> dict:
     output = dict(state)
-    output['diagnostics'] = {
+    diagnostics: dict = {
         'provider_requested': provider_requested,
         'provider_used': provider_used,
         'model_usage': usage,
         'fallback_used': fallback_used,
         'fallback_reason': fallback_reason,
     }
+    if field_acceptance is not None:
+        diagnostics['field_acceptance'] = dict(field_acceptance)
+    output['diagnostics'] = diagnostics
     return output
 
 
@@ -2025,33 +2158,77 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
     state_fragment = state_fragment if isinstance(state_fragment, dict) else {}
     baseline_state = build_state_from_fragment(prev_state, state_fragment, session_id)
     baseline_state = _restore_current_turn_onstage_marker(baseline_state, state_fragment)
-    user_prompt = _fill_user_prompt(baseline_state, narrator_reply, user_text=user_text)
+    base_user_prompt = _fill_user_prompt(baseline_state, narrator_reply, user_text=user_text)
 
+    current_prompt = base_user_prompt
+    field_acceptance: dict = {}
+    corrective_retry_attempted = False
     reply_text = ''
     usage: dict | None = None
     attempts = 0
-    try:
-        reply_text, usage, attempts = _call_state_keeper_llm(user_prompt)
-        payload = _coerce_state_payload(_parse_fill_payload(reply_text), baseline_state=baseline_state)
-        new_state = _merge_keeper_fill(baseline_state, payload)
-        validate_state_payload(new_state, prev_state)
-        new_state = _with_diagnostics(
-            new_state,
-            provider_requested='llm',
-            provider_used='llm-fill',
-            usage=usage,
-            fallback_used=False,
-            fallback_reason=None,
-        )
-    except Exception as err:
-        logger.warning('State-keeper extraction failed: %s', err)
+    payload: dict | None = None
+    new_state: dict | None = None
+    last_err: Exception | None = None
+
+    for outer_attempt in (1, 2):
+        try:
+            reply_text, usage, attempts = _call_state_keeper_llm(current_prompt)
+            payload = _coerce_state_payload(_parse_fill_payload(reply_text), baseline_state=baseline_state)
+            merged = _merge_keeper_fill(baseline_state, payload)
+            merged, field_acceptance = _apply_field_acceptance(merged, baseline_state, prev_state, payload)
+            validate_state_payload(merged, prev_state)
+            new_state = merged
+            last_err = None
+            break
+        except Exception as err:
+            last_err = err
+            rejected = [
+                field
+                for field, status in (field_acceptance or {}).items()
+                if status.startswith('rejected')
+                or status.startswith('rolled_back')
+                or status.startswith('prev_retained')
+            ]
+            if outer_attempt == 1 and rejected and not corrective_retry_attempted:
+                corrective_retry_attempted = True
+                current_prompt = _build_keeper_corrective_prompt(
+                    base_user_prompt, field_acceptance, prev_state
+                )
+                logger.warning(
+                    'State-keeper field rejection triggered corrective retry; rejected_fields=%s',
+                    rejected,
+                )
+                continue
+            break
+
+    if new_state is None:
+        logger.warning('State-keeper extraction failed: %s', last_err)
         if isinstance(usage, dict):
             usage['retry_count'] = max(usage.get('retry_count', 0), max(0, attempts - 1))
         raise StateKeeperCallError(
-            f'state_keeper_failed: {err}',
+            f'state_keeper_failed: {last_err}',
             usage=usage,
             raw_reply=reply_text,
-        ) from err
+        ) from last_err
+
+    has_partial = any(
+        status.startswith('rejected')
+        or status.startswith('rolled_back')
+        or status.startswith('prev_retained')
+        for status in field_acceptance.values()
+    )
+    provider_used = 'llm-fill-partial' if has_partial else 'llm-fill'
+    if isinstance(usage, dict) and corrective_retry_attempted:
+        usage['corrective_retry'] = True
+    new_state = _with_diagnostics(
+        new_state,
+        provider_requested='llm',
+        provider_used=provider_used,
+        usage=usage,
+        fallback_used=False,
+        fallback_reason=None,
+        field_acceptance=field_acceptance,
+    )
 
     new_state = normalize_state_dict(new_state, prev_state=prev_state, session_id=session_id)
     diagnostics = new_state.pop('diagnostics', None)
@@ -2061,15 +2238,18 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
         'model_usage': None,
         'fallback_used': False,
         'fallback_reason': None,
+        'field_acceptance': dict(field_acceptance),
     }
     if return_trace:
         return new_state, {
             'baseline_state': baseline_state,
             'user_text': user_text,
-            'user_prompt': user_prompt,
+            'user_prompt': base_user_prompt,
             'raw_reply': reply_text,
             'payload': payload,
             'retry_count': max(0, attempts - 1),
+            'field_acceptance': dict(field_acceptance),
+            'corrective_retry_attempted': corrective_retry_attempted,
         }
     return new_state
 

@@ -405,6 +405,7 @@ server {
 - `regenerate-last` 会回滚最后一对 `user -> assistant(partial)` 再重试
 - `state_keeper` 优先，在线失败时先走 `state_fragment` 形成 `fragment-baseline`，`state_updater` 主要保留给离线 replay / rebuild
 - `state_keeper` 现在会拒收明显低信号或相对上一轮明显退化的 state
+- `state_keeper` 现在按字段做 partial-accept：keeper 输出中只有部分字段崩坏（典型：`onstage_npcs` 被清空但 location 未变；location 改了但 main_event 没动）时，受污染的字段单独回退到 prev_state 的值，其他字段保留 keeper 输出，整张 state 不再整体塌方到 `fragment-baseline`。`state_keeper_diagnostics` 增加 `field_acceptance` 字段，并把 `provider_used` 标记为 `llm-fill-partial`。如有字段被拒，会触发一次定向 corrective retry，把被拒字段名 + 上一轮值喂回 keeper system prompt
 - `state_fragment` 现在会先作为结构化锚点进入 narrator 与 state_keeper
 - `state_keeper_candidate` 固定继承 `state_keeper` 的实际模型，不再通过 hidden advanced 配置单独分模。
 - `state_keeper_candidate` 现在可以作为 `skeleton keeper` sidecar 先产出最小骨架，再并入 `state_fragment`；当前每个完整回复后都会运行，模型固定继承 State Keeper。它只维护 `time / location / main_event / onstage_npcs / immediate_goal` 五个骨架字段
