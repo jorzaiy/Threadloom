@@ -158,20 +158,87 @@ def _narrator_micro_detail_retry_prompt(system_prompt: str, rejected_reply: str,
 
 
 PRIOR_EVENT_TEMPORAL_MARKERS = ('昨天', '前天', '之前', '先前', '上次', '刚才', '早些时候', '离开的时候')
-PRIOR_EVENT_ASSERTION_MARKERS = ('明明', '已经', '曾经', '早就', '本来', '过', '一起')
+PRIOR_EVENT_ASSERTION_MARKERS = ('明明', '已经', '曾经', '早就', '本来', '一起', '做过', '去过', '来过', '见过', '点亮过', '说过')
+CONJECTURE_CUES = (
+    '是否', '是不是', '会不会', '有没有可能', '可能', '也许', '难道',
+    '有关', '关系', '关联', '同源', '类似', '像是', '为什么', '原因',
+    '来历', '背景', '过去', '以前', '怎么回事', '猜', '推测', '怀疑',
+    '验证', '确认', '查清', '弄清', '解释',
+)
+UNCERTAINTY_CUES = ('可能', '也许', '像是', '似乎', '大概', '推测', '猜', '怀疑', '待查', '查证', '不能确定', '未必', '暂时')
+GENERIC_CLAIM_TOKENS = {
+    '这个', '那个', '他们', '她们', '我们', '你们', '自己', '东西', '事情', '时候', '地方',
+    '没有', '不是', '已经', '可能', '只是', '继续', '还是', '然后', '旁边', '里面', '外面',
+}
 
 
 def _normal_text(text: str) -> str:
     return re.sub(r'\s+', '', str(text or ''))
 
 
-def _unsupported_prior_event_assertion_reason(reply: str, grounding_text: str) -> str:
+def _claim_tokens(text: str) -> set[str]:
+    tokens: set[str] = set()
+    for token in re.findall(r'[\u4e00-\u9fff]{2,8}|[A-Za-z][A-Za-z0-9_-]{1,20}', str(text or '')):
+        if token in GENERIC_CLAIM_TOKENS:
+            continue
+        tokens.add(token)
+        if re.fullmatch(r'[\u4e00-\u9fff]{3,8}', token):
+            for size in (2, 3, 4):
+                for idx in range(0, max(0, len(token) - size + 1)):
+                    piece = token[idx:idx + size]
+                    if piece not in GENERIC_CLAIM_TOKENS:
+                        tokens.add(piece)
+    return tokens
+
+
+def _extract_current_user_text(text: str) -> str:
+    value = str(text or '')
+    match = re.search(r'(?s)【当前用户输入】\s*(.*?)(?:\n\s*【近端约束提醒】|\Z)', value)
+    if match:
+        return match.group(1).strip()
+    return value
+
+
+def _looks_like_conjectural_prior_query(text: str) -> bool:
+    value = str(text or '')
+    if not value.strip():
+        return False
+    return '?' in value or '？' in value or any(cue in value for cue in CONJECTURE_CUES)
+
+
+def _supported_by_grounding(clean: str, source: str) -> bool:
+    if not clean:
+        return True
+    if clean in source:
+        return True
+    claim_clause = re.split(r'[，,](?:可|但|却|只是|不过)', clean, maxsplit=1)[0]
+    return bool(claim_clause and claim_clause in source)
+
+
+def _quoted_content_supported_by_user(sentence: str, current_user_text: str) -> bool:
+    user_source = _normal_text(current_user_text)
+    if not user_source:
+        return False
+    text = str(sentence or '')
+    candidates = re.findall(r'[“"]([^”"]{2,80})[”"]', text)
+    candidates.extend(re.findall(r'[：:“"]([^”"。！？!?]{2,80})', text))
+    for match in candidates:
+        if _normal_text(match) in user_source:
+            return True
+    return False
+
+
+def _unsupported_prior_event_assertion_reason(reply: str, grounding_text: str, user_text: str = '') -> str:
     """Reject invented prior event claims unless prompt text explicitly supports them."""
     body = str(reply or '')
     source = _normal_text(grounding_text)
     if not body.strip() or not source:
         return ''
     sentences = [item for item in re.split(r'(?<=[。！？!?])', body) if item.strip()]
+    current_user_text = _extract_current_user_text(user_text)
+    user_is_conjecture = _looks_like_conjectural_prior_query(current_user_text)
+    user_tokens = _claim_tokens(current_user_text)
+    support_source = source if user_is_conjecture else f'{source}{_normal_text(current_user_text)}'
     for sentence in sentences:
         clean = _normal_text(sentence)
         if not clean:
@@ -180,12 +247,31 @@ def _unsupported_prior_event_assertion_reason(reply: str, grounding_text: str) -
             continue
         if not any(marker in clean for marker in PRIOR_EVENT_ASSERTION_MARKERS):
             continue
-        if clean in source:
+        if _supported_by_grounding(clean, support_source):
             continue
-        claim_clause = re.split(r'[，,](?:可|但|却|只是|不过)', clean, maxsplit=1)[0]
-        if claim_clause and claim_clause in source:
+        if not user_is_conjecture and _quoted_content_supported_by_user(sentence, current_user_text):
             continue
         return 'unsupported_prior_event_assertion'
+    if user_is_conjecture and len(user_tokens) >= 2:
+        windows = []
+        for idx in range(len(sentences)):
+            window = ''.join(sentences[idx:idx + 3]).strip()
+            if window:
+                windows.append(window)
+        for window in windows:
+            clean = _normal_text(window)
+            if not clean or any(cue in clean for cue in UNCERTAINTY_CUES):
+                continue
+            if not any(marker in clean for marker in PRIOR_EVENT_ASSERTION_MARKERS):
+                continue
+            shared = _claim_tokens(window) & user_tokens
+            if len(shared) < 2:
+                continue
+            if _supported_by_grounding(clean, source):
+                continue
+            if len(clean) < 12:
+                continue
+            return 'unsupported_conjecture_to_history_assertion'
     return ''
 
 
@@ -196,25 +282,33 @@ def _narrator_grounding_retry_prompt(system_prompt: str, rejected_reply: str, *,
         system_prompt
         + '\n\n【上次回复已被系统拒绝：无证据既往事件断言】\n'
         + f'{severity}把多个旧事实拼成了没有证据的“昨天/之前已经做过某事”。现在必须重写本轮，不要延续上次文本。\n'
-        + '严禁写“昨天/之前/上次/离开时”引出的已完成事件断言，例如“明明做过、已经做过、曾经做过、和某人一起去过、被某人踩过、带走过碎屑”，除非最近完整正文、命中事件索引或明确状态中逐字支持该事件。\n'
-        + '可以承接已证实事实，例如“镇民多年反复填埋清扫”“沈青鞋面有井边同源泥屑”或“封土又浮上来”；但不得改写成主角和沈青曾一起到井边、沈青亲自踩过井边封土或带走碎屑。\n'
+        + '严禁把用户的提问、猜测、类比、求证或人物推理改写成已完成旧事实；除非【历史原文证据包】或最近完整上下文明确支持同一人物-地点-动作链。\n'
+        + '如果只能看到分散线索，就必须保留不确定性，写成角色正在怀疑、需要查证、只能暂时这么推测；不得补出具体旧场面、共同参与者、旧地点或已完成动作。\n'
         + f'被拒绝片段摘录（不要承接其中无证据断言）：\n{excerpt}\n'
     )
 
 
-def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_attempts: int = 3) -> tuple[str, dict, dict]:
+def _call_narrator_with_retries(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    primary_max_attempts: int = 3,
+    secondary_max_attempts: int = 1,
+) -> tuple[str, dict, dict]:
     primary_cfg = resolve_provider_model('narrator')
     keeper_cfg = resolve_provider_model('state_keeper')
     model_plan = [
-        ('primary', primary_cfg),
-        ('secondary', _secondary_narrator_model_cfg(primary_cfg, keeper_cfg)),
+        ('primary', primary_cfg, primary_max_attempts),
+        ('secondary', _secondary_narrator_model_cfg(primary_cfg, keeper_cfg), secondary_max_attempts),
     ]
     attempts = []
     last_error = None
     attempt_count = 0
     current_system_prompt = system_prompt
-    for role, model_cfg in model_plan:
-        while attempt_count < max_attempts:
+    for role, model_cfg, role_budget in model_plan:
+        role_attempt = 0
+        while role_attempt < role_budget:
+            role_attempt += 1
             attempt_count += 1
             attempt = {
                 'role': role,
@@ -237,7 +331,7 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_att
                 attempt['finish_reason'] = finish_reason
                 attempts.append(attempt)
                 continue
-            rejection_reason = narrator_reply_rejection_reason(reply) or _unsupported_prior_event_assertion_reason(reply, f'{system_prompt}\n{user_prompt}')
+            rejection_reason = narrator_reply_rejection_reason(reply) or _unsupported_prior_event_assertion_reason(reply, system_prompt, user_prompt)
             heuristic_incomplete = bool(rejection_reason) or looks_incomplete_reply(reply)
             if finish_reason in ('length', 'error') or heuristic_incomplete:
                 last_error = 'incomplete narrator reply'
@@ -255,7 +349,7 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_att
                 elif rejection_reason == 'excessive_micro_detail_density':
                     current_system_prompt = _narrator_micro_detail_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
                     attempt['corrective_retry_prompt'] = 'micro_detail_density'
-                elif rejection_reason == 'unsupported_prior_event_assertion':
+                elif rejection_reason in {'unsupported_prior_event_assertion', 'unsupported_conjecture_to_history_assertion'}:
                     current_system_prompt = _narrator_grounding_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
                     attempt['corrective_retry_prompt'] = 'grounding_prior_event'
                 logger.warning(
@@ -285,8 +379,6 @@ def _call_narrator_with_retries(system_prompt: str, user_prompt: str, *, max_att
                 'all_failed': False,
             }
             return reply, usage, trace
-        if attempt_count >= max_attempts:
-            break
     trace = {
         'attempts': attempts,
         'provider_used': 'none',

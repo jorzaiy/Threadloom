@@ -56,6 +56,7 @@ repair 报告里的常见 `changes[].action`：
 - 当前状态：`memory/state.md`
 - 阶段摘要：`memory/summary.md`（当前仅作兼容/导入/调试层，不是 narrator 主输入）
 - 原始流水：`memory/history.jsonl`
+- 原始流水派生分片：`memory/history_manifest.json` 与 `memory/history_shards/turns-000001-000024.jsonl` 等；每片 24 轮，正好覆盖两个 12 轮 summary chunk。它们是可重建缓存，缺失或过期时会从 `history.jsonl` 回退/重建。
 - NPC 档案：`memory/npcs/*.md`
 - root persona seed：`runtime/persona-seeds/*`
 
@@ -396,10 +397,11 @@ server {
 - 同一 `session_id` 的 HTTP 写请求现在会串行执行，降低并发覆盖风险
 - trace 启用时，每个 turn 会额外落一份 `turn-trace/turn-XXXX.json`，用于单回合精确回放；`regenerate-last` 的精确恢复依赖已有 trace，缺失时只能走普通 history 回滚
 - `runtime.json -> trace.enabled / trace.keep_last_turns` 可控制 trace 是否启用以及最多保留多少轮
-- narrator 正文生成现在先用主 narrator 模型重试 3 次；主模型均失败后，使用 `state_keeper.model` 作为副 LLM 再重试 3 次。副 LLM 接管会在 response / turn trace 的 `narrator_retry` 中标记 `provider_used: secondary`。
+- narrator 正文生成现在先用主 narrator 模型重试 3 次；主模型均失败后，使用 `state_keeper.model` 作为副 LLM 再重试 1 次（per-role 预算，互不挤占）。副 LLM 接管会在 response / turn trace 的 `narrator_retry` 中标记 `provider_used: secondary`。
 - 若主/副 narrator 全部失败，本轮返回空 `reply` 与 `NARRATOR_UNAVAILABLE`，不写 assistant 历史、不递增 turn、不更新 state，trace 标记 `not_committed: true`，避免沉浸式 RP 中出现硬编码 fallback 文案。
 - partial assistant 回复不会作为已提交正文显示；生成阶段会自动重试，重试耗尽后返回状态栏错误，`/api/history` 与后续 prompt recent window 会过滤旧 partial 轮次及其对应 user 输入
 - narrator 若明显停在半句中间，即使 provider 没返回 `finish_reason`，当前也会按 incomplete 处理，避免把坏输出继续写坏 state 或污染下一轮上下文
+- "无证据既往事件断言" 启发式（`_unsupported_prior_event_assertion_reason`）：前事件 assertion marker 不再包含单字 `过`（之前会被 `看过去/经过/过来` 误中），改为多字组合 `做过/去过/来过/见过/点亮过/说过` 等；猜测式用户查询的 3 句滑窗分支同样需要命中 assertion marker 才进入 token-共享判定，避免用户输入里出现的场景名词（如"灵貂/怀里"）让正常承接当下动作的开头被误判为伪造旧事
 - `regenerate-last` 会回滚最后一对 `user -> assistant(partial)` 再重试
 - `state_keeper` 优先，在线失败时先走 `state_fragment` 形成 `fragment-baseline`，`state_updater` 主要保留给离线 replay / rebuild
 - `state_keeper` 现在会拒收明显低信号或相对上一轮明显退化的 state
