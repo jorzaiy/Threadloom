@@ -230,8 +230,8 @@ def set_multi_user_enabled(enabled: bool) -> None:
         if site_json.exists():
             try:
                 cfg = json.loads(site_json.read_text('utf-8'))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning('Failed to parse site config %s, treating as empty: %s', site_json, exc)
         cfg['multi_user_enabled'] = enabled
         atomic_write_json(site_json, cfg)
         # Wipe sessions on every transition. Disabling needs a clean slate so

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import sys
 import threading
 from pathlib import Path
@@ -16,6 +17,8 @@ except ImportError:
 
 
 PLAYER_PROFILE_LOCK = threading.RLock()
+
+logger = logging.getLogger(__name__)
 
 UNIFIED_PROFILE_SCHEMA_VERSION = 1
 UNIFIED_PROFILE_TOP_KEYS = (
@@ -718,8 +721,8 @@ def save_user_avatar(filename: str, content: bytes) -> Path:
         for existing in root.glob('avatar.*'):
             try:
                 existing.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning('Failed to unlink stale avatar %s: %s', existing, exc)
         target = root / f'avatar{suffix}'
         atomic_write_bytes(target, content)
     return target

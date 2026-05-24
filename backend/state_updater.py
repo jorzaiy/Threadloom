@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import logging
 import re
 
 from runtime_store import load_context, load_history, load_state, save_state, seed_default_state
@@ -12,6 +13,9 @@ try:
     from keeper_archive import load_keeper_record_archive
 except Exception:
     load_keeper_record_archive = None
+
+
+logger = logging.getLogger(__name__)
 
 
 SCENE_HEADER_RE = re.compile(r'^\s*(?:<[Tt]ime>\s*)?『(?P<header>[^』]+)』(?:\s*</[Tt]ime>)?')
@@ -1519,8 +1523,8 @@ def infer_tracked_objects(text: str, prev_state: dict | None = None) -> tuple[li
         if object_id.startswith('obj_'):
             try:
                 max_idx = max(max_idx, int(object_id.split('_', 1)[1]))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug('Skipping non-numeric object_id %r: %s', object_id, exc)
 
     possession = {str(item.get('object_id', '')): dict(item) for item in prev_possession if isinstance(item, dict) and item.get('object_id')}
     visibility = {str(item.get('object_id', '')): dict(item) for item in prev_visibility if isinstance(item, dict) and item.get('object_id')}
@@ -1905,8 +1909,8 @@ def build_scene_entities_generic(onstage: list[str], prev_state: dict, context: 
         if entity_id.startswith('scene_npc_'):
             try:
                 max_prev_idx = max(max_prev_idx, int(entity_id.split('_')[-1]))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug('Skipping non-numeric scene_npc id %r: %s', entity_id, exc)
     next_id = max_prev_idx + 1 if max_prev_idx else 1
     for idx, name in enumerate(onstage, start=1):
         primary, aliases, collective, count_hint = _normalize_entity_label(name)

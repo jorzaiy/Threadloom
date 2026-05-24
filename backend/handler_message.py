@@ -552,8 +552,8 @@ def _build_turn_trace_base(session_id: str, turn_id: str, *, ts: int, client_tur
 def _save_turn_trace_safe(session_id: str, turn_id: str, trace: dict) -> None:
     try:
         save_turn_trace(session_id, turn_id, trace)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning('Failed to save turn trace for session=%s turn=%s: %s', session_id, turn_id, exc)
 
 
 def update_stub_state(state: dict, text: str, context: dict) -> dict:

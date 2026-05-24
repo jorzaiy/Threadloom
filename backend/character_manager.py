@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import tempfile
 import threading
@@ -26,6 +27,8 @@ MAX_CHARACTER_IMPORT_BYTES = 16 * 1024 * 1024
 # by spamming card imports.
 MAX_CHARACTER_CARDS_FOR_USER = 10
 CHARACTER_IMPORT_LOCK = threading.RLock()
+
+logger = logging.getLogger(__name__)
 
 
 def _slug(text: str, fallback: str = 'character') -> str:
@@ -203,8 +206,8 @@ def _import_character_card_upload(filename: str, file_bytes: bytes, *, target_na
         finally:
             try:
                 temp_path.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning('Failed to unlink temp card file %s: %s', temp_path, exc)
     payload = card_json.get('data', {}) if isinstance(card_json.get('data'), dict) else card_json
     card_name = str(payload.get('name') or card_json.get('name') or '').strip()
 
@@ -218,8 +221,8 @@ def _import_character_card_upload(filename: str, file_bytes: bytes, *, target_na
     finally:
         try:
             temp_path.unlink()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning('Failed to unlink temp card file %s: %s', temp_path, exc)
 
     if set_active:
         set_active_character(target_character_id)

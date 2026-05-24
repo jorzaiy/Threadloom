@@ -2,6 +2,7 @@
 import copy
 import ipaddress
 import json
+import logging
 import os
 import re
 import threading
@@ -18,6 +19,8 @@ except ImportError:
     from atomic_io import atomic_write_json
     from paths import APP_ROOT, DEFAULT_USER_ID, active_user_id, read_json_file, resolve_layered_source, user_config_root, user_presets_root
     from user_manager import is_multi_user_enabled
+
+logger = logging.getLogger(__name__)
 
 GLOBAL_RUNTIME_CONFIG = APP_ROOT / 'config' / 'runtime.json'
 GLOBAL_RUNTIME_EXAMPLE = APP_ROOT / 'config' / 'runtime.example.json'
@@ -804,8 +807,8 @@ def resolve_provider_model(role: str = 'narrator') -> dict:
     if override_max_tokens:
         try:
             max_output_tokens = int(override_max_tokens)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning('Ignoring non-integer %s=%r: %s', override_max_tokens_env, override_max_tokens, exc)
     if role == 'narrator':
         max_output_tokens = max(int(max_output_tokens or 0), NARRATOR_MIN_OUTPUT_TOKENS)
     elif role in {'state_keeper', 'state_keeper_candidate'}:

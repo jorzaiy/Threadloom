@@ -631,8 +631,8 @@ def _build_object_index_from_baseline(state: dict) -> tuple[dict[str, dict], int
         if object_id.startswith('obj_'):
             try:
                 max_idx = max(max_idx, int(object_id.split('_', 1)[1]))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug('Skipping non-numeric object_id %r: %s', object_id, exc)
     return objects_by_label, max_idx
 
 
@@ -731,8 +731,8 @@ def _coerce_object_layers(payload: dict, baseline_state: dict | None = None) -> 
             if object_id.startswith('obj_'):
                 try:
                     max_idx = max(max_idx, int(object_id.split('_', 1)[1]))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug('Skipping non-numeric object_id %r: %s', object_id, exc)
 
     possession_state = normalized.get('possession_state')
     coerced_possession = []
@@ -1715,8 +1715,8 @@ def _semantic_cleanup(payload: dict, prev_state: dict, state_fragment: dict) -> 
             if entity_id.startswith('scene_npc_'):
                 try:
                     max_entity_idx = max(max_entity_idx, int(entity_id.split('_')[-1]))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug('Skipping non-numeric scene_npc id %r: %s', entity_id, exc)
         next_entity_idx = max_entity_idx + 1 if max_entity_idx else 1
 
         for idx, item in enumerate(normalized.get('scene_entities', []) or []):

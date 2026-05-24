@@ -10,6 +10,7 @@ so the system works with any card.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,9 @@ except ImportError:
     from model_config import load_runtime_config
 
 
+logger = logging.getLogger(__name__)
+
+
 def _load_character_data() -> dict:
     cfg = load_runtime_config()
     sources = cfg.get('sources', {})
@@ -29,8 +33,8 @@ def _load_character_data() -> dict:
         char_path = resolve_layered_source(char_path_str)
         if char_path.exists():
             return json.loads(char_path.read_text(encoding='utf-8'))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning('Failed to load character data from %s: %s', char_path_str, exc)
     return {}
 
 
