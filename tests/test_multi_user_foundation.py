@@ -896,7 +896,7 @@ class MultiUserFoundationTests(unittest.TestCase):
                 if sent is None:
                     self.fail('handler did not send a response')
                 self.assertEqual(sent[0], 200)
-                self.assertEqual(sent[1]['profile'], {})
+                self.assertEqual(sent[1]['profile'], player_profile.empty_unified_player_profile())
                 self.assertEqual(paths.active_user_id(), paths.DEFAULT_USER_ID)
                 self.assertFalse(paths.is_multi_user_request_context())
             finally:
