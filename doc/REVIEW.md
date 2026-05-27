@@ -354,3 +354,28 @@ session `0a1f32` 中 `main_event` 和 thread label 反复出现"只有时间+地
 | `call_skeleton_keeper` 中 `_skeleton_user_prompt()` 被调用两次 | 存入变量 |
 
 所有 235 个测试通过。
+
+---
+
+## 2026-05-27: narrator conjecture guard 误判修复 + onstage_npcs 丢失修复
+
+### narrator conjecture-to-history guard 误判
+
+**问题**：session `九幽大陆-20260520-e23032` turn-0149 生成失败，4 次重试全部被 `unsupported_conjecture_to_history_assertion` 拒绝。
+
+**根因**：用户输入中包含角色对话问号（"师兄，几天没吃饭了？"），触发 `user_is_conjecture = True`。conjecture 分支的 3 句滑动窗口只要求 `PRIOR_EVENT_ASSERTION_MARKERS`（如"已经"），不要求 `PRIOR_EVENT_TEMPORAL_MARKERS`（如"之前/昨天"）。narrator 回复中"铜筹已经在空中动了"被误判为编造历史事件。
+
+**修复**：conjecture 分支的 window 检查增加 `PRIOR_EVENT_TEMPORAL_MARKERS` 要求，与主分支逻辑一致。只有同时包含时间词和断言词的窗口才会触发拒绝。
+
+### onstage_npcs 偏窄/丢失
+
+**问题**：最近 15 轮中 `state_after_keeper.onstage_npcs` 频繁为空，即使场景中有多个 NPC 在场。
+
+**根因**：
+1. Keeper LLM 输出 dict 格式的 onstage_npcs（`{entity_id, primary_label, ...}`），但 normalize/merge 阶段对每个 item 做 `str(item)` 转换，dict 变成无效字符串后被丢弃
+2. 上限"最多 3 个"过于严格，实际场景常有 4-5 人同时在场
+
+**修复**：
+1. normalize 和 merge 阶段兼容 dict 格式，提取 `primary_label`/`name`
+2. 上限从 3 放宽到 5（prompt + 代码）
+3. 安全网：keeper 输出为空时回退到 state_fragment 的值

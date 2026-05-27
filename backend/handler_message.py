@@ -262,6 +262,8 @@ def _unsupported_prior_event_assertion_reason(reply: str, grounding_text: str, u
             clean = _normal_text(window)
             if not clean or any(cue in clean for cue in UNCERTAINTY_CUES):
                 continue
+            if not any(marker in clean for marker in PRIOR_EVENT_TEMPORAL_MARKERS):
+                continue
             if not any(marker in clean for marker in PRIOR_EVENT_ASSERTION_MARKERS):
                 continue
             shared = _claim_tokens(window) & user_tokens

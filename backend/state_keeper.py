@@ -85,7 +85,7 @@ time, location, main_event, onstage_npcs, immediate_goal 是当前场景核心�
 
 各补全字段要求：
 - time/location/main_event/onstage_npcs/immediate_goal/scene_entities：只根据本轮叙事正文修正当前场景。
-  - onstage_npcs 只写本轮正文中实际在场、有动作或对话的人物，最多3个；不要写上一场景人物。
+  - onstage_npcs 只写本轮正文中实际在场、有动作或对话的人物，最多5个；不要写上一场景人物。
   - scene_entities 可写当前场面里的描述性人物，如“灰眼男人”“掌柜”，不要把环境物件当人物。
   - immediate_goal 必须是本轮结束时主角下一拍要处理的事；如果旧目标已被打断，必须改写。
 - scene_objective（对象）：当前事件/场景段的稳定目标，用于防止叙事主轴散乱。只在当前事件目标缺失、明显开启新事件、或明确结束当前事件时输出。
@@ -228,7 +228,7 @@ SKELETON_KEEPER_SYSTEM = """你是 RP 最小骨架状态提取器，从叙事正
 - main_event：用一句话概括本轮叙事的核心事件。要求：描述"谁做了什么"或"发生了什么"，优先写主角当前正在参与的互动；旁观者、监督者、提及者只有实际干预本轮动作时才作为核心人物。不要用模糊标签（如"训练考核""同行安排""当前互动"）。
   好的例子："主角在3000米跑中故意掉速观察教官反应"、"实验体在地下实验室中突然失控"。
   坏的例子："训练考核"、"同行安排：xxx"、"当前互动"。
-- onstage_npcs：本轮正文中实际在场、有动作或对话的人物（不含主角）。最多 3 个。只写当前场面里正在行动、对话或直接影响主角的人；只被提及、远处背景、上一场景人物不要写入。只写名字，不要加描述。
+- onstage_npcs：本轮正文中实际在场、有动作或对话的人物（不含主角）。最多 5 个。只写当前场面里正在行动、对话或直接影响主角的人；只被提及、远处背景、上一场景人物不要写入。只写名字，不要加描述。
 - immediate_goal：主角在本轮结束时面临的下一步行动或决策。必须站在主角视角，写主角下一拍要处理的事；不要写 NPC 的目标、系统目标或宏观剧情目标。要求：概括意图，不要照搬玩家原文。
   好的例子："找机会溜出丹房"、"试探教官对威胁邮件的态度"、"判断是否要介入巷中杀局"。
   优先输出单一的“下一拍目标”，不要把两个备选方案并列写进同一句。
@@ -349,14 +349,14 @@ def _skeleton_user_prompt(prev_state: dict, state_fragment: dict, narrator_reply
         'location': str(prev_state.get('location', '') or '').strip(),
         'main_event': str(prev_state.get('main_event', '') or '').strip(),
         'immediate_goal': str(prev_state.get('immediate_goal', '') or '').strip(),
-        'onstage_npcs': [str(item).strip() for item in (prev_state.get('onstage_npcs', []) or []) if str(item).strip()][:3],
+        'onstage_npcs': [str(item).strip() for item in (prev_state.get('onstage_npcs', []) or []) if str(item).strip()][:5],
     }
     fragment_min = {
         'time': coarsen_current_time(str(state_fragment.get('time', '') or '').strip()),
         'location': str(state_fragment.get('location', '') or '').strip(),
         'main_event': str(state_fragment.get('main_event', '') or '').strip(),
         'immediate_goal': str(state_fragment.get('immediate_goal', '') or '').strip(),
-        'onstage_npcs': [str(item).strip() for item in (state_fragment.get('onstage_npcs', []) or []) if str(item).strip()][:3],
+        'onstage_npcs': [str(item).strip() for item in (state_fragment.get('onstage_npcs', []) or []) if str(item).strip()][:5],
     }
     return f"""上一轮骨架状态：
 {json.dumps(prev_min, ensure_ascii=False, indent=2)}
@@ -1030,10 +1030,13 @@ def _normalize_skeleton_payload(payload: dict) -> dict:
     if isinstance(onstage, list):
         cleaned = []
         for item in onstage:
-            name = str(item or '').strip()
+            if isinstance(item, dict):
+                name = str(item.get('primary_label', item.get('name', '')) or '').strip()
+            else:
+                name = str(item or '').strip()
             if name and not is_protagonist_name(name) and name not in cleaned:
                 cleaned.append(name)
-            if len(cleaned) >= 3:
+            if len(cleaned) >= 5:
                 break
         normalized['onstage_npcs'] = cleaned
     return normalized
@@ -1212,7 +1215,10 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
             continue
         cleaned = []
         for item in raw:
-            text = str(item or '').strip()
+            if isinstance(item, dict):
+                text = str(item.get('primary_label', item.get('name', '')) or '').strip()
+            else:
+                text = str(item or '').strip()
             if text and text not in cleaned:
                 cleaned.append(text)
         merged[field] = cleaned[:6]
@@ -2231,6 +2237,13 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
     )
 
     new_state = normalize_state_dict(new_state, prev_state=prev_state, session_id=session_id)
+
+    # Fallback: if keeper produced empty onstage_npcs but state_fragment had values, retain them
+    if not new_state.get('onstage_npcs') and isinstance(state_fragment, dict):
+        sf_onstage = [str(x).strip() for x in (state_fragment.get('onstage_npcs') or []) if str(x).strip()]
+        if sf_onstage:
+            new_state['onstage_npcs'] = sf_onstage[:5]
+
     diagnostics = new_state.pop('diagnostics', None)
     new_state['state_keeper_diagnostics'] = diagnostics if isinstance(diagnostics, dict) else {
         'provider_requested': 'llm',

@@ -121,7 +121,7 @@ def test_narrator_retries_degenerated_direction_templates(monkeypatch):
 
 def test_narrator_retries_conjecture_to_prior_history_assertion(monkeypatch):
     replies = [
-        ('林岚和守灯人。围着塔楼旧仪器。一起把港口灯塔点亮了。', {'finish_reason': 'stop', 'model': 'narrator'}),
+        ('林岚和守灯人。之前围着塔楼旧仪器。一起把港口灯塔点亮了。', {'finish_reason': 'stop', 'model': 'narrator'}),
         ('林岚只能先把塔楼仪器和港口灯塔记作可能有关，具体关系还需要查证。', {'finish_reason': 'stop', 'model': 'narrator'}),
     ]
     prompts = []
@@ -195,7 +195,7 @@ def test_narrator_grounding_guard_allows_in_scene_callback_with_刚才():
 
 def test_narrator_secondary_fallback_runs_when_primary_exhausted(monkeypatch):
     """Primary heuristic-rejects 3 times; secondary must still get a turn and can save the round."""
-    rejected_primary = '林岚和守灯人。围着塔楼旧仪器。一起把港口灯塔点亮了。'
+    rejected_primary = '林岚和守灯人。之前围着塔楼旧仪器。一起把港口灯塔点亮了。'
     saved_by_secondary = '林岚把仪器搁回桌面，灯塔的事还需要查证，先记下来。'
     calls = []
 
