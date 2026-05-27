@@ -19,6 +19,7 @@ from backend.state_keeper import _call_state_keeper_llm, _fill_user_prompt, _mer
 from backend.state_bridge import derive_risks_clues_from_signals, entity_descriptor_signature, entity_labels_compatible, normalize_carryover_signals, normalize_keeper_object_label
 from backend.handler_message import _add_lightweight_knowledge_delta, _build_turn_audit, _is_object_heavy_turn, _keeper_fallback_bootstrapped, _redact_trace_prompt, _store_turn_audit, _unsupported_prior_event_assertion_reason
 from backend.model_client import narrator_reply_rejection_reason
+from backend.session_auditor import npc_consistency_findings
 from backend.summary_chunks import _fallback_chunk, _normalize_chunk
 from backend.memory_maintenance import actor_alias_map, canonicalize_event_summaries, canonicalize_state_memory, resolve_stale_state_threads
 from backend.name_sanitizer import looks_like_non_person_alias_fragment, looks_like_low_quality_signal_fragment
@@ -1073,6 +1074,45 @@ class StateFragmentTest(unittest.TestCase):
         self.assertNotIn('年轻男人', updated['knowledge_scope']['npc_local'])
         self.assertEqual(updated['object_visibility'][0]['known_to_actor_ids'], ['protagonist', 'npc_lingdiao', 'npc_qingshi_young_man'])
         self.assertTrue(updated['actor_registry_diagnostics']['alias_updates'][0]['promoted_to_name'])
+
+    def test_actor_registry_fallback_promotes_recent_orphan_npc_local_holder(self):
+        state = {
+            'actors': {'npc_lingdiao': {'actor_id': 'npc_lingdiao', 'kind': 'npc', 'name': '灵貂', 'aliases': []}},
+            'location': '客栈一楼大堂',
+            'main_event': '帷帽女子评价灵貂并上楼',
+            'knowledge_scope': {'npc_local': {'帷帽女子': {'learned': ['陆小环喂灵貂牛肉，灵貂不是低阶灵兽']}}},
+        }
+
+        updated = update_actor_registry(
+            state,
+            narrator_reply='帷帽女子放下铜板，转身上楼。',
+            turn_number=134,
+            use_llm=False,
+            recent_pairs=[('', '帷帽女子开口说这貂不是低阶的。')],
+        )
+
+        created_id = updated['actor_registry_diagnostics']['created_actor_ids'][0]
+        self.assertEqual(updated['actors'][created_id]['name'], '帷帽女子')
+        self.assertEqual(updated['scene_entities'][0]['primary_label'], '帷帽女子')
+        self.assertEqual(updated['scene_entities'][0]['possible_link'], created_id)
+        self.assertEqual(updated['important_npcs'][0]['primary_label'], '帷帽女子')
+
+    def test_session_audit_flags_orphan_npc_knowledge_scope(self):
+        state = {
+            'actors': {'npc_lingdiao': {'actor_id': 'npc_lingdiao', 'kind': 'npc', 'name': '灵貂', 'aliases': []}},
+            'knowledge_scope': {'npc_local': {'帷帽女子': {'learned': ['灵貂不是低阶灵兽']}}},
+            'scene_entities': [],
+            'important_npcs': [],
+        }
+        history = [
+            {'role': 'assistant', 'content': '帷帽女子放下筷子，说：“这貂不是低阶的。”'},
+            {'role': 'assistant', 'content': '帷帽女子收起铜板，回到东头第三间。'},
+        ]
+
+        findings = npc_consistency_findings(state, history, [], window_turns=6)
+
+        self.assertTrue(any(item['type'] == 'unregistered_npc_candidate' and item['name'] == '帷帽女子' for item in findings))
+        self.assertTrue(any(item['type'] == 'orphan_npc_knowledge_scope' and item['name'] == '帷帽女子' for item in findings))
 
     def test_actor_registry_persists_protagonist_public_private_identity_boundary(self):
         profile = {
@@ -2456,14 +2496,15 @@ class StateFragmentTest(unittest.TestCase):
         state = {
             'tracked_objects': [{'object_id': 'obj_01', 'label': '运动胶布', 'kind': 'item'}],
             'possession_state': [{'object_id': 'obj_01', 'holder': '维克托·奥古斯特', 'status': '塞回战术裤侧袋'}],
+            'knowledge_records': [],
         }
 
         updated = _add_lightweight_knowledge_delta(state, '维克托·奥古斯特把运动胶布塞回战术裤侧袋。')
 
-        self.assertEqual(
-            updated['knowledge_scope']['protagonist']['learned'],
-            ['运动胶布由维克托·奥古斯特持有，状态为塞回战术裤侧袋'],
-        )
+        records = updated['knowledge_records']
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['text'], '运动胶布由维克托·奥古斯特持有，状态为塞回战术裤侧袋')
+        self.assertEqual(records[0]['holder_actor_id'], 'protagonist')
 
     def test_state_keeper_environment_filter_is_not_card_name_specific(self):
         from backend.state_keeper import _looks_like_environment_entity

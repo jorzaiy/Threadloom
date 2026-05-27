@@ -88,7 +88,7 @@ class SelectorRecallTests(unittest.TestCase):
             user_text='准备试着翻过矮墙',
         )
 
-        self.assertEqual([hit['event_id'] for hit in hits[:2]], ['evt_0012', 'evt_0011'])
+        self.assertEqual([hit['event_id'] for hit in hits[:2]], ['evt_0011', 'evt_0012'])
 
     def test_event_recall_tie_breaks_to_newer_turn(self):
         events = [

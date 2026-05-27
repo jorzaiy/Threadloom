@@ -73,10 +73,16 @@ def joined_recent_text(recent_history: list[dict], limit: int = 6) -> str:
 
 def _topic_tokens(text: str) -> set[str]:
     tokens = set()
-    for token in re.findall(r'[\u4e00-\u9fff]{2,8}|[A-Za-z][A-Za-z0-9_-]{1,20}', str(text or '')):
+    for token in re.findall(r'[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_-]{1,20}', str(text or '')):
         if token in GENERIC_TOPIC_TOKENS:
             continue
-        tokens.add(token)
+        if len(token) <= 8:
+            tokens.add(token)
+        if re.fullmatch(r'[\u4e00-\u9fff]{3,}', token):
+            for i in range(len(token) - 1):
+                bigram = token[i:i + 2]
+                if bigram not in GENERIC_TOPIC_TOKENS:
+                    tokens.add(bigram)
     return tokens
 
 
@@ -340,14 +346,14 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
             if str(name or '').strip() and str(name).strip() in actor_context_text:
                 actor_bonus += 1
         event_text = _event_text(item)
-        if weak_mundane_query and actor_bonus == 0 and not current_shared and not location_shared and not carryover_shared:
+        if weak_mundane_query and actor_bonus == 0 and not any(len(t) >= 3 for t in current_shared) and not location_shared and not carryover_shared:
             continue
         event_sensitive = _sensitive_tokens(event_text)
         user_sensitive = _sensitive_tokens(user_text)
         explicit_user_overlap = bool(_topic_tokens(str(user_text or '')) & event_tokens)
         if event_sensitive and not user_sensitive and not current_shared and not location_shared and not carryover_shared and not explicit_user_overlap:
             continue
-        if carryover_shared and not current_shared and not recent_shared and not location_shared and actor_bonus == 0:
+        if carryover_shared and not any(len(t) >= 3 for t in current_shared) and not recent_shared and not any(len(t) >= 3 for t in location_shared) and actor_bonus == 0:
             continue
         if clue_key and clue_key in seen_clues and carryover_shared and not current_shared and not location_shared:
             continue
@@ -355,7 +361,7 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
         distance = max(0, latest_turn - turn_idx) if latest_turn else 0
         recency_bonus = max(0.0, 2.0 - min(distance, 8) * 0.25)
         repeated_penalty = sum(1 for token in shared if repeated_counts.get(token, 0) >= 4) * 0.5
-        score = (len(shared) * 0.75) + (len(current_shared) * 2.0) + len(location_shared) + actor_bonus + recency_bonus - repeated_penalty
+        score = (sum(0.75 if len(t) >= 3 else 0.25 for t in shared)) + (sum(2.0 if len(t) >= 3 else 0.5 for t in current_shared)) + len(location_shared) + actor_bonus + recency_bonus - repeated_penalty
         event_id = str(item.get('event_id') or item.get('turn_id') or '').strip()
         if event_id in long_range_ids:
             explicit_anchor_hits = [anchor for anchor in long_range_explicit_anchors if anchor and anchor in event_text]

@@ -604,7 +604,16 @@ def _add_lightweight_knowledge_delta(state: dict, narrator_reply: str) -> dict:
             learned.append(f'{label}由{holder}持有，状态为{status}')
         else:
             learned.append(f'{label}由{holder}持有')
-    return _merge_protagonist_knowledge_delta(state, learned[:3])
+    if not learned:
+        return state
+    records = list(state.get('knowledge_records', []) or [])
+    existing_texts = {r.get('text', '') for r in records if isinstance(r, dict)}
+    for text in learned[:3]:
+        if text not in existing_texts:
+            records.append({'holder_actor_id': 'protagonist', 'text': text, 'source_turn': 0})
+            existing_texts.add(text)
+    state['knowledge_records'] = records[-80:]
+    return state
 
 
 def _store_turn_audit(meta: dict, audit: dict) -> None:
