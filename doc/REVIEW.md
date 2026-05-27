@@ -379,3 +379,29 @@ session `0a1f32` 中 `main_event` 和 thread label 反复出现"只有时间+地
 1. normalize 和 merge 阶段兼容 dict 格式，提取 `primary_label`/`name`
 2. 上限从 3 放宽到 5（prompt + 代码）
 3. 安全网：keeper 输出为空时回退到 state_fragment 的值
+
+---
+
+## 2026-05-27: selector bigram 召回修复 + knowledge_scope 拥挤修复
+
+### Selector 关键词匹配失败
+
+**问题**：session e23032 turn-0198 narrator 输出"路牌两枚，各五文，共十文"，与 turn-0186 已建立的"路牌要一百二十文"矛盾。
+
+**根因链**：
+1. `_topic_tokens` 使用 `{2,8}` 贪婪 regex 匹配连续中文字符，8 字上限导致 "路牌" 被切断在 token 边界（"衣书吏申办两个路" + 逗号 + "同时…"）
+2. 即使不被切断，长 token 之间几乎不可能跨上下文匹配（"子为何没路牌" ≠ "申办两个路牌"）
+3. turn-0186 的 event_summary 分数为 0，完全无法被 selector 召回
+
+**修复**：
+- `_topic_tokens` regex 改为 `{2,}` 不限上限（按标点自然断句），只保留 ≤8 字的原始 token，但对所有 3+ 字 segment 生成 bigram sub-token
+- Bigram 评分权重降低（shared: 0.25, current: 0.5），防止噪音
+- `weak_mundane_query` 和 `carryover-only` 过滤条件要求 3+ 字 token 才算有效匹配
+
+### Knowledge_scope 被物品持有状态挤占
+
+**问题**：keeper 正确提取了 "黑脸小子因家里穷凑不齐一百二十文路牌钱" 到 `knowledge_scope.protagonist.learned`，但该记录从未出现在 `knowledge_records` 中。
+
+**根因**：`_add_lightweight_knowledge_delta` 每轮把物品持有状态追加到 `knowledge_scope.protagonist.learned`，然后 `[-10:]` 截断把 keeper 提取的关键知识挤掉。到 `update_actor_registry` 转写 `knowledge_records` 时，信息已丢失。
+
+**修复**：`_add_lightweight_knowledge_delta` 直接写入 `knowledge_records`，不再经过 `knowledge_scope` 中间层，避免与 keeper 输出竞争配额。
