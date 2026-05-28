@@ -173,6 +173,15 @@ time, location, main_event, onstage_npcs, immediate_goal 是当前场景核心�
   }
   ```
   规则：只总结本轮叙事正文，不要复读旧摘要；必须包含当前场景新事实。主角对NPC说的自我声明（来历、身份、目的）如果与初始设定不符，summary中必须用"自称/谎称/对外声称"标记，不得写成客观事实。
+- npc_bios（数组，最多3项）：本轮有重大变化的 NPC 认知快照更新。只在 NPC 首次出场、与主角发生重大共同事件、或场景转换导致状态变化时输出。无变化时省略整个字段。
+  格式：
+  ```
+  [{"actor_id": "npc_001", "bio": "3-5句话的当前认知快照"}]
+  ```
+  规则：
+  - bio 是覆盖式更新，完全替换旧 bio。必须包含：身份来历、与主角共同经历的关键地点和事件、当前状态目标、知情边界（知道什么、不知道什么）。
+  - 主角对 NPC 说的谎话，bio 中记为"被告知/听说"而非客观事实。
+  - actor_id 必须来自输入 known_npcs。
 - persona_patches（数组，最多3项）：本轮正文中可观察到的 NPC 表达层稳定倾向，只能绑定到已存在 actor_id。
   格式：
   ```
@@ -1314,6 +1323,21 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
             updated['confidence'] = patch.get('confidence', previous.get('confidence', 0.35))
             hooks[actor_id] = updated
         merged['actor_persona_hooks'] = hooks
+
+    # Extract npc_bios into _pending_npc_bios (applied later in handler to avoid normalize_state_dict overwrite)
+    raw_bios = payload.get('npc_bios', [])
+    if isinstance(raw_bios, list):
+        actors = merged.get('actors', {}) if isinstance(merged.get('actors', {}), dict) else {}
+        pending = []
+        for item in raw_bios[:3]:
+            if not isinstance(item, dict):
+                continue
+            actor_id = str(item.get('actor_id', '') or '').strip()
+            bio = str(item.get('bio', '') or '').strip()[:400]
+            if actor_id and bio and actor_id in actors:
+                pending.append({'actor_id': actor_id, 'bio': bio})
+        if pending:
+            merged['_pending_npc_bios'] = pending
 
     if 'scene_objective' in payload:
         objective = _coerce_scene_objective(payload.get('scene_objective'))

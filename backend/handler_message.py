@@ -1348,6 +1348,17 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     )
     state, memory_canonicalization_changes = canonicalize_state_memory(state)
     state, stale_memory_changes = resolve_stale_state_threads(state)
+    # Apply pending NPC bios from keeper (after actor_registry to avoid normalize overwrite)
+    pending_bios = state.pop('_pending_npc_bios', None)
+    if pending_bios and isinstance(pending_bios, list):
+        actors = state.get('actors', {})
+        if isinstance(actors, dict):
+            for item in pending_bios:
+                actor_id = item.get('actor_id', '')
+                bio = item.get('bio', '')
+                if actor_id in actors and bio:
+                    actors[actor_id]['bio'] = bio
+                    actors[actor_id]['bio_updated_turn'] = current_turn_num
     # Single authoritative turn commit after keeper, arbiter, thread/npc trackers,
     # and actor registry have all merged their bindings. update_actor_registry
     # contains its own LLM-failure fallback so it does not raise out, which lets
