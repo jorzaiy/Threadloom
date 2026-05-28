@@ -11,12 +11,14 @@ try:
     from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
     from .card_hints import get_canonical_name, get_character_primary_name
     from .player_profile import load_effective_player_profile
+    from .state_bridge import entity_labels_compatible
 except ImportError:
     from llm_manager import call_role_llm
     from local_model_client import parse_json_response
     from name_sanitizer import sanitize_runtime_name, is_protagonist_name, protagonist_names, looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
     from card_hints import get_canonical_name, get_character_primary_name
     from player_profile import load_effective_player_profile
+    from state_bridge import entity_labels_compatible
 
 
 ARCHIVE_AFTER_QUIET_TURNS = 12
@@ -151,6 +153,15 @@ def _name_surfaces(name: str) -> set[str]:
     for item in list(surfaces):
         if '·' in item:
             surfaces.update(part for part in item.split('·') if part)
+    for item in list(surfaces):
+        stripped = re.sub(r'[（(][^）)]{1,8}[）)]', '', item).strip()
+        if stripped:
+            surfaces.add(stripped)
+        match = re.search(r'[（(]([^）)]{1,8})[）)]', item)
+        if match:
+            inner = sanitize_runtime_name(match.group(1))
+            if inner:
+                surfaces.add(inner)
     card_name = sanitize_runtime_name(get_character_primary_name())
     if card_name and '·' in card_name:
         card_parts = {part for part in card_name.split('·') if part}
@@ -168,7 +179,9 @@ def _actor_name_matches(actor: dict, name: str) -> bool:
     actor_surfaces: set[str] = set()
     for actor_name in _actor_names(actor):
         actor_surfaces.update(_name_surfaces(actor_name))
-    return bool(actor_surfaces & target_surfaces)
+    if actor_surfaces & target_surfaces:
+        return True
+    return any(entity_labels_compatible(actor_name, target) for actor_name in actor_surfaces for target in target_surfaces)
 
 
 def _compact_profile_text(value: object, limit: int = 120) -> str:

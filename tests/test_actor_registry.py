@@ -130,6 +130,42 @@ class ActorRegistryTests(unittest.TestCase):
 
         self.assertFalse(actor_registry._candidate_overlaps_existing_actor(candidate, state['actors'], state))
 
+    def test_descriptor_alias_variants_do_not_duplicate_same_anonymous_npc(self):
+        state = {
+            'actors': {
+                'npc_006': {
+                    'actor_id': 'npc_006',
+                    'kind': 'npc',
+                    'name': '挎篮子妇人',
+                    'aliases': ['挎篮子的妇人'],
+                    'appearance': '',
+                    'identity': '路边挎篮子的妇人',
+                    'created_turn': 20,
+                },
+                'npc_007': {
+                    'actor_id': 'npc_007',
+                    'kind': 'npc',
+                    'name': '挑担子男人',
+                    'aliases': ['挑担子的男人'],
+                    'appearance': '',
+                    'identity': '路边挑担子的男人',
+                    'created_turn': 20,
+                },
+            },
+            'scene_entities': [],
+        }
+
+        self.assertTrue(actor_registry._candidate_overlaps_existing_actor(
+            {'name': '挎篮妇人', 'aliases': [], 'appearance': '', 'identity': ''},
+            state['actors'],
+            state,
+        ))
+        self.assertTrue(actor_registry._candidate_overlaps_existing_actor(
+            {'name': '挑担汉子', 'aliases': [], 'appearance': '', 'identity': ''},
+            state['actors'],
+            state,
+        ))
+
 
 if __name__ == '__main__':
     unittest.main()

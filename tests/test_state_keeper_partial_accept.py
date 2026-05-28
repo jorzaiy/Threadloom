@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / 'backend'))
 from backend.state_keeper import (
     _apply_field_acceptance,
     _build_keeper_corrective_prompt,
+    _merge_fragment_onstage_with_text_evidence,
     call_state_keeper,
     StateKeeperCallError,
 )
@@ -133,6 +134,58 @@ class TestCorrectivePrompt(unittest.TestCase):
         acceptance = {'time': 'kept', 'main_event': 'no_change'}
         prompt = _build_keeper_corrective_prompt('BASE', acceptance, {})
         self.assertEqual(prompt, 'BASE')
+
+
+class TestFragmentOnstageEvidenceMerge(unittest.TestCase):
+    def test_restores_fragment_npcs_when_current_reply_still_mentions_them(self):
+        state = {
+            'onstage_npcs': ['石根', '带短刀的男人'],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_01', 'primary_label': '石根', 'aliases': ['石根'], 'onstage': True},
+                {'entity_id': 'scene_npc_05', 'primary_label': '带短刀的男人', 'aliases': ['带短刀的男人'], 'onstage': True},
+            ],
+        }
+        fragment = {
+            'onstage_npcs': ['石根', '老汉（车夫）', '挎篮子妇人', '挑担子男人', '带短刀的男人'],
+            '_current_turn_onstage_npcs': ['石根', '老汉（车夫）', '挎篮子妇人', '挑担子男人', '带短刀的男人'],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_01', 'primary_label': '石根', 'aliases': ['石根'], 'onstage': True},
+                {'entity_id': 'scene_npc_02', 'primary_label': '老汉（车夫）', 'aliases': ['老汉', '车夫'], 'onstage': True},
+                {'entity_id': 'scene_npc_03', 'primary_label': '挎篮子妇人', 'aliases': ['挎篮子的妇人'], 'onstage': True},
+                {'entity_id': 'scene_npc_04', 'primary_label': '挑担子男人', 'aliases': ['挑担汉子'], 'onstage': True},
+                {'entity_id': 'scene_npc_05', 'primary_label': '带短刀的男人', 'aliases': ['带短刀男人'], 'onstage': True},
+            ],
+        }
+        narrator_reply = '老汉在车辕上勒住缰绳，挎篮子的妇人往后退了半步，挑担子的男人也看向带短刀男人。'
+        state['onstage_npcs'] = ['石根']
+        state['scene_entities'] = [state['scene_entities'][0]]
+
+        merged = _merge_fragment_onstage_with_text_evidence(state, fragment, narrator_reply)
+
+        self.assertEqual(
+            merged['onstage_npcs'],
+            ['石根', '老汉（车夫）', '挎篮子妇人', '挑担子男人', '带短刀的男人'],
+        )
+        entity_labels = {item['primary_label']: item.get('onstage') for item in merged['scene_entities']}
+        self.assertTrue(entity_labels['老汉（车夫）'])
+        self.assertTrue(entity_labels['挎篮子妇人'])
+        self.assertTrue(entity_labels['挑担子男人'])
+        self.assertTrue(entity_labels['带短刀的男人'])
+
+    def test_departure_text_does_not_restore_fragment_npc(self):
+        state = {'onstage_npcs': ['石根'], 'scene_entities': []}
+        fragment = {
+            'onstage_npcs': ['石根', '束发女人'],
+            '_current_turn_onstage_npcs': ['石根', '束发女人'],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_06', 'primary_label': '束发女人', 'aliases': ['束发女人'], 'onstage': True},
+            ],
+        }
+
+        merged = _merge_fragment_onstage_with_text_evidence(state, fragment, '束发女人走了，石根还站在原处。')
+
+        self.assertEqual(merged['onstage_npcs'], ['石根'])
+        self.assertEqual(merged.get('scene_entities', []), [])
 
 
 class TestCallStateKeeperIntegration(unittest.TestCase):

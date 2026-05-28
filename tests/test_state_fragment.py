@@ -109,6 +109,10 @@ class StateFragmentTest(unittest.TestCase):
     def test_shared_normalization_helpers_preserve_current_contract(self):
         self.assertEqual(entity_descriptor_signature('灰衣人'), '灰衣')
         self.assertTrue(entity_labels_compatible('灰衣人', '灰衣'))
+        self.assertTrue(entity_labels_compatible('挎篮子妇人', '挎篮子的妇人'))
+        self.assertTrue(entity_labels_compatible('挎篮妇人', '挎篮子妇人'))
+        self.assertTrue(entity_labels_compatible('挑担汉子', '挑担子男人'))
+        self.assertTrue(entity_labels_compatible('带短刀男人', '带短刀的男人'))
         self.assertTrue(entity_labels_compatible('背纹灵貂', '灵貂'))
         self.assertTrue(entity_labels_compatible('药铺年轻男人', '年轻男人'))
         self.assertFalse(entity_labels_compatible('茶馆掌柜', '药铺掌柜'))

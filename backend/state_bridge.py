@@ -45,6 +45,7 @@ ABSTRACT_CONTINUITY_SUFFIXES = ('机制', '系统', '规则', '判定', '反馈'
 ENTITY_DESCRIPTOR_SUFFIXES = (
     '身影', '背影', '影子', '影', '之人', '那人', '此人', '来人',
     '男人', '女人', '女子', '青年', '少年', '老者', '壮汉',
+    '妇人', '汉子', '老汉', '老妇', '车夫',
     '制服人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
 )
 GENERIC_SHADOW_LABELS = {'暗影', '黑影', '影子', '人影'}
@@ -619,9 +620,14 @@ def entity_descriptor_signature(name: str) -> str:
     text = sanitize_runtime_name(name)
     if not text:
         return ''
+    text = re.sub(r'[（(][^）)]{1,8}[）)]', '', text).strip()
     for suffix in ENTITY_DESCRIPTOR_SUFFIXES:
         if text.endswith(suffix) and len(text) > len(suffix):
-            return text[:-len(suffix)].strip()
+            stem = text[:-len(suffix)].strip()
+            stem = stem.replace('的', '').strip()
+            if len(stem) >= 3 and stem.endswith('子'):
+                stem = stem[:-1].strip()
+            return stem or text
     return text
 
 
