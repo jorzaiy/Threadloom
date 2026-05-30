@@ -527,3 +527,13 @@ god-function 拆分（行为保持，由既有测试守护）：
 - e23032 turn-227 实测：BEFORE 索引 = `[227,226,225,218]`（全在最近 12 轮窗内、已在 prompt 中）；AFTER = `[214,208,211,210]`（全部窗外，真正的远程召回）——4/4 冗余命中被替换为窗外有效召回。
 - 正向副作用：窗外事件 distance ≥ 窗长 → `recency_bonus` 归零，排序回归纯话题相关度，更符合"索引 = 窗外召回"的定位。
 - 测试：新增 `test_selector_window_exclusion.py`（4）；既有 `test_selector_recall`（默认 0）不受影响。全量 `511 passed, 1 skipped`。
+
+### 2026-05-30 (续7): session auditor 自动化（backlog #4 → done）
+
+落地 (续4) backlog 第 3 项。`run_session_audit`（纯启发式、无 LLM，已落盘 `diagnostics/audit_*.json`）此前只能手动触发，e23032 的 audit 停在 5-23（会话已到 turn 227）。
+
+- `handle_message` runtime 主链在 **consolidation turn**（`is_consolidation_turn`，默认每 3 轮）自动跑一次 audit：读已提交的 history/state/event_summaries，刷新 `diagnostics/audit_latest.json` + `audit_reports.json`（保留最近 20 份）。
+- audit 结果精简版（`severity` / `summary` / `issues` 的 type+severity+message）注入本轮 debug 块 `session_audit`，浮到调试面板；完整证据仍只在 `diagnostics/`。
+- 整段 try/except 包裹：audit 失败只 `logger.exception`，**绝不阻断已提交的回合**（专门测试 `test_session_audit_failure_never_blocks_turn` 守护）。
+- 无 LLM、读已缓存数据 + 两个小 JSON + 启发式扫描，每 3 轮一次，开销可忽略。
+- 测试：`test_handle_message_paths.py` 新增 3 项（consolidation 跑 / 非 consolidation 跳过 / 失败不阻断）。全量 `514 passed, 1 skipped`。

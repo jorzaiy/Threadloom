@@ -102,6 +102,7 @@ def _install_fakes(monkeypatch, *, state, meta, history=None):
         'update_persona': lambda *a, **k: {},
         '_build_turn_audit': lambda *a, **k: {},
         '_store_turn_audit': lambda _meta, _audit: None,
+        'run_session_audit': lambda *a, **k: {'severity': 'ok', 'summary': {'issue_count': 0}, 'issues': []},
     }
     for name, fake in patches.items():
         monkeypatch.setattr(hm, name, fake)
@@ -236,3 +237,41 @@ def test_opening_guard_when_already_started(monkeypatch):
     resp = hm.handle_message(_payload(text='开始'))
     assert resp['usage']['model'] == 'opening-guard'
     assert '已经开始' in resp['reply']
+
+
+# ── periodic session audit (runs on consolidation turns) ─────────────────────
+
+def test_session_audit_runs_on_consolidation_turn(monkeypatch):
+    # turn 6 (last_turn_id 5) with consolidate_every=3 -> consolidation turn.
+    _install_fakes(monkeypatch, state=_RUNTIME_STATE, meta={'last_turn_id': 5, 'processed_client_turn_ids': {}})
+    calls = []
+    monkeypatch.setattr(hm, 'run_session_audit', lambda sid, **k: calls.append(sid) or {
+        'severity': 'warning', 'summary': {'issue_count': 1},
+        'issues': [{'type': 'style_drift', 'severity': 'warning', 'message': 'x'}],
+    })
+    resp = hm.handle_message(_payload(debug=True))
+    assert calls == ['sess-001']
+    assert resp['debug']['session_audit']['severity'] == 'warning'
+    assert resp['debug']['session_audit']['issues'][0]['type'] == 'style_drift'
+
+
+def test_session_audit_skipped_off_consolidation_turn(monkeypatch):
+    # turn 4 (last_turn_id 3) with consolidate_every=3 -> NOT a consolidation turn.
+    _install_fakes(monkeypatch, state=_RUNTIME_STATE, meta={'last_turn_id': 3, 'processed_client_turn_ids': {}})
+    calls = []
+    monkeypatch.setattr(hm, 'run_session_audit', lambda sid, **k: calls.append(sid) or {})
+    resp = hm.handle_message(_payload(debug=True))
+    assert calls == []
+    assert resp['debug'].get('session_audit') is None
+
+
+def test_session_audit_failure_never_blocks_turn(monkeypatch):
+    # A crashing auditor must not break the committed turn (diagnostic-only).
+    spies = _install_fakes(monkeypatch, state=_RUNTIME_STATE, meta={'last_turn_id': 5, 'processed_client_turn_ids': {}})
+    def boom(_sid, **k):
+        raise RuntimeError('audit exploded')
+    monkeypatch.setattr(hm, 'run_session_audit', boom)
+    resp = hm.handle_message(_payload(debug=True))
+    assert resp['reply'] == NARRATOR_REPLY      # turn still committed
+    assert len(spies['saved_state']) == 1
+    assert resp['debug'].get('session_audit') is None

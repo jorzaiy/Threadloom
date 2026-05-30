@@ -30,6 +30,7 @@ try:
     from .state_fragment import merge_state_skeleton
     from .event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
     from .memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
+    from .session_auditor import run_session_audit
 except ImportError:
     from arbiter_runtime import run_arbiter
     from arbiter_state import merge_arbiter_state
@@ -55,6 +56,7 @@ except ImportError:
     from state_fragment import merge_state_skeleton
     from event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
     from memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
+    from session_auditor import run_session_audit
 
 
 TRACE_PROMPT_LIMIT = 4000
@@ -1482,6 +1484,25 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         state_keeper_diagnostics=state_keeper_diagnostics if isinstance(state_keeper_diagnostics, dict) else {},
     )
 
+    session_audit_summary = None
+    if is_consolidation_turn:
+        # Periodic heuristic self-check (no LLM): refreshes diagnostics/audit_*.json
+        # and surfaces style / persona / NPC-consistency warnings to the debug panel.
+        # Diagnostic-only and wrapped so it can never block the committed turn.
+        try:
+            audit_report = run_session_audit(session_id)
+            session_audit_summary = {
+                'severity': audit_report.get('severity'),
+                'summary': audit_report.get('summary'),
+                'issues': [
+                    {'type': issue.get('type'), 'severity': issue.get('severity'), 'message': issue.get('message')}
+                    for issue in (audit_report.get('issues', []) or [])
+                ],
+            }
+            _message_stage('session_audited', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+        except Exception:
+            logger.exception('session audit failed: session=%s turn=%s', session_id, turn_id)
+
     response = {
         'session_id': session_id,
         'turn_id': turn_id,
@@ -1535,6 +1556,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
                 'system_npc_candidate_count': len(context.get('system_npc_candidates', []) or []),
                 'lorebook_npc_candidate_count': len(context.get('lorebook_npc_candidates', []) or []),
                 'npc_profile_count': len(context.get('npc_profiles', []) or []),
+                'session_audit': session_audit_summary,
             }
 
     _store_turn_audit(meta, turn_audit)
