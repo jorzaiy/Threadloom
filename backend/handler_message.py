@@ -889,6 +889,43 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
     return finalize_response(response, trace=trace)
 
 
+def _simple_opening_response(reply, *, usage_model, scene_mode, session_id, turn_id, ts, meta, client_turn_id, debug_enabled, state, turn_trace, finalize_response, append_turn_history):
+    """Commit a no-narrator opening/guard turn (opening-menu guard, already-started
+    guard, opening-command). These three paths share an identical commit tail;
+    only the reply text, usage model label, and scene/trace mode differ. Extracted
+    from handle_message; covered by tests/test_handle_message_paths.py."""
+    append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
+    response = {
+        'session_id': session_id,
+        'turn_id': turn_id,
+        'reply': reply,
+        'usage': {'model': usage_model, 'input_tokens': 0, 'output_tokens': 0},
+        'state_snapshot': build_state_snapshot(state),
+        'web': web_runtime_settings(),
+    }
+    if debug_enabled:
+        response['debug'] = {
+            'scene_mode': scene_mode,
+            'arbiter_used': False,
+            'arbiter_event_count': 0,
+            'active_persona': [],
+            'loaded_preset': 'world-sim-balanced',
+            'loaded_onstage': [],
+            'model_error': None,
+        }
+    meta['last_turn_id'] += 1
+    if client_turn_id:
+        meta['processed_client_turn_ids'][client_turn_id] = response
+    save_meta(session_id, meta)
+    trace = copy.deepcopy(turn_trace)
+    trace['mode'] = scene_mode
+    trace['post_turn'] = {
+        'state': copy.deepcopy(state),
+        'state_snapshot': build_state_snapshot(state),
+    }
+    return finalize_response(response, trace=trace)
+
+
 def _recent_history_pairs(history: list, limit: int = 3) -> list:
     """Collapse a flat history list into the last ``limit`` (user, assistant)
     content tuples. Extracted from handle_message; pure and independently
@@ -985,36 +1022,21 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             )
 
         reply = build_opening_reply(text) if is_opening_command(text) else '当前还在选择开局。请直接报数字、开局标题，或输入“随机开局”。'
-        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
-        response = {
-            'session_id': session_id,
-            'turn_id': turn_id,
-            'reply': reply,
-            'usage': {'model': 'opening-menu-guard', 'input_tokens': 0, 'output_tokens': 0},
-            'state_snapshot': build_state_snapshot(state),
-            'web': web_runtime_settings(),
-        }
-        if debug_enabled:
-            response['debug'] = {
-                'scene_mode': 'opening-menu',
-                'arbiter_used': False,
-                'arbiter_event_count': 0,
-                'active_persona': [],
-                'loaded_preset': 'world-sim-balanced',
-                'loaded_onstage': [],
-                'model_error': None,
-            }
-        meta['last_turn_id'] += 1
-        if client_turn_id:
-            meta['processed_client_turn_ids'][client_turn_id] = response
-        save_meta(session_id, meta)
-        trace = copy.deepcopy(turn_trace)
-        trace['mode'] = 'opening-menu'
-        trace['post_turn'] = {
-            'state': copy.deepcopy(state),
-            'state_snapshot': build_state_snapshot(state),
-        }
-        return finalize_response(response, trace=trace)
+        return _simple_opening_response(
+            reply,
+            usage_model='opening-menu-guard',
+            scene_mode='opening-menu',
+            session_id=session_id,
+            turn_id=turn_id,
+            ts=ts,
+            meta=meta,
+            client_turn_id=client_turn_id,
+            debug_enabled=debug_enabled,
+            state=state,
+            turn_trace=turn_trace,
+            finalize_response=finalize_response,
+            append_turn_history=append_turn_history,
+        )
 
     if meta['last_turn_id'] == 0:
         choice = resolve_opening_choice(text)
@@ -1034,70 +1056,40 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
 
     if state.get('opening_resolved') and state.get('opening_started') and is_opening_command(text):
         reply = '当前开局已经开始。若要重新选择开局，请点击“开始新游戏”。'
-        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
-        response = {
-            'session_id': session_id,
-            'turn_id': turn_id,
-            'reply': reply,
-            'usage': {'model': 'opening-guard', 'input_tokens': 0, 'output_tokens': 0},
-            'state_snapshot': build_state_snapshot(state),
-            'web': web_runtime_settings(),
-        }
-        if debug_enabled:
-            response['debug'] = {
-                'scene_mode': 'opening-guard',
-                'arbiter_used': False,
-                'arbiter_event_count': 0,
-                'active_persona': [],
-                'loaded_preset': 'world-sim-balanced',
-                'loaded_onstage': [],
-                'model_error': None,
-            }
-        meta['last_turn_id'] += 1
-        if client_turn_id:
-            meta['processed_client_turn_ids'][client_turn_id] = response
-        save_meta(session_id, meta)
-        trace = copy.deepcopy(turn_trace)
-        trace['mode'] = 'opening-guard'
-        trace['post_turn'] = {
-            'state': copy.deepcopy(state),
-            'state_snapshot': build_state_snapshot(state),
-        }
-        return finalize_response(response, trace=trace)
+        return _simple_opening_response(
+            reply,
+            usage_model='opening-guard',
+            scene_mode='opening-guard',
+            session_id=session_id,
+            turn_id=turn_id,
+            ts=ts,
+            meta=meta,
+            client_turn_id=client_turn_id,
+            debug_enabled=debug_enabled,
+            state=state,
+            turn_trace=turn_trace,
+            finalize_response=finalize_response,
+            append_turn_history=append_turn_history,
+        )
 
     if meta['last_turn_id'] == 0 and is_opening_command(text):
         state = initialize_opening_state(session_id)
         reply = build_opening_reply(text)
-        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
-        response = {
-            'session_id': session_id,
-            'turn_id': turn_id,
-            'reply': reply,
-            'usage': {'model': 'opening', 'input_tokens': 0, 'output_tokens': 0},
-            'state_snapshot': build_state_snapshot(state),
-            'web': web_runtime_settings(),
-        }
-        if debug_enabled:
-            response['debug'] = {
-                'scene_mode': 'opening',
-                'arbiter_used': False,
-                'arbiter_event_count': 0,
-                'active_persona': [],
-                'loaded_preset': 'world-sim-balanced',
-                'loaded_onstage': [],
-                'model_error': None,
-            }
-        meta['last_turn_id'] += 1
-        if client_turn_id:
-            meta['processed_client_turn_ids'][client_turn_id] = response
-        save_meta(session_id, meta)
-        trace = copy.deepcopy(turn_trace)
-        trace['mode'] = 'opening'
-        trace['post_turn'] = {
-            'state': copy.deepcopy(state),
-            'state_snapshot': build_state_snapshot(state),
-        }
-        return finalize_response(response, trace=trace)
+        return _simple_opening_response(
+            reply,
+            usage_model='opening',
+            scene_mode='opening',
+            session_id=session_id,
+            turn_id=turn_id,
+            ts=ts,
+            meta=meta,
+            client_turn_id=client_turn_id,
+            debug_enabled=debug_enabled,
+            state=state,
+            turn_trace=turn_trace,
+            finalize_response=finalize_response,
+            append_turn_history=append_turn_history,
+        )
 
     context = build_runtime_context(session_id, user_text=text)
     if not state:

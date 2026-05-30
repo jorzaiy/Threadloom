@@ -475,3 +475,19 @@ god-function 拆分（行为保持，由既有测试守护）：
 仍可继续：handle_message 三条 opening guard 路径（menu-guard / guard / command）的响应构建尾部仍有可合并的样板；现已被 harness 覆盖，后续可安全去重。
 
 验证：全量 `python3 -m pytest -q` = `498 passed, 1 skipped`（+10 为新 harness）。
+
+### 2026-05-30 (续3): handle_message opening guard 路径去重
+
+承接 (续2) 标记为"仍可继续"的项。在 characterization harness 守护下，把三条 no-narrator opening 路径（opening-menu guard / opening-guard / opening-command）共用的提交尾部抽成 `_simple_opening_response(reply, *, usage_model, scene_mode, ...)`——三处只在 reply 文本、usage model 标签、scene/trace mode 上不同，尾部（append history → 组装 response → debug 块 → meta 自增 → 幂等缓存 → trace → finalize）完全一致。`handle_message` → 587 行（本条 −45；当日累计 **807 → 587，−27%**）。
+
+行为不变核验：harness 三条 guard 测试（menu-guard / guard / command）+ 全量套件均过；"字符串字面量多重集 diff" 的差异**全部**是"3 份重复尾部 → 1 份 helper + 调用参数"的预期缩减，无任何语义字面量改动。
+
+验证：全量 `python3 -m pytest -q` = `498 passed, 1 skipped`。
+
+### 2026-05-30 本日小结
+
+当日工作分两批提交在 `foundation-hardening` 分支，测试套件 `419 → 498`（+79），全程无回归：
+- 地基收紧 4 项（测试地雷/conftest、loader 区分缺失-损坏、`_STORE_LOCK`、server 路由分发表）。
+- 补测试：`atomic_io` / `continuity_resolver` / bootstrap agents（原先 0 覆盖）。
+- 拆 god-function：`normalize_state_dict` 466→~280；`handle_message` 807→587（含首个端到端 characterization harness）。
+- 两处大重构（server 路由、handle_message）均以"字面量多重集 diff"佐证纯结构搬移。
