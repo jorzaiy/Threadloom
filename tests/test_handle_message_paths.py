@@ -210,6 +210,12 @@ def test_opening_menu_choice_drives_finalize_opening_choice(monkeypatch):
     assert 'error' not in resp
     assert 'state_snapshot' in resp
     assert len(spies['saved_state']) == 1      # opening choice commits the bootstrapped turn
+    # Opening flags must persist even though the (mocked) keeper rebuilt state from
+    # the unsaved disk baseline with opening_resolved=False -- otherwise the next
+    # turn falls back into the opening menu.
+    saved = spies['saved_state'][-1]
+    assert saved['opening_resolved'] is True
+    assert saved['opening_started'] is True
 
 
 def test_opening_choice_narrator_failure_does_not_commit(monkeypatch):

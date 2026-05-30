@@ -839,6 +839,13 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
     state['continuity_hints'] = normalized_hint_entries(session_id)
     state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
     state = resolve_important_npc_continuity(state)
+    # The opening choice is resolved this turn, but call_state_keeper rebuilt state
+    # from the disk baseline (initialize_opening_choice_state used persist=False, so
+    # the in-memory opening flags were never written), dropping opening_resolved /
+    # opening_started. Re-assert them before the single end-of-turn commit, or the
+    # next turn falls back into the opening menu ("当前还在选择开局").
+    state['opening_resolved'] = True
+    state['opening_started'] = True
     save_state(session_id, state)
     _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
 

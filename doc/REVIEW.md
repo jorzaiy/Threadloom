@@ -550,4 +550,16 @@ god-function 拆分（行为保持，由既有测试守护）：
 
 第二层核查（turn-trace 实证，40 轮）：keeper 其实**会**产出关系——`npc_relationships` 出现 14/40 次，**含 turn-194 给 石根 的"初识"**；只是绑定要求 NPC 已是 actor（`_find_actor_id_by_name` 找不到就丢），所以石根 的关系被丢弃了。`persona_patches` 仅 5/40 且几乎全是灵貂——因为 keeper prompt 明确"persona_patches 只能绑定已存在 actor_id"，石根 不是 actor 自然不写。**结论**：relationship 与 personality-hooks 都被"非 actor"卡住，本次解锁**同时打通两者**——石根 入册后，keeper 已有的关系产出会绑定、且 keeper 变得有资格给他写 persona_patches。无需额外改动；跑几轮后查 石根 的 `relationship_to_protagonist` 与 `actor_persona_hooks` 即可验证。
 
+### 2026-05-30 (续9): 修复开局选定后 opening 标记被 keeper 清回（碎影江湖 fafb9d）
+
+用户报：碎影江湖卡（需先选开局）的 session 已选开局却跳回"当前还在选择开局"。
+
+诊断（fafb9d turn-trace 实证；注意该 session 是 **5-28 跑的，非本次改动引入**，属 unified-transaction 开局流程的既有 bug）：turn-0001 是 opening-choice（选了"雨夜逢杀"），但 post_turn `opening_resolved=False / opening_started=False` → turn-0002 命中 opening-menu guard。根因：`finalize_opening_choice` 用 `initialize_opening_choice_state(persist=False)` 只在内存置 opening 标记（设计上跳过中间 checkpoint、回合末统一提交）；但随后 `call_state_keeper` 内部 `load_state` 从**磁盘**重建 baseline（磁盘 opening_resolved 仍为 False），其返回值覆盖内存 state → 末尾 save 把 False 落盘 → 下一轮回到开局菜单。keeper 失败时走的 `build_state_from_fragment(state, ...)` 反而保留内存标记，所以只在 keeper 成功的开局轮触发。
+
+修复：`finalize_opening_choice` 在末尾 `save_state` 前重新断言 `opening_resolved=True / opening_started=True`（进入该函数即意味着本轮已选定开局）；保留 persist=False 的"单次末尾提交"设计。
+
+测试：`test_opening_menu_choice_drives_finalize_opening_choice` 增断言——keeper（mock 返回 opening_resolved=False 模拟覆盖）后，落盘 state 的两个 opening 标记必须为 True。全量 `518 passed, 1 skipped`。
+
+注：已存在的 fafb9d 是坏档（磁盘已存 False），代码修复不回溯修它——单独把其 `state.json` 两个标记改回 True 即可继续。
+
 测试：新增 `test_actor_promotion.py`（4）；既有 `test_actor_registry` 不受影响。全量 `518 passed, 1 skipped`。
