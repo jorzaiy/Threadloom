@@ -1195,6 +1195,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         summary_chunks=summary_chunks,
         player_profile_sections=player_profile_sections,
         user_text=user_text,
+        recent_window_turns=recent_history_pairs,
     )
     player_profile_detail_ids = [str(hit.get('section_id', '') or '').strip() for hit in (selector_decision.get('player_profile_detail_hits', []) or []) if str(hit.get('section_id', '') or '').strip()]
     player_profile_detail_md = format_player_profile_detail_sections(player_profile_sections, player_profile_detail_ids)

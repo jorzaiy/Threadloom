@@ -518,3 +518,12 @@ god-function 拆分（行为保持，由既有测试守护）：
 - **写入层过滤**（`state_keeper` mannerisms 合并）：瞬时姿态不再存入 mannerisms，避免占满 `[-6:]` 把真实习惯挤掉。
 - e23032 实测：灵貂 6/6、陈掌柜 3/3 姿态 mannerism 被剔除，年轻男人保留"短暂停顿/低声回答"等抽象项；"大石后修士"hook 全抽象、零误删。
 - 测试：新增 `test_persona_hook_filter.py`（5）；既有 `test_narrator_setting_lock`（注入 mannerisms）与 `test_memory_transaction_guards`（mannerism 持久化断言）均不受影响。全量 `507 passed, 1 skipped`。
+
+### 2026-05-30 (续6): selector 事件召回排除最近窗口（backlog #3 → done）
+
+落地 (续4) backlog 第 2 项。`event_summary_hits` 的 `recency_bonus` 让【命中事件索引】反复召回最近窗口内的事件——这些事件的完整正文/逐回合提纲本就在 prompt 里，纯属冗余浪费预算。
+
+- `event_summary_hits` / `build_selector_decision` 新增 `recent_window_turns` 参数；落在 `(latest_turn - recent_window_turns, latest_turn]`（最近窗口）内的事件在召回时跳过。`context_builder` 传入 `recent_history_pairs`（默认 12）。默认 `0` = 不排除，向后兼容（既有 selector 测试不变）。
+- e23032 turn-227 实测：BEFORE 索引 = `[227,226,225,218]`（全在最近 12 轮窗内、已在 prompt 中）；AFTER = `[214,208,211,210]`（全部窗外，真正的远程召回）——4/4 冗余命中被替换为窗外有效召回。
+- 正向副作用：窗外事件 distance ≥ 窗长 → `recency_bonus` 归零，排序回归纯话题相关度，更符合"索引 = 窗外召回"的定位。
+- 测试：新增 `test_selector_window_exclusion.py`（4）；既有 `test_selector_recall`（默认 0）不受影响。全量 `511 passed, 1 skipped`。

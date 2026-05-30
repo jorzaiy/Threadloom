@@ -292,7 +292,7 @@ def _repeated_token_counts(items: list[dict]) -> dict[str, int]:
     return counts
 
 
-def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_history: list[dict], user_text: str = '') -> list[dict]:
+def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_history: list[dict], user_text: str = '', recent_window_turns: int = 0) -> list[dict]:
     recent_text = joined_recent_text(recent_history)
     current_text = '\n'.join([
         str(user_text or ''),
@@ -329,10 +329,17 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
     candidate_events = recent_events + long_range_events
     repeated_counts = _repeated_token_counts(recent_events)
     latest_turn = max((_turn_index(item, idx + 1) for idx, item in enumerate(candidate_events)), default=0)
+    # Events inside the recent window are already in the narrator prompt (recent
+    # full prose + per-turn outline); recalling them in the event index just
+    # wastes budget. The index is for surfacing OUT-of-window history.
+    window_floor = (latest_turn - recent_window_turns) if (recent_window_turns and latest_turn) else 0
     hits = []
     seen_clues: set[str] = set()
     for idx, item in enumerate(candidate_events):
         if not isinstance(item, dict):
+            continue
+        turn_idx = _turn_index(item, idx + 1)
+        if window_floor and turn_idx > window_floor:
             continue
         event_tokens = _topic_tokens(_event_text(item))
         shared = sorted(query_tokens & event_tokens)
@@ -357,7 +364,6 @@ def event_summary_hits(event_summaries: list[dict], *, state_json: dict, recent_
             continue
         if clue_key and clue_key in seen_clues and carryover_shared and not current_shared and not location_shared:
             continue
-        turn_idx = _turn_index(item, idx + 1)
         distance = max(0, latest_turn - turn_idx) if latest_turn else 0
         recency_bonus = max(0.0, 2.0 - min(distance, 8) * 0.25)
         repeated_penalty = sum(1 for token in shared if repeated_counts.get(token, 0) >= 4) * 0.5
@@ -630,11 +636,11 @@ def player_profile_detail_hits(profile_sections: list[dict], *, state_json: dict
     return hits[:3]
 
 
-def build_selector_decision(*, state_json: dict, recent_history: list[dict], keeper_records: dict, active_threads: list[dict], important_npcs: list[dict], onstage: list[str], relevant: list[str], lorebook_entries: list[dict], system_npc_candidates: list[dict], lorebook_npc_candidates: list[dict], event_summaries: list[dict], summary_text: str, summary_chunks: list[dict] | None = None, player_profile_sections: list[dict] | None = None, user_text: str = '') -> dict:
+def build_selector_decision(*, state_json: dict, recent_history: list[dict], keeper_records: dict, active_threads: list[dict], important_npcs: list[dict], onstage: list[str], relevant: list[str], lorebook_entries: list[dict], system_npc_candidates: list[dict], lorebook_npc_candidates: list[dict], event_summaries: list[dict], summary_text: str, summary_chunks: list[dict] | None = None, player_profile_sections: list[dict] | None = None, user_text: str = '', recent_window_turns: int = 0) -> dict:
     inject_lorebook = should_inject_lorebook_text(state_json, recent_history, keeper_records, lorebook_entries, active_threads, user_text=user_text)
     all_candidates = list(system_npc_candidates) + list(lorebook_npc_candidates)
     inject_candidates = should_inject_npc_candidates(onstage, relevant, active_threads, recent_history, important_npcs, all_candidates)
-    event_hits = event_summary_hits(event_summaries, state_json=state_json, recent_history=recent_history, user_text=user_text)
+    event_hits = event_summary_hits(event_summaries, state_json=state_json, recent_history=recent_history, user_text=user_text, recent_window_turns=recent_window_turns)
     chunk_hits = summary_chunk_hits(
         summary_chunks or [],
         recent_history=recent_history,
