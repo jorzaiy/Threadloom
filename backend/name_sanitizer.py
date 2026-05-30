@@ -180,6 +180,36 @@ def looks_like_low_quality_signal_fragment(item) -> bool:
     return False
 
 
+_POSTURE_BODY_PARTS = (
+    '耳朵', '耳根', '尾巴', '手指', '指尖', '手腕', '手掌', '掌心', '五指', '拳', '指甲',
+    '喉结', '喉咙', '眼', '眼睛', '眼角', '眼珠', '眼睫', '睫毛', '瞳孔', '嘴', '嘴角',
+    '嘴唇', '下唇', '舌', '舌根', '肩', '肩膀', '背', '背脊', '脊', '下巴', '脖', '颈',
+    '眉', '眉心', '脸', '脸色', '鼻', '脚', '腿', '膝', '胸', '腰',
+)
+_POSTURE_MOTIONS = (
+    '转', '竖', '弯', '缩', '抬', '压低', '眯', '翘', '扫', '晃', '滚动', '跳动',
+    '抿', '攥', '松开', '滑', '抖', '垂', '挑', '歪', '蜷', '颤', '哆嗦', '眨',
+    '动一下', '动了', '一下', '一瞬', '半寸', '一寸', '两息', '三息', '盯着', '张了',
+)
+
+
+def looks_like_transient_posture(item) -> bool:
+    """True for a one-off bodily posture / micro-action: a body part plus a
+    transient motion, e.g. '耳朵朝声源转一下又转回' or '喉结动一下'.
+
+    Such phrases get auto-captured by the keeper as persona hooks (mannerisms /
+    behavior_mode), then re-injected into the actor registry every turn, priming
+    the narrator to repeat the same gesture. Abstract dispositions ('谨慎多疑',
+    '低声回答', '先确认身份') contain no body part and are kept.
+    """
+    text = str(item or '').strip()
+    if not text:
+        return False
+    has_body = any(part in text for part in _POSTURE_BODY_PARTS)
+    has_motion = any(motion in text for motion in _POSTURE_MOTIONS)
+    return has_body and has_motion
+
+
 def is_protagonist_name(item) -> bool:
     text = sanitize_runtime_name(item)
     if not text:

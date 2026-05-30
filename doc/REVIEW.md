@@ -491,3 +491,30 @@ god-function 拆分（行为保持，由既有测试守护）：
 - 补测试：`atomic_io` / `continuity_resolver` / bootstrap agents（原先 0 覆盖）。
 - 拆 god-function：`normalize_state_dict` 466→~280；`handle_message` 807→587（含首个端到端 characterization harness）。
 - 两处大重构（server 路由、handle_message）均以"字面量多重集 diff"佐证纯结构搬移。
+
+### 2026-05-30 (续4): session e23032 诊断 + meta.json 幂等缓存瘦身
+
+对长会话 `九幽大陆-20260520-e23032`（227 turn pairs）做数据级体检。keeper/selector 整体健康（最近 40 轮 39 `llm-fill` / 0 fallback / 0 state_error / 40 complete；keeper 抽取结构干净），增长基本有界（`resolved_events[-20]`、`knowledge_records[-80]`、`event_summaries[-80]`）。修复了最高性价比项，其余列为 backlog。
+
+**已修复 —— meta.json 膨胀（每轮重写 3.4MB）：**
+- 根因：`processed_client_turn_ids` 幂等缓存存了 50 条**完整 response**（每条含 `state_snapshot` ~64KB），而 `state_snapshot` 本就持久化在 `state.json`，是纯冗余；`save_meta` 每轮把整个 meta 重写一遍。
+- 修复：`MAX_IDEMPOTENCY_CACHE` 50→8；`save_meta` 改为按**插入顺序**保留最近 N 条（旧的 lexical-key 排序在 client_turn_id 非时序时会误删最新条，顺手修了这个潜在 bug）；handler 缓存前用 `_slim_cached_response` 剥离 `state_snapshot`，命中时从当前 state 重建（保持 response 形态），并把两处 inline 缓存收敛进 `_cache_processed_turn`。
+- 效果（e23032 模拟）：`meta.json` 3400KB → ~125KB（~27x），新会话每轮写入相应减小；幂等语义保持（slim 条仍带 reply/turn_id/usage），旧条（含 snapshot）命中时 verbatim 返回，向后兼容。
+- 测试：新增 `test_runtime_store_meta.py`（3，含"插入序 vs lexical"回归）；`test_handle_message_paths.py` 更新 slim 缓存断言 + 命中重建 + legacy 条 verbatim。全量 `502 passed, 1 skipped`。
+
+**待推进 backlog（按性价比，证据见会话数据）：**
+1. persona/`role_label` 固化单轮微动作 —— auditor 自报 `persona_micro_action_hooks` warning；e23032 npc_roster 实证（灵貂 role="耳朵朝右前方竖着"、灰布衫="手指弯了弯又松开" 被当成稳定特征 → narrator 重复描写风险）。
+2. selector 事件召回与最近窗口重叠 —— turn-227 的 4 条 event_hits 有 3 条（turn 224/225/226）已在 6 轮全窗内，却仍经【命中事件索引】重复注入；应排除窗内 turn。
+3. session auditor 自动化 —— 现为手动、`diagnostics/` 停在 5-23（会话已到 turn 227）；可挂到 consolidation turn 定期跑并把 warning 浮到 debug 面板。
+4. selector bigram 碎片噪音残留（`刀的`/`物正`/`向三`）—— 2026-05-27 修复压住大头但未根除。
+5. `actors` 字典只增不减（e23032：23 个仅 6 active）；可压缩长期归档 actor。
+
+### 2026-05-30 (续5): persona hook 单轮微动作固化修复（backlog #2 → done）
+
+落地 (续4) backlog 第 1 项。keeper 把单轮瞬时姿态（"耳朵朝声源转一下又转回"、"喉结动一下"）当成稳定 persona hook 写入 `actor_persona_hooks`，每轮注入【角色注册表】→ narrator 反复描写同一动作；auditor 早已报 `persona_micro_action_hooks` warning。
+
+- 新增 `name_sanitizer.looks_like_transient_posture(text)`：身体部位 + 瞬时动作标记 ⇒ 判为瞬时姿态（比 auditor 的 prose-tuned `micro_action_score` 覆盖更广，耳朵/尾巴/转/竖 等都纳入）。对 e23032 真实 hook 验证：9/9 姿态命中、7/7 抽象倾向保留。
+- **渲染层过滤**（`narrator_input._format_actor_registry`）：语气/行为/决策偏好/受压反应字段与 mannerisms 中的瞬时姿态在入 prompt 前剔除——对**存量 + 新**会话即时生效、不动落盘数据、可逆。
+- **写入层过滤**（`state_keeper` mannerisms 合并）：瞬时姿态不再存入 mannerisms，避免占满 `[-6:]` 把真实习惯挤掉。
+- e23032 实测：灵貂 6/6、陈掌柜 3/3 姿态 mannerism 被剔除，年轻男人保留"短暂停顿/低声回答"等抽象项；"大石后修士"hook 全抽象、零误删。
+- 测试：新增 `test_persona_hook_filter.py`（5）；既有 `test_narrator_setting_lock`（注入 mannerisms）与 `test_memory_transaction_guards`（mannerism 持久化断言）均不受影响。全量 `507 passed, 1 skipped`。

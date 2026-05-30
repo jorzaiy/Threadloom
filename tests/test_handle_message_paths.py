@@ -132,6 +132,8 @@ def test_successful_runtime_turn_commits_and_caches(monkeypatch):
     last_meta = spies['saved_meta'][-1]
     assert last_meta['last_turn_id'] == 6
     assert last_meta['processed_client_turn_ids']['ct-9']['reply'] == NARRATOR_REPLY
+    # cached entry is slimmed (state_snapshot dropped; rehydrated on hit)
+    assert 'state_snapshot' not in last_meta['processed_client_turn_ids']['ct-9']
 
 
 def test_debug_flag_adds_debug_block(monkeypatch):
@@ -141,6 +143,8 @@ def test_debug_flag_adds_debug_block(monkeypatch):
 
 
 def test_idempotency_cache_hit_short_circuits(monkeypatch):
+    # Cached entries are stored slim (no state_snapshot); the hit path rehydrates
+    # the snapshot from current state so the replayed response keeps its shape.
     cached = {'reply': 'CACHED', 'turn_id': 'turn-0003'}
     spies = _install_fakes(
         monkeypatch,
@@ -148,9 +152,24 @@ def test_idempotency_cache_hit_short_circuits(monkeypatch):
         meta={'last_turn_id': 5, 'processed_client_turn_ids': {'ct-1': cached}},
     )
     resp = hm.handle_message(_payload(client_turn_id='ct-1'))
-    assert resp == cached
-    assert spies['saved_state'] == []          # nothing committed
+    assert resp['reply'] == 'CACHED'
+    assert resp['turn_id'] == 'turn-0003'
+    assert resp['state_snapshot'] == {'_snapshot': True}   # rehydrated from current state
+    assert spies['saved_state'] == []          # nothing committed (no reprocessing)
     assert spies['appended'] == []             # no history written
+
+
+def test_idempotency_hit_returns_legacy_entry_with_snapshot_verbatim(monkeypatch):
+    # Backward compat: a pre-existing cached entry that still carries a
+    # state_snapshot is returned as-is (no double rehydrate).
+    cached = {'reply': 'OLD', 'turn_id': 'turn-0002', 'state_snapshot': {'legacy': True}}
+    _install_fakes(
+        monkeypatch,
+        state=_RUNTIME_STATE,
+        meta={'last_turn_id': 5, 'processed_client_turn_ids': {'ct-2': cached}},
+    )
+    resp = hm.handle_message(_payload(client_turn_id='ct-2'))
+    assert resp == cached
 
 
 def test_runtime_narrator_failure_returns_unavailable(monkeypatch):

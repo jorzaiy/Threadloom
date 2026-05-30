@@ -93,9 +93,22 @@ def _message_stage(stage: str, *, session_id: str, turn_id: str, client_turn_id:
     )
 
 
+def _slim_cached_response(response: dict) -> dict:
+    """Drop the heavy state_snapshot before caching a response for idempotency.
+
+    The snapshot is already persisted in state.json; caching a copy per turn
+    (x MAX_IDEMPOTENCY_CACHE) is what bloated meta.json to multiple MB. On a
+    cache hit, handle_message rehydrates state_snapshot from the current state so
+    the replayed response keeps its normal shape.
+    """
+    if isinstance(response, dict) and 'state_snapshot' in response:
+        return {k: v for k, v in response.items() if k != 'state_snapshot'}
+    return response
+
+
 def _cache_processed_turn(session_id: str, meta: dict, client_turn_id: str, response: dict) -> None:
     if client_turn_id:
-        meta['processed_client_turn_ids'][client_turn_id] = response
+        meta['processed_client_turn_ids'][client_turn_id] = _slim_cached_response(response)
     save_meta(session_id, meta)
 
 
@@ -914,9 +927,7 @@ def _simple_opening_response(reply, *, usage_model, scene_mode, session_id, turn
             'model_error': None,
         }
     meta['last_turn_id'] += 1
-    if client_turn_id:
-        meta['processed_client_turn_ids'][client_turn_id] = response
-    save_meta(session_id, meta)
+    _cache_processed_turn(session_id, meta, client_turn_id, response)
     trace = copy.deepcopy(turn_trace)
     trace['mode'] = scene_mode
     trace['post_turn'] = {
@@ -976,7 +987,11 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
             session_id,
             client_turn_id,
         )
-        return meta['processed_client_turn_ids'][client_turn_id]
+        cached = meta['processed_client_turn_ids'][client_turn_id]
+        if isinstance(cached, dict) and 'state_snapshot' not in cached:
+            # Rehydrate the snapshot dropped at cache time (see _slim_cached_response).
+            cached = {**cached, 'state_snapshot': build_state_snapshot(load_state(session_id))}
+        return cached
 
     turn_id = f"turn-{meta['last_turn_id'] + 1:04d}"
     ts = int(time.time() * 1000)
@@ -1409,9 +1424,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         'post_commit_status': 'state_saved',
     }
     meta['last_turn_id'] += 1
-    if client_turn_id:
-        meta['processed_client_turn_ids'][client_turn_id] = committed_response
-    save_meta(session_id, meta)
+    _cache_processed_turn(session_id, meta, client_turn_id, committed_response)
     _message_stage('idempotency_cached_state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     summary_chunk_result = update_summary_chunks(session_id, use_llm=not unified_memory_transaction)
     _message_stage('summary_chunks_updated', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)

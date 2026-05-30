@@ -3,6 +3,11 @@ import json
 import re
 from typing import Optional
 
+try:
+    from .name_sanitizer import looks_like_transient_posture
+except ImportError:
+    from name_sanitizer import looks_like_transient_posture
+
 
 def prompt_block_stats(system_prompt: str) -> list[dict]:
     parts = re.split(r'\n\n(?=【)', str(system_prompt or ''))
@@ -195,10 +200,16 @@ def _format_actor_registry(actors: dict, context_index: dict, persona_hooks: dic
         hook_parts = []
         for label, key in (('语气', 'speech_style'), ('行为', 'behavior_mode'), ('决策偏好', 'decision_bias'), ('受压反应', 'stress_response')):
             text = _safe_prompt_data(hooks.get(key, ''), 120)
-            if text:
+            # Skip hook fields that are really a one-off bodily posture: injecting
+            # the same micro-action every turn primes the narrator to repeat it.
+            if text and not looks_like_transient_posture(text):
                 hook_parts.append(f'{label}={text}')
         mannerisms = hooks.get('mannerisms', []) if isinstance(hooks.get('mannerisms', []), list) else []
-        mannerism_text = ' / '.join(_safe_prompt_data(item, 60) for item in mannerisms[:3] if _safe_prompt_data(item, 60))
+        mannerism_items = [
+            safe for safe in (_safe_prompt_data(item, 60) for item in mannerisms)
+            if safe and not looks_like_transient_posture(safe)
+        ]
+        mannerism_text = ' / '.join(mannerism_items[:3])
         if mannerism_text:
             hook_parts.append(f'习惯动作={mannerism_text}')
         if hook_parts:

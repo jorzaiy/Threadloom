@@ -1067,15 +1067,23 @@ def web_runtime_settings() -> dict:
     }
 
 
-MAX_IDEMPOTENCY_CACHE = 50
+# Idempotency cache only needs to cover a client re-sending a very recent turn
+# (a network retry). Keep it small: meta.json is rewritten every turn, so a large
+# cap of cached responses bloats it to multiple MB. handler_message stores a slim
+# copy (without the heavy state_snapshot) and rehydrates the snapshot from current
+# state on a cache hit.
+MAX_IDEMPOTENCY_CACHE = 8
 
 
 def save_meta(session_id: str, meta: dict) -> None:
     with _STORE_LOCK:
         cache = meta.get('processed_client_turn_ids', {})
         if isinstance(cache, dict) and len(cache) > MAX_IDEMPOTENCY_CACHE:
-            sorted_keys = sorted(cache.keys())
-            for key in sorted_keys[:len(cache) - MAX_IDEMPOTENCY_CACHE]:
-                del cache[key]
+            # Keep the most recently inserted entries (dict preserves insertion
+            # order, which matches turn order). client_turn_ids are client-supplied
+            # and need not sort chronologically, so the old lexical-key prune could
+            # drop the newest entry instead of the oldest.
+            keep = list(cache)[-MAX_IDEMPOTENCY_CACHE:]
+            meta['processed_client_turn_ids'] = {key: cache[key] for key in keep}
         path = session_paths(session_id)['meta']
         _atomic_write_json(path, meta)

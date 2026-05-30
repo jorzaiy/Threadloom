@@ -20,7 +20,7 @@ try:
     from .model_config import load_runtime_config
     from .state_fragment import build_state_from_fragment
     from .name_sanitizer import is_protagonist_name, protagonist_names
-    from .name_sanitizer import sanitize_runtime_name
+    from .name_sanitizer import sanitize_runtime_name, looks_like_transient_posture
     from .card_hints import (
         get_environment_tokens, get_transient_group_tokens,
         get_non_character_object_tokens, get_generic_target_tokens,
@@ -35,7 +35,7 @@ except ImportError:
     from model_config import load_runtime_config
     from state_fragment import build_state_from_fragment
     from name_sanitizer import is_protagonist_name, protagonist_names
-    from name_sanitizer import sanitize_runtime_name
+    from name_sanitizer import sanitize_runtime_name, looks_like_transient_posture
     from card_hints import (
         get_environment_tokens, get_transient_group_tokens,
         get_non_character_object_tokens, get_generic_target_tokens,
@@ -1319,6 +1319,9 @@ def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
                     text = str(item or '').strip()
                     if text and text not in existing:
                         existing.append(text)
+                # Drop one-off bodily postures so a transient gesture doesn't fossilize
+                # as a habit and crowd out genuine recurring mannerisms (capped at 6).
+                existing = [item for item in existing if not looks_like_transient_posture(item)]
                 updated['mannerisms'] = existing[-6:]
             updated['confidence'] = patch.get('confidence', previous.get('confidence', 0.35))
             hooks[actor_id] = updated
