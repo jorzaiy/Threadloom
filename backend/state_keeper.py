@@ -1394,6 +1394,240 @@ def _restore_current_turn_onstage_marker(baseline_state: dict, state_fragment: d
     return restored
 
 
+def _onstage_name_surfaces(name: str) -> set[str]:
+    clean = sanitize_runtime_name(name)
+    if not clean:
+        return set()
+    surfaces = {clean}
+    stripped = normalize_keeper_object_label(clean)
+    if stripped and stripped != clean:
+        surfaces.add(stripped)
+    match = re.search(r'[（(]([^）)]{1,8})[）)]', clean)
+    if match:
+        inner = sanitize_runtime_name(match.group(1))
+        if inner:
+            surfaces.add(inner)
+    for base in list(surfaces):
+        for suffix in ('男人', '女人', '妇人', '汉子', '老汉', '车夫'):
+            if not base.endswith(suffix) or len(base) <= len(suffix):
+                continue
+            stem = base[:-len(suffix)].replace('的', '').strip()
+            if not stem:
+                continue
+            surfaces.add(stem + suffix)
+            surfaces.add(stem + '的' + suffix)
+            if stem.endswith('子') and len(stem) >= 3:
+                surfaces.add(stem[:-1] + suffix)
+                surfaces.add(stem[:-1] + '的' + suffix)
+    return {item for item in surfaces if item}
+
+
+def _name_has_current_text_evidence(name: str, text: str) -> bool:
+    haystack = str(text or '')
+    if not haystack:
+        return False
+    departure_markers = ('走了', '离开', '离去', '已走', '已经走', '不在', '消失', '散了', '空了', '没回来')
+    for surface in _onstage_name_surfaces(name):
+        if not surface:
+            continue
+        start = 0
+        while True:
+            idx = haystack.find(surface, start)
+            if idx < 0:
+                break
+            window = haystack[max(0, idx - 8): idx + len(surface) + 16]
+            if not any(marker in window for marker in departure_markers):
+                return True
+            start = idx + len(surface)
+    return False
+
+
+def _compatible_onstage_label(name: str, names: list[str]) -> str:
+    clean = sanitize_runtime_name(name)
+    if not clean:
+        return ''
+    for existing in names:
+        value = sanitize_runtime_name(existing)
+        if value and (value == clean or entity_labels_compatible(value, clean)):
+            return value
+    return clean
+
+
+def _upsert_compatible_name(names: list[str], name: str, *, limit: int = 6) -> None:
+    clean = sanitize_runtime_name(name)
+    if not clean:
+        return
+    for idx, existing in enumerate(list(names)):
+        value = sanitize_runtime_name(existing)
+        if value and (value == clean or entity_labels_compatible(value, clean)):
+            names[idx] = clean
+            return
+    if len(names) < limit:
+        names.append(clean)
+
+
+def _find_fragment_entity_for_name(name: str, label: str, fragment_entities: list[dict]) -> dict | None:
+    names = [sanitize_runtime_name(item) for item in (name, label) if sanitize_runtime_name(item)]
+    for entity in fragment_entities:
+        primary = sanitize_runtime_name(entity.get('primary_label', ''))
+        if primary and any(primary == item or entity_labels_compatible(primary, item) for item in names):
+            return dict(entity)
+    return None
+
+
+def _merge_onstage_entity(target: dict, source: dict | None, candidate: str, *, prefer_source_label: bool = False) -> dict:
+    merged = dict(target or {})
+    source = dict(source or {})
+    original_primary = sanitize_runtime_name(merged.get('primary_label', ''))
+    source_primary = sanitize_runtime_name(source.get('primary_label', ''))
+    candidate_name = sanitize_runtime_name(candidate)
+    if source:
+        for key in ('entity_id', 'possible_link'):
+            if source.get(key) and (prefer_source_label or not merged.get(key)):
+                merged[key] = source.get(key)
+        if source.get('role_label'):
+            merged['role_label'] = source.get('role_label')
+    if prefer_source_label and source_primary:
+        merged['primary_label'] = source_primary
+    elif not sanitize_runtime_name(merged.get('primary_label', '')):
+        merged['primary_label'] = source_primary or candidate_name
+    aliases = []
+    for raw in (
+        list(merged.get('aliases', []) or [])
+        + [original_primary]
+        + list(source.get('aliases', []) or [])
+        + [source_primary, candidate_name]
+    ):
+        alias = sanitize_runtime_name(raw)
+        primary = sanitize_runtime_name(merged.get('primary_label', ''))
+        if alias and alias != primary and alias not in aliases:
+            aliases.append(alias)
+    if aliases:
+        merged['aliases'] = aliases[:8]
+    merged['onstage'] = True
+    return merged
+
+
+def _compact_scene_entities_preserving_onstage(entities: list[dict], onstage_names: list[str]) -> list[dict]:
+    onstage_clean = [sanitize_runtime_name(name) for name in onstage_names if sanitize_runtime_name(name)]
+
+    def onstage_index(entity: dict) -> int:
+        primary = sanitize_runtime_name(entity.get('primary_label', ''))
+        for idx, name in enumerate(onstage_clean):
+            if primary and (primary == name or entity_labels_compatible(primary, name)):
+                return idx
+        return 999
+
+    ranked = sorted(
+        enumerate(entities or []),
+        key=lambda item: (not bool(item[1].get('onstage')), onstage_index(item[1]), item[0]),
+    )
+    out: list[dict] = []
+    for _idx, entity in ranked:
+        if not isinstance(entity, dict):
+            continue
+        primary = sanitize_runtime_name(entity.get('primary_label', ''))
+        if not primary:
+            continue
+        duplicate = next((
+            existing for existing in out
+            if entity_labels_compatible(sanitize_runtime_name(existing.get('primary_label', '')), primary)
+        ), None)
+        if duplicate:
+            duplicate['onstage'] = bool(duplicate.get('onstage')) or bool(entity.get('onstage'))
+            aliases = list(duplicate.get('aliases', []) or [])
+            for raw in list(entity.get('aliases', []) or []) + [primary]:
+                alias = sanitize_runtime_name(raw)
+                dup_primary = sanitize_runtime_name(duplicate.get('primary_label', ''))
+                if alias and alias != dup_primary and alias not in aliases:
+                    aliases.append(alias)
+            if aliases:
+                duplicate['aliases'] = aliases[:8]
+            continue
+        out.append(dict(entity))
+        if len(out) >= 12:
+            break
+    return out
+
+
+def _merge_fragment_onstage_with_text_evidence(state: dict, state_fragment: dict, narrator_reply: str, *, user_text: str = '') -> dict:
+    """Keep current-turn NPCs when keeper narrows them but prose still supports them."""
+    if not isinstance(state, dict) or not isinstance(state_fragment, dict):
+        return state
+    evidence_text = '\n'.join(part for part in (narrator_reply, user_text) if str(part or '').strip())
+    if not evidence_text:
+        return state
+    candidates: list[str] = []
+    for field in ('_current_turn_onstage_npcs', 'onstage_npcs'):
+        raw = state_fragment.get(field, [])
+        if isinstance(raw, str):
+            raw = [raw]
+        for item in raw or []:
+            name = sanitize_runtime_name(item)
+            if name and name not in candidates and not is_protagonist_name(name):
+                candidates.append(name)
+    for entity in state_fragment.get('scene_entities', []) or []:
+        if not isinstance(entity, dict) or not entity.get('onstage'):
+            continue
+        name = sanitize_runtime_name(entity.get('primary_label', ''))
+        if name and name not in candidates and not is_protagonist_name(name):
+            candidates.append(name)
+
+    if not candidates:
+        return state
+
+    merged = dict(state)
+    onstage = [sanitize_runtime_name(name) for name in (merged.get('onstage_npcs', []) or []) if sanitize_runtime_name(name)]
+    current_marker = [sanitize_runtime_name(name) for name in (merged.get('_current_turn_onstage_npcs', []) or []) if sanitize_runtime_name(name)]
+    entities = [dict(item) for item in (merged.get('scene_entities', []) or []) if isinstance(item, dict)]
+    fragment_entities = [dict(item) for item in (state_fragment.get('scene_entities', []) or []) if isinstance(item, dict)]
+
+    for candidate in candidates:
+        if not _name_has_current_text_evidence(candidate, evidence_text):
+            continue
+        label = _compatible_onstage_label(candidate, onstage)
+        source = _find_fragment_entity_for_name(candidate, label, fragment_entities)
+        source_primary = sanitize_runtime_name(source.get('primary_label', '')) if source else ''
+        preferred_label = source_primary or sanitize_runtime_name(label)
+        _upsert_compatible_name(onstage, preferred_label)
+        _upsert_compatible_name(current_marker, preferred_label)
+
+        exact_idx = None
+        compatible_idx = None
+        for idx, entity in enumerate(entities):
+            primary = sanitize_runtime_name(entity.get('primary_label', ''))
+            if not primary:
+                continue
+            if primary in {sanitize_runtime_name(candidate), sanitize_runtime_name(label), source_primary}:
+                exact_idx = idx
+                break
+            if compatible_idx is None and (entity_labels_compatible(primary, candidate) or entity_labels_compatible(primary, label) or (source_primary and entity_labels_compatible(primary, source_primary))):
+                compatible_idx = idx
+        target_idx = exact_idx if exact_idx is not None else compatible_idx
+        if target_idx is not None:
+            entities[target_idx] = _merge_onstage_entity(
+                entities[target_idx],
+                source,
+                candidate,
+                prefer_source_label=bool(source_primary and exact_idx is None),
+            )
+            primary_label = sanitize_runtime_name(entities[target_idx].get('primary_label', ''))
+            _upsert_compatible_name(onstage, primary_label)
+            _upsert_compatible_name(current_marker, primary_label)
+            continue
+        if source:
+            source = _merge_onstage_entity(source, source, candidate, prefer_source_label=True)
+            entities.append(source)
+
+    if onstage:
+        merged['onstage_npcs'] = onstage[:6]
+    if current_marker:
+        merged['_current_turn_onstage_npcs'] = current_marker[:6]
+    if entities:
+        merged['scene_entities'] = _compact_scene_entities_preserving_onstage(entities, merged.get('onstage_npcs', []))
+    return merged
+
+
 def call_skeleton_keeper(prev_state: dict, state_fragment: dict, narrator_reply: str, *, return_trace: bool = False):
     user_prompt = _skeleton_user_prompt(prev_state, state_fragment, narrator_reply)
     reply_text, usage = call_role_llm('state_keeper_candidate', SKELETON_KEEPER_SYSTEM, user_prompt)
@@ -2261,6 +2495,7 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
         field_acceptance=field_acceptance,
     )
 
+    new_state = _merge_fragment_onstage_with_text_evidence(new_state, state_fragment, narrator_reply, user_text=user_text)
     new_state = normalize_state_dict(new_state, prev_state=prev_state, session_id=session_id)
 
     # Fallback: if keeper produced empty onstage_npcs but state_fragment had values, retain them

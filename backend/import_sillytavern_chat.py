@@ -10,7 +10,7 @@ from pathlib import Path
 from atomic_io import atomic_write_bytes, atomic_write_json
 from bootstrap_session import load_runtime_config, read_text, resolve_source_from_config
 from paths import current_session_owner_context, normalize_session_id, reset_active_character_override, resolve_session_dir, set_active_character_override
-from runtime_store import append_history, build_state_snapshot, save_canon, save_context, save_meta, save_state, save_summary, seed_default_state, session_paths
+from runtime_store import build_state_snapshot, save_canon, save_context, save_history, save_meta, save_state, save_summary, seed_default_state, session_paths
 from state_bridge import parse_root_state_markdown
 
 
@@ -294,8 +294,7 @@ def import_sillytavern_jsonl(source_path: Path, *, target_session: str | None = 
             character_name=inferred_character_name,
             user_name=inferred_user_name,
         )
-        for item in history_items:
-            append_history(session_id, item)
+        save_history(session_id, history_items)
 
         import_dir = paths['session_dir'] / 'imports'
         import_dir.mkdir(parents=True, exist_ok=True)

@@ -405,3 +405,89 @@ session `0a1f32` 中 `main_event` 和 thread label 反复出现"只有时间+地
 **根因**：`_add_lightweight_knowledge_delta` 每轮把物品持有状态追加到 `knowledge_scope.protagonist.learned`，然后 `[-10:]` 截断把 keeper 提取的关键知识挤掉。到 `update_actor_registry` 转写 `knowledge_records` 时，信息已丢失。
 
 **修复**：`_add_lightweight_knowledge_delta` 直接写入 `knowledge_records`，不再经过 `knowledge_scope` 中间层，避免与 keeper 输出竞争配额。
+
+## 2026-05-30: 地基收紧 —— 测试地雷、store loader、并发锁、server 路由分发
+
+本轮不改 runtime 行为，只针对外部审查指出的“实现层债务”做四项最高性价比收口，并补齐 server 路由层缺失的回归测试。
+
+### 1. 测试地雷清理 + 统一 sys.path
+
+**问题**：`tests/` 下 4 个 script 式文件（`test_full_regression.py`、`test_keeper_e2e.py`、`test_keeper_summary.py`、`test_http_regression_current.py`）不是可被 pytest 收集的单元测试——前三个的 `test_` 函数带必填位置参数，第四个在隔离运行时因 `from backend.runtime_store import` 触发 `ModuleNotFoundError: character_assets` 而 collection error，只在全量跑时被其他文件的 `sys.path` 插入掩盖，是顺序相关的隐患。
+
+**修复**：
+- 4 个脚本 `git mv` 到 `scripts/manual-checks/`（去掉 `test_` 前缀），修正其 `sys.path` 引导以适配新深度，并附 `README` 说明它们是手动 live 脚本。
+- 新增仓库根 `conftest.py`，在任何测试收集前把仓库根与 `backend/` 同时放上 `sys.path`，使单文件运行与全量运行的收集行为一致，彻底消除顺序相关的 collection error。
+- `pytest.ini` 增加 `testpaths = tests`，bare `pytest` 只收集 `tests/`。
+
+### 2. runtime_store loader 区分“缺失”与“损坏”
+
+**问题**：`runtime_store.py` 约 11 个 loader 用 `try: json.loads(...) except Exception: return {}` 静默吞掉解析失败；尤其 `load_state` 在 `state.json` 损坏时返回 `{}`，与“文件不存在”完全无法区分，会静默走 seed-default 把整个会话状态丢掉。
+
+**修复**：抽出统一 `_load_json(path, default, *, backup_corrupt=True)`——缺失返回 default 的深拷贝；解析失败 `logger.exception` 记录，并把损坏文件 `os.replace` 移到 `<name>.corrupt` 保留后再返回 default。机器生成的 session 数据用 `backup_corrupt=True`，用户手编文件（`config/runtime.json`、`character-data.json`）用 `backup_corrupt=False` 只记录不挪动。所有简单 loader 改用此 helper，消除重复样板。
+
+### 3. _history_cache 与核心 read-modify-write 加锁
+
+**问题**：模块级 `_history_cache` 在 `ThreadingHTTPServer` 下被无锁读写；`append_history`、`append/upsert_event_summary`、`save_meta`、history 分片重建等 read-modify-write 只靠 server 层 per-session 进程内锁，跨 session 并发无保护。
+
+**修复**：参照 `player_profile.PLAYER_PROFILE_LOCK`，新增模块级 `_STORE_LOCK = threading.RLock()`，包住 `_history_cache` 读写与 `load_history / save_history / append_history / append_event_summary / upsert_event_summary / save_meta / ensure_history_shards`。用 RLock 以支持 `append_history -> save_history -> invalidate_history_cache` 的嵌套重入。
+
+### 4. server.py 路由分发表
+
+**问题**：`do_POST`（530 行）、`do_GET`（318 行）是扁平 `if parsed.path == ...` 链，每条路由重复 `session_id 提取 → normalize → scope 校验` 样板，且 token 重置样板在每个 early return 重复约 8 处，易漏。
+
+**修复**：
+- `_request_scope(method)` context manager 统一请求壳（解析用户上下文 + 多用户 contextvar，`finally` 必定重置），token 重置从约 8 处收敛到 1 处。
+- `_resolve_scoped_session(raw, *, allow_missing)` 收敛约 9 处 session 前导，失败时发对应 400/404/409 并返回 None。
+- `do_GET/do_POST/do_DELETE` 改为 `_GET_ROUTES / _POST_ROUTES / _DELETE_ROUTES` 的 path→handler 分发表 + 提取的 `_get_* / _post_* / _delete_*` handler；favicon / character-cover 原先的 fall-through 改为显式 `unknown route` 404（行为不变）。
+- 新增 `tests/test_server_routing.py`（server.py 首个单元测试）：钉死三张表的精确路由集合、handler 可调用、共享 handler 身份，以及 `_resolve_scoped_session` 与 health 分发行为。
+
+### 验证
+
+- 全量 `python3 -m pytest -q`：`428 passed, 1 skipped`（较改动前 +9，全部来自新 server 路由测试）。
+- server.py 重构通过“字符串字面量多重集 HEAD↔工作树 diff”核对：所有响应字段、错误码、消息字符串计数不变，差异仅为有意去重的 session 前导消息与两处显式 404，证明 50+ handler body 转写忠实。
+- `_load_json` 行为单测：缺失→独立 default、损坏→default + `.corrupt` 备份、用户配置损坏→原地保留。
+
+### 2026-05-30 (续): 中期项 —— 补测试与 god-function 拆分
+
+承接上一条的地基收紧，本轮推进 REVIEW 列出的中期项：给未覆盖模块补单测，并把两个 god-function 拆成命名可测单元（行为不变）。
+
+补测试（这些模块之前 0 覆盖）：
+- `tests/test_atomic_io.py`（11）：原子写入成功/失败的原子性、损坏不污染原文件、json/text/bytes round-trip、`mode` 权限、父目录创建。
+- `tests/test_continuity_resolver.py`（9）：important NPC 续场的证据打分、跳过条件、`relevant_npcs` 6 上限、输入不可变（deepcopy）。
+- `tests/test_bootstrap_agents.py`（32）：npc/object/clue 三个 bootstrap agent 的 normalize/merge/启发式提取/物件标签校验/name canonicalize，以及 `ensure_npc_registry` 的 LLM-mock 解析、processed_pairs 门控与坏回复 heuristic fallback。
+
+god-function 拆分（行为保持，由既有测试守护）：
+- `state_bridge.normalize_state_dict`（466 行）抽出 `_normalize_object_layer`（~190 行：tracked object 合并/退役入 graveyard/possession/visibility/decay）与 `_normalize_signal_layer`（~28 行：carryover signals → risks/clues），主函数降到 ~280 行；由 `test_state_fragment`（127）+ `test_state_keeper_partial_accept` 等 141 个既有测试守护。
+- `handler_message.handle_message`（807 行）抽出纯函数 `_recent_history_pairs` 与 `_apply_pending_npc_bios`，并新增 `tests/test_handler_message_helpers.py`（8）直接覆盖。
+
+已识别但本轮未做（风险边界）：`handle_message` 仍无端到端直测（`test_regenerate_turn` 把它整体 mock 了，`test_opening_memory_transaction` 测的是 `opening.initialize_opening_choice_state` 而非 handler）。其 178 行 `finalize_opening_choice` 闭包与多条 guard 路径的深度拆分应先建 characterization 测试 harness（mock narrator / skeleton+state keeper / storage 驱动各路径），再做提取，避免在零覆盖的中枢代码上引入静默回归。
+
+验证：全量 `python3 -m pytest -q` = `488 passed, 1 skipped`（较上一条 +60，全部为新增测试）。
+
+### 2026-05-30 (续2): handle_message characterization harness + finalize_opening_choice 提取
+
+补上前一条标记为"待办"的部分：先给 `handle_message` 建 characterization 测试 harness，再在其守护下把 178 行 `finalize_opening_choice` 闭包提到模块级。
+
+- `tests/test_handle_message_paths.py`（10）：用 fake 替换 narrator / skeleton+state keeper / storage / context / trackers，驱动**真实** `handle_message` 走完每条路径——runtime 提交、debug 块、幂等命中短路、narrator 失败（NARRATOR_UNAVAILABLE）、partial（NARRATOR_INCOMPLETE）、opening-menu guard、opening-choice、opening-choice narrator 失败不提交、opening-command、opening-guard。断言可观察契约（响应形态、是否提交 history/state/meta、幂等缓存），不测 keeper 内部。这是该函数首个端到端覆盖。
+- 在 harness 守护下把 `finalize_opening_choice` 提为模块级 `_finalize_opening_choice(choice, *, session_id, ...)`（10 个显式参数，并注入 `finalize_response` / `append_turn_history` 两个 handler-local 闭包）；`handle_message` 从 807 → 632 行。
+- 行为不变核验：harness 18 测全过；"字符串字面量多重集 HEAD↔工作树 diff" 完全一致（纯结构搬移，无逻辑字面量改动）。
+
+仍可继续：handle_message 三条 opening guard 路径（menu-guard / guard / command）的响应构建尾部仍有可合并的样板；现已被 harness 覆盖，后续可安全去重。
+
+验证：全量 `python3 -m pytest -q` = `498 passed, 1 skipped`（+10 为新 harness）。
+
+### 2026-05-30 (续3): handle_message opening guard 路径去重
+
+承接 (续2) 标记为"仍可继续"的项。在 characterization harness 守护下，把三条 no-narrator opening 路径（opening-menu guard / opening-guard / opening-command）共用的提交尾部抽成 `_simple_opening_response(reply, *, usage_model, scene_mode, ...)`——三处只在 reply 文本、usage model 标签、scene/trace mode 上不同，尾部（append history → 组装 response → debug 块 → meta 自增 → 幂等缓存 → trace → finalize）完全一致。`handle_message` → 587 行（本条 −45；当日累计 **807 → 587，−27%**）。
+
+行为不变核验：harness 三条 guard 测试（menu-guard / guard / command）+ 全量套件均过；"字符串字面量多重集 diff" 的差异**全部**是"3 份重复尾部 → 1 份 helper + 调用参数"的预期缩减，无任何语义字面量改动。
+
+验证：全量 `python3 -m pytest -q` = `498 passed, 1 skipped`。
+
+### 2026-05-30 本日小结
+
+当日工作分两批提交在 `foundation-hardening` 分支，测试套件 `419 → 498`（+79），全程无回归：
+- 地基收紧 4 项（测试地雷/conftest、loader 区分缺失-损坏、`_STORE_LOCK`、server 路由分发表）。
+- 补测试：`atomic_io` / `continuity_resolver` / bootstrap agents（原先 0 覆盖）。
+- 拆 god-function：`normalize_state_dict` 466→~280；`handle_message` 807→587（含首个端到端 characterization harness）。
+- 两处大重构（server 路由、handle_message）均以"字面量多重集 diff"佐证纯结构搬移。

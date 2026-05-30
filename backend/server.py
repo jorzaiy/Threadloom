@@ -9,6 +9,7 @@ import time
 import sys
 import weakref
 from base64 import b64decode
+from contextlib import contextmanager
 from contextvars import Token
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -475,896 +476,918 @@ class Handler(BaseHTTPRequestHandler):
             return None, None, False
         return uid, token, True
 
-    def do_GET(self):
+    @contextmanager
+    def _request_scope(self, method: str):
+        # Shared request envelope for every verb: resolve the per-request user
+        # context, mirror it into the multi-user contextvar, and ALWAYS reset
+        # both on the way out (any return or raise inside the ``with`` block).
+        # This replaces the token-reset blocks that were previously duplicated
+        # at every early return in do_GET / do_POST / do_DELETE.
         parsed = urlparse(self.path)
-        _, user_token, authorized = self._begin_request_user(parsed.path, 'GET')
+        _, user_token, authorized = self._begin_request_user(parsed.path, method)
         multi_user_token = begin_multi_user_request_context() if authorized else None
-        if not authorized:
-            return
-        qs = parse_qs(parsed.query, keep_blank_values=True)
-        if business_query_has_user_id(parsed.path, qs):
-            self._invalid_input('business API must not include user_id')
-            if user_token is not None:
-                reset_active_user_id(user_token)
-            if multi_user_token is not None:
-                reset_multi_user_request_context(multi_user_token)
-            return
-        session_id = (qs.get('session_id') or [''])[0].strip()
-        before_raw = (qs.get('before') or [''])[0].strip()
-
         try:
-            if parsed.path == '/api/health':
-                return self._send(200, {
-                    'ok': True,
-                    'service': 'threadloom-backend',
-                    'host': HOST,
-                    'port': PORT,
-                })
-
-            if parsed.path == '/api/state':
-                if not session_id:
-                    return self._invalid_input('session_id is required')
-                try:
-                    session_id = normalize_session_id(session_id)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                if not self._validate_active_session_scope(session_id, allow_missing=True):
-                    return
-                if not self._session_exists(session_id):
-                    return self._send(200, {
-                        'session_id': session_id,
-                        'state': build_state_snapshot({}),
-                        'character_card': load_character_card_meta(),
-                        'web': web_runtime_settings(),
-                    })
-                state = load_state(session_id)
-                return self._send(200, {
-                    'session_id': session_id,
-                    'state': build_state_snapshot(state),
-                    'character_card': load_character_card_meta(),
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/sessions':
-                sessions = list_sessions()
-                default_session_id = next((item['session_id'] for item in sessions if not item.get('archived') and not item.get('replay')), '')
-                return self._send(200, {
-                    'sessions': sessions,
-                    'default_session_id': default_session_id,
-                    'character_card': load_character_card_meta(),
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/providers':
-                payload = list_provider_configs()
-                payload['web'] = web_runtime_settings()
-                return self._send(200, payload)
-
-            if parsed.path == '/api/characters':
-                return self._send(200, {
-                    'characters': list_character_cards(),
-                    'active_character_id': load_character_card_meta().get('character_id', ''),
-                    'character_card': load_character_card_meta(),
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/user-profile':
-                profile = load_base_player_profile()
-                try:
-                    profile = validate_unified_player_profile(profile)
-                except ValueError:
-                    profile = legacy_profile_to_unified(profile)
-                return self._send(200, {
-                    'profile': profile,
-                    'source_text': read_profile_source(base_player_profile_source_path()),
-                    'prompt_preview': render_runtime_player_profile_markdown(profile),
-                    'avatar_url': '/user-avatar' if resolve_user_avatar_path() else None,
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/character/profile-override':
-                override = load_character_player_profile_override()
-                try:
-                    override = validate_unified_player_profile(override)
-                except ValueError:
-                    override = legacy_profile_to_unified(override)
-                return self._send(200, {
-                    'override': override,
-                    'source_text': read_profile_source(character_player_profile_override_source_path()),
-                    'prompt_preview': render_runtime_player_profile_markdown(override),
-                    'character_card': load_character_card_meta(),
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/user-avatar':
-                avatar_path = resolve_user_avatar_path()
-                if not avatar_path or not avatar_path.exists():
-                    return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'avatar not found'}})
-                content_type = 'image/png'
-                if avatar_path.suffix.lower() in {'.jpg', '.jpeg'}:
-                    content_type = 'image/jpeg'
-                elif avatar_path.suffix.lower() == '.webp':
-                    content_type = 'image/webp'
-                return self._send_raw(
-                    200,
-                    avatar_path.read_bytes(),
-                    content_type=content_type,
-                    extra_headers=USER_ASSET_CACHE_HEADERS,
-                )
-
-            if parsed.path == '/api/site-config':
-                payload = get_site_config_snapshot()
-                if active_user_id() != DEFAULT_USER_ID:
-                    payload.pop('api_key_masked', None)
-                    payload.pop('api_key_reference', None)
-                payload['supported_api_types'] = list_provider_configs()['supported_api_types']
-                payload['web'] = web_runtime_settings()
-                return self._send(200, payload)
-
-            if parsed.path == '/api/model-config':
-                payload = get_model_config_snapshot()
-                payload['web'] = web_runtime_settings()
-                return self._send(200, payload)
-
-            if parsed.path == '/api/narrator-preset':
-                preset_id = (qs.get('preset_id') or qs.get('id') or [''])[0].strip()
-                try:
-                    return self._send(200, load_narrator_preset(preset_id))
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-
-            if parsed.path == '/api/users':
-                if not MULTI_USER_PRODUCT_ENABLED:
-                    return self._send(403, _experimental_disabled_payload('multi-user management'))
-                caller = self._authenticated_admin_user()
-                if caller != DEFAULT_USER_ID:
-                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可查看用户列表'}})
-                return self._send(200, {
-                    'users': list_users(),
-                    'storage': list_user_storage_audit(),
-                    'multi_user_enabled': is_multi_user_enabled(),
-                })
-
-            if parsed.path == '/api/auth/me':
-                uid = resolve_user_from_request(dict(self.headers))
-                if is_multi_user_enabled() and uid is None:
-                    return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': 'login required'}})
-                role = 'admin' if uid == DEFAULT_USER_ID else 'user'
-                token = self._extract_token() or self._extract_cookie_token()
-                headers = {'Set-Cookie': auth_cookie_header(token)} if uid and is_safe_session_token(token) else None
-                # admin_has_password lets the frontend know whether the
-                # "enable multi-user" wizard needs to set a password first.
-                payload = {
-                    'user_id': uid or '',
-                    'role': role,
-                    'multi_user_enabled': is_multi_user_enabled(),
-                    'admin_has_password': admin_has_password(),
-                    'token': token if uid and is_safe_session_token(token) else '',
-                }
-                if headers:
-                    return self._send(200, payload, extra_headers=headers)
-                return self._send(200, payload)
-
-            if parsed.path == '/api/history':
-                if not session_id:
-                    return self._invalid_input('session_id is required')
-                try:
-                    session_id = normalize_session_id(session_id)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                if not self._validate_active_session_scope(session_id, allow_missing=True):
-                    return
-                before: int | None = None
-                if before_raw:
-                    try:
-                        before = int(before_raw)
-                    except ValueError:
-                        return self._invalid_input('before must be an integer')
-                    if before < 0:
-                        return self._invalid_input('before must be >= 0')
-                if not self._session_exists(session_id):
-                    return self._send(200, {
-                        'session_id': session_id,
-                        'messages': [],
-                        'has_more': False,
-                        'next_before': None,
-                        'total_count': 0,
-                        'character_card': load_character_card_meta(),
-                        'web': web_runtime_settings(),
-                    })
-                page_size = web_runtime_settings().get('history_page_size', 80)
-                all_messages = filter_committed_history_items(load_history(session_id))
-                total_count = len(all_messages)
-                end = total_count if before is None else min(before, total_count)
-                start = max(0, end - page_size)
-                messages = all_messages[start:end]
-                return self._send(200, {
-                    'session_id': session_id,
-                    'messages': messages,
-                    'has_more': start > 0,
-                    'next_before': start if start > 0 else None,
-                    'total_count': total_count,
-                    'character_card': load_character_card_meta(),
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/entity':
-                entity_id = (qs.get('entity_id') or [''])[0].strip()
-                if not session_id or not entity_id:
-                    return self._invalid_input('session_id and entity_id are required')
-                try:
-                    session_id = normalize_session_id(session_id)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                if not self._validate_active_session_scope(session_id, allow_missing=False):
-                    return
-                if not self._session_exists(session_id):
-                    return self._send(404, {'error': {'code': 'SESSION_NOT_FOUND', 'message': 'session not found'}})
-                state = load_state(session_id)
-                entities = build_entity_map(state, session_id=session_id)
-                entity = entities.get(entity_id)
-                if not entity:
-                    return self._send(404, {'error': {'code': 'ENTITY_NOT_FOUND', 'message': 'entity not found'}})
-                return self._send(200, {'session_id': session_id, 'entity': entity})
-
-            if parsed.path in {'/', '/index.html'}:
-                if is_multi_user_enabled() and not resolve_user_from_request(dict(self.headers), allow_cookie=True):
-                    return self._send_login_page()
-                index_path = Path(__file__).resolve().parents[1] / 'frontend' / 'index.html'
-                body = index_path.read_bytes()
-                return self._send_raw(200, body, content_type='text/html; charset=utf-8')
-
-            if parsed.path == '/app.js':
-                app_path = Path(__file__).resolve().parents[1] / 'frontend' / 'app.js'
-                body = app_path.read_bytes()
-                return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
-
-            if parsed.path == '/login.js':
-                login_path = Path(__file__).resolve().parents[1] / 'frontend' / 'login.js'
-                body = login_path.read_bytes()
-                return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
-
-            if parsed.path == '/marked.min.js':
-                marked_path = Path(__file__).resolve().parents[1] / 'frontend' / 'marked.min.js'
-                body = marked_path.read_bytes()
-                return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
-
-            if parsed.path == '/styles.css':
-                css_path = Path(__file__).resolve().parents[1] / 'frontend' / 'styles.css'
-                body = css_path.read_bytes()
-                return self._send_raw(200, body, content_type='text/css; charset=utf-8')
-
-            if parsed.path == '/favicon.svg':
-                icon_path = Path(__file__).resolve().parents[1] / 'frontend' / 'favicon.svg'
-                if icon_path.exists():
-                    body = icon_path.read_bytes()
-                    return self._send_raw(200, body, content_type='image/svg+xml')
-
-            if parsed.path == '/character-cover':
-                requested_character = (qs.get('character_id') or [''])[0].strip()
-                requested_variant = (qs.get('variant') or [''])[0].strip()
-                if requested_character and requested_character != active_character_id():
-                    if not is_valid_character_id_param(requested_character):
-                        return self._invalid_input('invalid character_id')
-                    from character_manager import current_user_character_root
-                    cover_path = None
-                    character_root = current_user_character_root() / requested_character
-                    asset_root = character_root / 'source' / 'assets'
-                    stems = [requested_variant] if requested_variant in {'cover-small', 'cover', 'cover-original'} else ['cover-small', 'cover', 'cover-original']
-                    for stem in stems:
-                        for ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
-                            candidate = asset_root / f'{stem}{ext}'
-                            if candidate.exists():
-                                cover_path = candidate
-                                break
-                        if cover_path:
-                            break
-                    if cover_path is None:
-                        imported_root = character_root / 'source' / 'imported'
-                        for candidate in sorted(imported_root.glob('*.original.*')):
-                            if candidate.is_file():
-                                cover_path = candidate
-                                break
-                else:
-                    cover_path = resolve_character_cover_path()
-                if cover_path and cover_path.exists():
-                    if is_multi_user_enabled() and not is_path_within_user_root(cover_path):
-                        return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'cover not found'}})
-                    body = cover_path.read_bytes()
-                    mime = 'image/png'
-                    if cover_path.suffix.lower() in {'.jpg', '.jpeg'}:
-                        mime = 'image/jpeg'
-                    elif cover_path.suffix.lower() == '.webp':
-                        mime = 'image/webp'
-                    elif cover_path.suffix.lower() == '.gif':
-                        mime = 'image/gif'
-                    return self._send_raw(
-                        200,
-                        body,
-                        content_type=mime,
-                        extra_headers=USER_ASSET_CACHE_HEADERS,
-                    )
-
-            return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
-        except Exception as err:
-            return self._handle_exception(err, route=parsed.path)
+            yield parsed, authorized
         finally:
             if user_token is not None:
                 reset_active_user_id(user_token)
             if multi_user_token is not None:
                 reset_multi_user_request_context(multi_user_token)
+
+    def _resolve_scoped_session(self, raw: str, *, allow_missing: bool) -> str | None:
+        # Normalize a session_id and confirm it belongs to the active character.
+        # On any failure the matching 400/404/409 response is sent and None is
+        # returned, so callers simply ``return`` on None.
+        session_id = str(raw or '').strip()
+        if not session_id:
+            self._invalid_input('session_id is required')
+            return None
+        try:
+            session_id = normalize_session_id(session_id)
+        except ValueError as err:
+            self._invalid_input(str(err))
+            return None
+        if not self._validate_active_session_scope(session_id, allow_missing=allow_missing):
+            return None
+        return session_id
+
+    def do_GET(self):
+        with self._request_scope('GET') as (parsed, authorized):
+            if not authorized:
+                return
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            if business_query_has_user_id(parsed.path, qs):
+                return self._invalid_input('business API must not include user_id')
+            try:
+                handler = self._GET_ROUTES.get(parsed.path)
+                if handler is None:
+                    return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
+                return handler(self, parsed, qs)
+            except Exception as err:
+                return self._handle_exception(err, route=parsed.path)
+
+    def _get_health(self, parsed, qs):
+        return self._send(200, {
+            'ok': True,
+            'service': 'threadloom-backend',
+            'host': HOST,
+            'port': PORT,
+        })
+
+    def _get_state(self, parsed, qs):
+        session_id = self._resolve_scoped_session((qs.get('session_id') or [''])[0], allow_missing=True)
+        if session_id is None:
+            return
+        if not self._session_exists(session_id):
+            return self._send(200, {
+                'session_id': session_id,
+                'state': build_state_snapshot({}),
+                'character_card': load_character_card_meta(),
+                'web': web_runtime_settings(),
+            })
+        state = load_state(session_id)
+        return self._send(200, {
+            'session_id': session_id,
+            'state': build_state_snapshot(state),
+            'character_card': load_character_card_meta(),
+            'web': web_runtime_settings(),
+        })
+
+    def _get_sessions(self, parsed, qs):
+        sessions = list_sessions()
+        default_session_id = next((item['session_id'] for item in sessions if not item.get('archived') and not item.get('replay')), '')
+        return self._send(200, {
+            'sessions': sessions,
+            'default_session_id': default_session_id,
+            'character_card': load_character_card_meta(),
+            'web': web_runtime_settings(),
+        })
+
+    def _get_providers(self, parsed, qs):
+        payload = list_provider_configs()
+        payload['web'] = web_runtime_settings()
+        return self._send(200, payload)
+
+    def _get_characters(self, parsed, qs):
+        return self._send(200, {
+            'characters': list_character_cards(),
+            'active_character_id': load_character_card_meta().get('character_id', ''),
+            'character_card': load_character_card_meta(),
+            'web': web_runtime_settings(),
+        })
+
+    def _get_user_profile(self, parsed, qs):
+        profile = load_base_player_profile()
+        try:
+            profile = validate_unified_player_profile(profile)
+        except ValueError:
+            profile = legacy_profile_to_unified(profile)
+        return self._send(200, {
+            'profile': profile,
+            'source_text': read_profile_source(base_player_profile_source_path()),
+            'prompt_preview': render_runtime_player_profile_markdown(profile),
+            'avatar_url': '/user-avatar' if resolve_user_avatar_path() else None,
+            'web': web_runtime_settings(),
+        })
+
+    def _get_character_profile_override(self, parsed, qs):
+        override = load_character_player_profile_override()
+        try:
+            override = validate_unified_player_profile(override)
+        except ValueError:
+            override = legacy_profile_to_unified(override)
+        return self._send(200, {
+            'override': override,
+            'source_text': read_profile_source(character_player_profile_override_source_path()),
+            'prompt_preview': render_runtime_player_profile_markdown(override),
+            'character_card': load_character_card_meta(),
+            'web': web_runtime_settings(),
+        })
+
+    def _get_user_avatar(self, parsed, qs):
+        avatar_path = resolve_user_avatar_path()
+        if not avatar_path or not avatar_path.exists():
+            return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'avatar not found'}})
+        content_type = 'image/png'
+        if avatar_path.suffix.lower() in {'.jpg', '.jpeg'}:
+            content_type = 'image/jpeg'
+        elif avatar_path.suffix.lower() == '.webp':
+            content_type = 'image/webp'
+        return self._send_raw(
+            200,
+            avatar_path.read_bytes(),
+            content_type=content_type,
+            extra_headers=USER_ASSET_CACHE_HEADERS,
+        )
+
+    def _get_site_config(self, parsed, qs):
+        payload = get_site_config_snapshot()
+        if active_user_id() != DEFAULT_USER_ID:
+            payload.pop('api_key_masked', None)
+            payload.pop('api_key_reference', None)
+        payload['supported_api_types'] = list_provider_configs()['supported_api_types']
+        payload['web'] = web_runtime_settings()
+        return self._send(200, payload)
+
+    def _get_model_config(self, parsed, qs):
+        payload = get_model_config_snapshot()
+        payload['web'] = web_runtime_settings()
+        return self._send(200, payload)
+
+    def _get_narrator_preset(self, parsed, qs):
+        preset_id = (qs.get('preset_id') or qs.get('id') or [''])[0].strip()
+        try:
+            return self._send(200, load_narrator_preset(preset_id))
+        except ValueError as err:
+            return self._invalid_input(str(err))
+
+    def _get_users(self, parsed, qs):
+        if not MULTI_USER_PRODUCT_ENABLED:
+            return self._send(403, _experimental_disabled_payload('multi-user management'))
+        caller = self._authenticated_admin_user()
+        if caller != DEFAULT_USER_ID:
+            return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可查看用户列表'}})
+        return self._send(200, {
+            'users': list_users(),
+            'storage': list_user_storage_audit(),
+            'multi_user_enabled': is_multi_user_enabled(),
+        })
+
+    def _get_auth_me(self, parsed, qs):
+        uid = resolve_user_from_request(dict(self.headers))
+        if is_multi_user_enabled() and uid is None:
+            return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': 'login required'}})
+        role = 'admin' if uid == DEFAULT_USER_ID else 'user'
+        token = self._extract_token() or self._extract_cookie_token()
+        headers = {'Set-Cookie': auth_cookie_header(token)} if uid and is_safe_session_token(token) else None
+        # admin_has_password lets the frontend know whether the
+        # "enable multi-user" wizard needs to set a password first.
+        payload = {
+            'user_id': uid or '',
+            'role': role,
+            'multi_user_enabled': is_multi_user_enabled(),
+            'admin_has_password': admin_has_password(),
+            'token': token if uid and is_safe_session_token(token) else '',
+        }
+        if headers:
+            return self._send(200, payload, extra_headers=headers)
+        return self._send(200, payload)
+
+    def _get_history(self, parsed, qs):
+        session_id = self._resolve_scoped_session((qs.get('session_id') or [''])[0], allow_missing=True)
+        if session_id is None:
+            return
+        before_raw = (qs.get('before') or [''])[0].strip()
+        before: int | None = None
+        if before_raw:
+            try:
+                before = int(before_raw)
+            except ValueError:
+                return self._invalid_input('before must be an integer')
+            if before < 0:
+                return self._invalid_input('before must be >= 0')
+        if not self._session_exists(session_id):
+            return self._send(200, {
+                'session_id': session_id,
+                'messages': [],
+                'has_more': False,
+                'next_before': None,
+                'total_count': 0,
+                'character_card': load_character_card_meta(),
+                'web': web_runtime_settings(),
+            })
+        page_size = web_runtime_settings().get('history_page_size', 80)
+        all_messages = filter_committed_history_items(load_history(session_id))
+        total_count = len(all_messages)
+        end = total_count if before is None else min(before, total_count)
+        start = max(0, end - page_size)
+        messages = all_messages[start:end]
+        return self._send(200, {
+            'session_id': session_id,
+            'messages': messages,
+            'has_more': start > 0,
+            'next_before': start if start > 0 else None,
+            'total_count': total_count,
+            'character_card': load_character_card_meta(),
+            'web': web_runtime_settings(),
+        })
+
+    def _get_entity(self, parsed, qs):
+        entity_id = (qs.get('entity_id') or [''])[0].strip()
+        session_id_raw = (qs.get('session_id') or [''])[0].strip()
+        if not session_id_raw or not entity_id:
+            return self._invalid_input('session_id and entity_id are required')
+        session_id = self._resolve_scoped_session(session_id_raw, allow_missing=False)
+        if session_id is None:
+            return
+        if not self._session_exists(session_id):
+            return self._send(404, {'error': {'code': 'SESSION_NOT_FOUND', 'message': 'session not found'}})
+        state = load_state(session_id)
+        entities = build_entity_map(state, session_id=session_id)
+        entity = entities.get(entity_id)
+        if not entity:
+            return self._send(404, {'error': {'code': 'ENTITY_NOT_FOUND', 'message': 'entity not found'}})
+        return self._send(200, {'session_id': session_id, 'entity': entity})
+
+    def _get_index(self, parsed, qs):
+        if is_multi_user_enabled() and not resolve_user_from_request(dict(self.headers), allow_cookie=True):
+            return self._send_login_page()
+        index_path = Path(__file__).resolve().parents[1] / 'frontend' / 'index.html'
+        body = index_path.read_bytes()
+        return self._send_raw(200, body, content_type='text/html; charset=utf-8')
+
+    def _get_app_js(self, parsed, qs):
+        app_path = Path(__file__).resolve().parents[1] / 'frontend' / 'app.js'
+        body = app_path.read_bytes()
+        return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
+
+    def _get_login_js(self, parsed, qs):
+        login_path = Path(__file__).resolve().parents[1] / 'frontend' / 'login.js'
+        body = login_path.read_bytes()
+        return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
+
+    def _get_marked_js(self, parsed, qs):
+        marked_path = Path(__file__).resolve().parents[1] / 'frontend' / 'marked.min.js'
+        body = marked_path.read_bytes()
+        return self._send_raw(200, body, content_type='application/javascript; charset=utf-8')
+
+    def _get_styles_css(self, parsed, qs):
+        css_path = Path(__file__).resolve().parents[1] / 'frontend' / 'styles.css'
+        body = css_path.read_bytes()
+        return self._send_raw(200, body, content_type='text/css; charset=utf-8')
+
+    def _get_favicon(self, parsed, qs):
+        icon_path = Path(__file__).resolve().parents[1] / 'frontend' / 'favicon.svg'
+        if icon_path.exists():
+            body = icon_path.read_bytes()
+            return self._send_raw(200, body, content_type='image/svg+xml')
+        # Missing favicon falls through to the same "unknown route" 404 the
+        # original if-chain produced.
+        return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
+
+    def _get_character_cover(self, parsed, qs):
+        requested_character = (qs.get('character_id') or [''])[0].strip()
+        requested_variant = (qs.get('variant') or [''])[0].strip()
+        if requested_character and requested_character != active_character_id():
+            if not is_valid_character_id_param(requested_character):
+                return self._invalid_input('invalid character_id')
+            from character_manager import current_user_character_root
+            cover_path = None
+            character_root = current_user_character_root() / requested_character
+            asset_root = character_root / 'source' / 'assets'
+            stems = [requested_variant] if requested_variant in {'cover-small', 'cover', 'cover-original'} else ['cover-small', 'cover', 'cover-original']
+            for stem in stems:
+                for ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
+                    candidate = asset_root / f'{stem}{ext}'
+                    if candidate.exists():
+                        cover_path = candidate
+                        break
+                if cover_path:
+                    break
+            if cover_path is None:
+                imported_root = character_root / 'source' / 'imported'
+                for candidate in sorted(imported_root.glob('*.original.*')):
+                    if candidate.is_file():
+                        cover_path = candidate
+                        break
+        else:
+            cover_path = resolve_character_cover_path()
+        if cover_path and cover_path.exists():
+            if is_multi_user_enabled() and not is_path_within_user_root(cover_path):
+                return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'cover not found'}})
+            body = cover_path.read_bytes()
+            mime = 'image/png'
+            if cover_path.suffix.lower() in {'.jpg', '.jpeg'}:
+                mime = 'image/jpeg'
+            elif cover_path.suffix.lower() == '.webp':
+                mime = 'image/webp'
+            elif cover_path.suffix.lower() == '.gif':
+                mime = 'image/gif'
+            return self._send_raw(
+                200,
+                body,
+                content_type=mime,
+                extra_headers=USER_ASSET_CACHE_HEADERS,
+            )
+        # No matching cover falls through to the same "unknown route" 404.
+        return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
+
+    _GET_ROUTES = {
+        '/api/health': _get_health,
+        '/api/state': _get_state,
+        '/api/sessions': _get_sessions,
+        '/api/providers': _get_providers,
+        '/api/characters': _get_characters,
+        '/api/user-profile': _get_user_profile,
+        '/api/character/profile-override': _get_character_profile_override,
+        '/user-avatar': _get_user_avatar,
+        '/api/site-config': _get_site_config,
+        '/api/model-config': _get_model_config,
+        '/api/narrator-preset': _get_narrator_preset,
+        '/api/users': _get_users,
+        '/api/auth/me': _get_auth_me,
+        '/api/history': _get_history,
+        '/api/entity': _get_entity,
+        '/': _get_index,
+        '/index.html': _get_index,
+        '/app.js': _get_app_js,
+        '/login.js': _get_login_js,
+        '/marked.min.js': _get_marked_js,
+        '/styles.css': _get_styles_css,
+        '/favicon.svg': _get_favicon,
+        '/character-cover': _get_character_cover,
+    }
 
     def do_POST(self):
-        parsed = urlparse(self.path)
-        _, user_token, authorized = self._begin_request_user(parsed.path, 'POST')
-        multi_user_token = begin_multi_user_request_context() if authorized else None
-        if not authorized:
-            return
-        payload = self._read_json_payload()
-        if payload is None:
-            if user_token is not None:
-                reset_active_user_id(user_token)
-            if multi_user_token is not None:
-                reset_multi_user_request_context(multi_user_token)
-            return
-        if business_payload_has_user_id(parsed.path, payload):
-            self._invalid_input('business API must not include user_id')
-            if user_token is not None:
-                reset_active_user_id(user_token)
-            if multi_user_token is not None:
-                reset_multi_user_request_context(multi_user_token)
-            return
+        with self._request_scope('POST') as (parsed, authorized):
+            if not authorized:
+                return
+            payload = self._read_json_payload()
+            if payload is None:
+                return
+            if business_payload_has_user_id(parsed.path, payload):
+                return self._invalid_input('business API must not include user_id')
+            try:
+                handler = self._POST_ROUTES.get(parsed.path)
+                if handler is None:
+                    return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
+                return handler(self, parsed, payload)
+            except Exception as err:
+                return self._handle_exception(err, route=parsed.path)
 
+    def _post_new_game(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=True)
+        if session_id is None:
+            return
+        with self._session_lock(session_id):
+            return self._send(200, start_new_game(session_id))
+
+    def _post_delete_session(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        with self._session_lock(session_id):
+            return self._send(200, delete_session(session_id))
+
+    def _post_regenerate_last(self, parsed, payload):
+        session_id = str(payload.get('session_id', '') or '').strip()
+        if not session_id:
+            return self._invalid_input('session_id is required')
+        allow_complete = payload_bool(payload, 'allow_complete', required=False)
+        scoped = self._resolve_scoped_session(session_id, allow_missing=False)
+        if scoped is None:
+            return
+        session_id = scoped
+        with self._session_lock(session_id):
+            result = regenerate_last_partial(session_id, allow_complete=allow_complete)
+        status = 200 if 'error' not in result else 400
+        return self._send(status, result)
+
+    def _post_delete_latest_turn(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        with self._session_lock(session_id):
+            result = delete_latest_turn(session_id)
+            if 'error' not in result:
+                result['messages'] = filter_committed_history_items(load_history(session_id))
+                result['state_snapshot'] = build_state_snapshot(load_state(session_id))
+                result['character_card'] = load_character_card_meta()
+                result['web'] = web_runtime_settings()
+        status = 200 if 'error' not in result else 400
+        return self._send(status, result)
+
+    def _post_message(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=True)
+        if session_id is None:
+            return
+        payload['session_id'] = session_id
+        with self._session_lock(session_id):
+            result = handle_message(payload)
+        status = 200 if 'error' not in result else 400
+        logger.info(
+            'MESSAGE_STAGE stage=http_response_start session_id=%s turn_id=%s status=%s has_error=%s',
+            session_id,
+            result.get('turn_id', '-') if isinstance(result, dict) else '-',
+            status,
+            'error' in result if isinstance(result, dict) else True,
+        )
+        sent = self._send(status, result)
+        logger.info(
+            'MESSAGE_STAGE stage=http_response_sent session_id=%s turn_id=%s status=%s sent=%s',
+            session_id,
+            result.get('turn_id', '-') if isinstance(result, dict) else '-',
+            status,
+            bool(sent),
+        )
+        return sent
+
+    def _post_session_audit(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        if not self._session_exists(session_id):
+            return self._send(404, {'error': {'code': 'SESSION_NOT_FOUND', 'message': 'session not found'}})
+        with self._session_lock(session_id):
+            audit = run_session_audit(session_id)
+        return self._send(200, {
+            'session_id': session_id,
+            'audit': audit,
+            'web': web_runtime_settings(),
+        })
+
+    def _post_character_select(self, parsed, payload):
         try:
-            if parsed.path == '/api/new-game':
-                session_id = str(payload.get('session_id', '') or '').strip()
-                if not session_id:
-                    return self._invalid_input('session_id is required')
-                try:
-                    session_id = normalize_session_id(session_id)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                if not self._validate_active_session_scope(session_id, allow_missing=True):
-                    return
-                with self._session_lock(session_id):
-                    return self._send(200, start_new_game(session_id))
+            result = set_active_character(str(payload.get('character_id', '') or ''))
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        result['character_card'] = load_character_card_meta()
+        result['web'] = web_runtime_settings()
+        return self._send(200, result)
 
-            if parsed.path == '/api/delete-session':
-                session_id = str(payload.get('session_id', '') or '').strip()
-                if not session_id:
-                    return self._invalid_input('session_id is required')
-                try:
-                    session_id = normalize_session_id(session_id)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                if not self._validate_active_session_scope(session_id, allow_missing=False):
-                    return
-                with self._session_lock(session_id):
-                    return self._send(200, delete_session(session_id))
+    def _post_character_delete(self, parsed, payload):
+        try:
+            result = delete_character_card(str(payload.get('character_id', '') or ''))
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        result['character_card'] = load_character_card_meta()
+        result['web'] = web_runtime_settings()
+        return self._send(200, result)
 
-            if parsed.path == '/api/regenerate-last':
-                session_id = str(payload.get('session_id', '') or '').strip()
-                if not session_id:
-                    return self._invalid_input('session_id is required')
-                allow_complete = payload_bool(payload, 'allow_complete', required=False)
-                try:
-                    session_id = normalize_session_id(session_id)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                if not self._validate_active_session_scope(session_id, allow_missing=False):
-                    return
-                with self._session_lock(session_id):
-                    result = regenerate_last_partial(session_id, allow_complete=allow_complete)
-                status = 200 if 'error' not in result else 400
-                return self._send(status, result)
+    def _post_character_rebuild_lorebook(self, parsed, payload):
+        try:
+            result = rebuild_character_lorebook(str(payload.get('character_id', '') or ''))
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        result['character_card'] = load_character_card_meta()
+        result['web'] = web_runtime_settings()
+        return self._send(200, result)
 
-            if parsed.path == '/api/delete-latest-turn':
-                session_id = str(payload.get('session_id', '') or '').strip()
-                if not session_id:
-                    return self._invalid_input('session_id is required')
-                try:
-                    session_id = normalize_session_id(session_id)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                if not self._validate_active_session_scope(session_id, allow_missing=False):
-                    return
-                with self._session_lock(session_id):
-                    result = delete_latest_turn(session_id)
-                    if 'error' not in result:
-                        result['messages'] = filter_committed_history_items(load_history(session_id))
-                        result['state_snapshot'] = build_state_snapshot(load_state(session_id))
-                        result['character_card'] = load_character_card_meta()
-                        result['web'] = web_runtime_settings()
-                status = 200 if 'error' not in result else 400
-                return self._send(status, result)
+    def _post_characters_import(self, parsed, payload):
+        filename = str(payload.get('filename', '') or '').strip()
+        file_base64 = str(payload.get('file_base64', '') or '').strip()
+        target_name = str(payload.get('target_name', '') or '').strip()
+        if not filename or not file_base64:
+            return self._invalid_input('filename and file_base64 are required')
+        try:
+            result = import_character_card_base64(filename, file_base64, target_name=target_name, set_active=True)
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        result['character_card'] = load_character_card_meta()
+        result['web'] = web_runtime_settings()
+        return self._send(200, result)
 
-            if parsed.path == '/api/message':
-                session_id = str(payload.get('session_id', '') or '').strip()
-                if not session_id:
-                    return self._invalid_input('session_id is required')
-                try:
-                    session_id = normalize_session_id(session_id)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                if not self._validate_active_session_scope(session_id, allow_missing=True):
-                    return
-                payload['session_id'] = session_id
-                with self._session_lock(session_id):
-                    result = handle_message(payload)
-                status = 200 if 'error' not in result else 400
-                logger.info(
-                    'MESSAGE_STAGE stage=http_response_start session_id=%s turn_id=%s status=%s has_error=%s',
-                    session_id,
-                    result.get('turn_id', '-') if isinstance(result, dict) else '-',
-                    status,
-                    'error' in result if isinstance(result, dict) else True,
-                )
-                sent = self._send(status, result)
-                logger.info(
-                    'MESSAGE_STAGE stage=http_response_sent session_id=%s turn_id=%s status=%s sent=%s',
-                    session_id,
-                    result.get('turn_id', '-') if isinstance(result, dict) else '-',
-                    status,
-                    bool(sent),
-                )
-                return sent
+    def _post_character_profile_override(self, parsed, payload):
+        override = payload.get('override')
+        if not isinstance(override, dict):
+            return self._invalid_input('override must be an object')
+        try:
+            override = validate_unified_player_profile(override)
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        source_text = str(payload.get('source_text', '') or '')
+        path = save_character_player_profile_override(override)
+        save_character_player_profile_override_source(source_text)
+        return self._send(200, {
+            'ok': True,
+            'path': path.name,
+            'override': load_character_player_profile_override(),
+            'source_text': read_profile_source(character_player_profile_override_source_path()),
+            'prompt_preview': render_runtime_player_profile_markdown(load_character_player_profile_override()),
+            'character_card': load_character_card_meta(),
+            'web': web_runtime_settings(),
+        })
 
-            if parsed.path == '/api/session-audit':
-                session_id = str(payload.get('session_id', '') or '').strip()
-                if not session_id:
-                    return self._invalid_input('session_id is required')
-                try:
-                    session_id = normalize_session_id(session_id)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                if not self._validate_active_session_scope(session_id, allow_missing=False):
-                    return
-                if not self._session_exists(session_id):
-                    return self._send(404, {'error': {'code': 'SESSION_NOT_FOUND', 'message': 'session not found'}})
-                with self._session_lock(session_id):
-                    audit = run_session_audit(session_id)
-                return self._send(200, {
-                    'session_id': session_id,
-                    'audit': audit,
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/character/select':
-                try:
-                    result = set_active_character(str(payload.get('character_id', '') or ''))
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                result['character_card'] = load_character_card_meta()
-                result['web'] = web_runtime_settings()
-                return self._send(200, result)
-
-            if parsed.path == '/api/character/delete':
-                try:
-                    result = delete_character_card(str(payload.get('character_id', '') or ''))
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                result['character_card'] = load_character_card_meta()
-                result['web'] = web_runtime_settings()
-                return self._send(200, result)
-
-            if parsed.path == '/api/character/rebuild-lorebook':
-                try:
-                    result = rebuild_character_lorebook(str(payload.get('character_id', '') or ''))
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                result['character_card'] = load_character_card_meta()
-                result['web'] = web_runtime_settings()
-                return self._send(200, result)
-
-            if parsed.path == '/api/characters/import':
-                filename = str(payload.get('filename', '') or '').strip()
-                file_base64 = str(payload.get('file_base64', '') or '').strip()
-                target_name = str(payload.get('target_name', '') or '').strip()
-                if not filename or not file_base64:
-                    return self._invalid_input('filename and file_base64 are required')
-                try:
-                    result = import_character_card_base64(filename, file_base64, target_name=target_name, set_active=True)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                result['character_card'] = load_character_card_meta()
-                result['web'] = web_runtime_settings()
-                return self._send(200, result)
-
-            if parsed.path in {'/api/character/profile-override', '/api/characters/profile-override'}:
-                override = payload.get('override')
-                if not isinstance(override, dict):
-                    return self._invalid_input('override must be an object')
-                try:
-                    override = validate_unified_player_profile(override)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                source_text = str(payload.get('source_text', '') or '')
-                path = save_character_player_profile_override(override)
-                save_character_player_profile_override_source(source_text)
-                return self._send(200, {
-                    'ok': True,
-                    'path': path.name,
-                    'override': load_character_player_profile_override(),
-                    'source_text': read_profile_source(character_player_profile_override_source_path()),
-                    'prompt_preview': render_runtime_player_profile_markdown(load_character_player_profile_override()),
-                    'character_card': load_character_card_meta(),
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path in {'/api/user-profile/normalize', '/api/character/profile-override/normalize'}:
-                source_text = str(payload.get('source_text', '') or '')
-                existing = payload.get('profile') if parsed.path == '/api/user-profile/normalize' else payload.get('override')
-                if existing is not None and not isinstance(existing, dict):
-                    return self._invalid_input('existing profile must be an object')
-                try:
-                    profile, diagnostics = normalize_profile_text_with_keeper_llm(source_text, existing_profile=existing if isinstance(existing, dict) else None)
-                except Exception as err:
-                    return self._invalid_input(f'profile normalization failed: {err}')
-                return self._send(200, {
-                    'profile': profile,
-                    'override': profile,
-                    'prompt_preview': render_runtime_player_profile_markdown(profile),
-                    'diagnostics': diagnostics,
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path in {'/api/user-profile/preview', '/api/character/profile-override/preview'}:
-                profile = payload.get('profile') if parsed.path == '/api/user-profile/preview' else payload.get('override')
-                if not isinstance(profile, dict):
-                    return self._invalid_input('profile must be an object')
-                try:
-                    profile = validate_unified_player_profile(profile)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                return self._send(200, {
-                    'prompt_preview': render_runtime_player_profile_markdown(profile),
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/user-profile':
-                profile = payload.get('profile')
-                if not isinstance(profile, dict):
-                    return self._invalid_input('profile must be an object')
-                try:
-                    profile = validate_unified_player_profile(profile)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                source_text = str(payload.get('source_text', '') or '')
-                path = save_base_player_profile(profile)
-                save_base_player_profile_source(source_text)
-                return self._send(200, {
-                    'ok': True,
-                    'path': path.name,
-                    'profile': load_base_player_profile(),
-                    'source_text': read_profile_source(base_player_profile_source_path()),
-                    'prompt_preview': render_runtime_player_profile_markdown(load_base_player_profile()),
-                    'avatar_url': '/user-avatar' if resolve_user_avatar_path() else None,
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/user-avatar':
-                filename = str(payload.get('filename', '') or '').strip()
-                file_base64 = str(payload.get('file_base64', '') or '').strip()
-                if not filename or not file_base64:
-                    return self._invalid_input('filename and file_base64 are required')
-                try:
-                    file_bytes = decode_base64_limited(file_base64, max_bytes=MAX_AVATAR_BYTES, label='avatar')
-                    path = save_user_avatar(filename, file_bytes)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                except Exception as err:
-                    return self._invalid_input(f'invalid avatar payload: {err}')
-                return self._send(200, {
-                    'ok': True,
-                    'path': path.name,
-                    'avatar_url': '/user-avatar',
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/user-avatar/delete':
-                delete_user_avatar()
-                return self._send(200, {
-                    'ok': True,
-                    'avatar_url': None,
-                    'web': web_runtime_settings(),
-                })
-
-            if parsed.path == '/api/chat/preview':
-                content_b64 = str(payload.get('content_base64', '') or '').strip()
-                if not content_b64:
-                    return self._invalid_input('content_base64 is required')
-                try:
-                    content = decode_chat_import_content(content_b64)
-                    card_meta = load_character_card_meta()
-                    expected_name = card_meta.get('name', '') if card_meta else ''
-                    result = preview_chat_import(content, expected_character_name=expected_name)
-                except Exception as err:
-                    return self._invalid_input(str(err))
-                return self._send(200, result)
-
-            if parsed.path == '/api/chat/import':
-                content_b64 = str(payload.get('content_base64', '') or '').strip()
-                filename = str(payload.get('filename', '') or 'imported.jsonl').strip()
-                if not content_b64:
-                    return self._invalid_input('content_base64 is required')
-                try:
-                    content = decode_chat_import_content(content_b64)
-                    card_meta = load_character_card_meta()
-                    expected_name = card_meta.get('name', '') if card_meta else None
-                    report = import_sillytavern_from_content(
-                        content, filename,
-                        character_id=active_character_id(),
-                        expected_character_name=expected_name,
-                    )
-                except (ValueError, UnicodeDecodeError, RuntimeError) as err:
-                    return self._invalid_input(str(err))
-                sessions = list_sessions()
-                return self._send(200, {'report': report, 'sessions': sessions})
-
-            if parsed.path == '/api/providers':
-                try:
-                    result = upsert_provider_config(payload)
-                except SiteConfigPermissionError:
-                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可修改站点设置'}})
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                result['supported_api_types'] = list_provider_configs()['supported_api_types']
-                return self._send(200, result)
-
-            if parsed.path == '/api/site-config':
-                try:
-                    result = update_site_config(payload)
-                except SiteConfigPermissionError:
-                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可修改站点设置'}})
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                result['supported_api_types'] = list_provider_configs()['supported_api_types']
-                return self._send(200, result)
-
-            if parsed.path == '/api/model-config':
-                try:
-                    result = update_model_config(payload)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                return self._send(200, result)
-
-            if parsed.path == '/api/narrator-preset':
-                action = str(payload.get('action', 'save') or 'save').strip()
-                preset_id = str(payload.get('preset_id') or payload.get('id') or '').strip()
-                try:
-                    if action == 'delete':
-                        return self._send(200, delete_narrator_preset(preset_id))
-                    if action == 'save':
-                        content = payload.get('content')
-                        if not isinstance(content, dict):
-                            raise ValueError('preset content must be an object')
-                        return self._send(200, save_narrator_preset(preset_id, content))
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                return self._invalid_input('unsupported narrator preset action')
-
-            if parsed.path == '/api/providers/discover':
-                try:
-                    result = discover_provider_models(str(payload.get('name', '') or ''))
-                except SiteConfigPermissionError:
-                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可探测站点模型'}})
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                result['supported_api_types'] = list_provider_configs()['supported_api_types']
-                return self._send(200, result)
-
-            if parsed.path == '/api/site-models/discover':
-                try:
-                    result = discover_site_models()
-                except SiteConfigPermissionError:
-                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可探测站点模型'}})
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                result['supported_api_types'] = list_provider_configs()['supported_api_types']
-                return self._send(200, result)
-
-            # ── 用户管理 API ──
-            if parsed.path == '/api/auth/login':
-                if not MULTI_USER_PRODUCT_ENABLED:
-                    return self._send(403, _experimental_disabled_payload('multi-user login'))
-                uid = self._payload_string(payload, 'user_id')
-                pwd = self._payload_string(payload, 'password')
-                if uid is None or pwd is None:
-                    return
-                if not check_login_throttle(self.client_address[0] if self.client_address else ''):
-                    return self._send(429, {'error': {'code': 'RATE_LIMITED', 'message': '登录请求过于频繁，请稍后再试'}})
-                try:
-                    token = login(uid, pwd)
-                except ValueError as err:
-                    return self._send(401, {'error': {'code': 'AUTH_FAILED', 'message': str(err)}})
-                return self._send(200, {'token': token, 'user_id': uid}, extra_headers={'Set-Cookie': auth_cookie_header(token)})
-
-            if parsed.path == '/api/auth/logout':
-                if not MULTI_USER_PRODUCT_ENABLED:
-                    return self._send(403, _experimental_disabled_payload('multi-user logout'))
-                token = self._extract_token()
-                if token:
-                    logout(token)
-                return self._send(200, {'ok': True}, extra_headers={'Set-Cookie': clear_auth_cookie_header()})
-
-            if parsed.path == '/api/auth/change-password':
-                if not MULTI_USER_PRODUCT_ENABLED:
-                    return self._send(403, _experimental_disabled_payload('change-password'))
-                token = self._extract_token()
-                # POST already rejected Cookie auth, but require a valid Bearer
-                # token here so unauthenticated callers cannot probe other
-                # users' passwords.
-                acting_uid = validate_token(token) if token else None
-                if not acting_uid and not is_multi_user_enabled():
-                    acting_uid = DEFAULT_USER_ID
-                if not acting_uid:
-                    return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': '请先登录'}})
-                old_pwd = payload.get('old_password')
-                if old_pwd is None:
-                    old_pwd = ''
-                if not isinstance(old_pwd, str):
-                    return self._invalid_input('old_password must be a string')
-                new_pwd = self._payload_string(payload, 'new_password')
-                if new_pwd is None:
-                    return
-                try:
-                    change_own_password(acting_uid, old_pwd, new_pwd, keep_token=token)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                return self._send(200, {'ok': True})
-
-            if parsed.path == '/api/users':
-                if not MULTI_USER_PRODUCT_ENABLED:
-                    return self._send(403, _experimental_disabled_payload('multi-user management'))
-                try:
-                    action = payload_string(payload, 'action')
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                caller = self._authenticated_admin_user()
-                bootstrap_admin_password = is_admin_password_bootstrap_action(action)
-                if bootstrap_admin_password and not is_loopback_client(self.client_address[0]):
-                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '管理员密码首次设置只允许从本机访问'}})
-                if caller != DEFAULT_USER_ID and not bootstrap_admin_password:
-                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可管理用户'}})
-                if action == 'create':
-                    uid = self._payload_string(payload, 'user_id')
-                    pwd = self._payload_string(payload, 'password')
-                    if uid is None or pwd is None:
-                        return
-                    try:
-                        result = create_user(uid, pwd)
-                    except ValueError as err:
-                        return self._invalid_input(str(err))
-                    return self._send(200, result)
-                elif action == 'delete':
-                    uid = self._payload_string(payload, 'user_id')
-                    if uid is None:
-                        return
-                    try:
-                        delete_user(uid)
-                    except ValueError as err:
-                        return self._invalid_input(str(err))
-                    return self._send(200, {'ok': True})
-                elif action == 'archive_orphan_dir':
-                    uid = self._payload_string(payload, 'user_id')
-                    if uid is None:
-                        return
-                    try:
-                        result = archive_orphan_user_dir(uid)
-                    except ValueError as err:
-                        return self._invalid_input(str(err))
-                    return self._send(200, result)
-                elif action == 'disable':
-                    uid = self._payload_string(payload, 'user_id')
-                    if uid is None:
-                        return
-                    try:
-                        disable_user(uid, str(payload.get('reason', '') or ''))
-                    except ValueError as err:
-                        return self._invalid_input(str(err))
-                    return self._send(200, {'ok': True})
-                elif action == 'enable':
-                    uid = self._payload_string(payload, 'user_id')
-                    if uid is None:
-                        return
-                    try:
-                        enable_user(uid)
-                    except ValueError as err:
-                        return self._invalid_input(str(err))
-                    return self._send(200, {'ok': True})
-                elif action == 'set_admin_password':
-                    pwd = self._payload_string(payload, 'password')
-                    if pwd is None:
-                        return
-                    try:
-                        set_admin_password(pwd)
-                    except ValueError as err:
-                        return self._invalid_input(str(err))
-                    return self._send(200, {'ok': True})
-                elif action == 'reset_password':
-                    uid = self._payload_string(payload, 'user_id')
-                    pwd = self._payload_string(payload, 'password')
-                    if uid is None or pwd is None:
-                        return
-                    try:
-                        reset_user_password(uid, pwd)
-                    except ValueError as err:
-                        return self._invalid_input(str(err))
-                    return self._send(200, {'ok': True})
-                else:
-                    return self._invalid_input('未知操作，支持: create, disable, enable, delete, archive_orphan_dir, reset_password, set_admin_password')
-
-            if parsed.path == '/api/multi-user':
-                if not MULTI_USER_PRODUCT_ENABLED:
-                    return self._send(403, _experimental_disabled_payload('multi-user mode toggle'))
-                caller = self._authenticated_admin_user()
-                if caller != DEFAULT_USER_ID:
-                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可操作'}})
-                try:
-                    enabled = payload_bool(payload, 'enabled')
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                password = self._payload_string(payload, 'password')
-                if password is None:
-                    return
-                try:
-                    login(DEFAULT_USER_ID, password)
-                except ValueError:
-                    return self._send(401, {'error': {'code': 'AUTH_FAILED', 'message': '管理员密码错误'}})
-                try:
-                    set_multi_user_enabled(enabled)
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                return self._send(200, {'multi_user_enabled': enabled})
-
-            return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
+    def _post_profile_normalize(self, parsed, payload):
+        source_text = str(payload.get('source_text', '') or '')
+        existing = payload.get('profile') if parsed.path == '/api/user-profile/normalize' else payload.get('override')
+        if existing is not None and not isinstance(existing, dict):
+            return self._invalid_input('existing profile must be an object')
+        try:
+            profile, diagnostics = normalize_profile_text_with_keeper_llm(source_text, existing_profile=existing if isinstance(existing, dict) else None)
         except Exception as err:
-            return self._handle_exception(err, route=parsed.path)
-        finally:
-            if user_token is not None:
-                reset_active_user_id(user_token)
-            if multi_user_token is not None:
-                reset_multi_user_request_context(multi_user_token)
+            return self._invalid_input(f'profile normalization failed: {err}')
+        return self._send(200, {
+            'profile': profile,
+            'override': profile,
+            'prompt_preview': render_runtime_player_profile_markdown(profile),
+            'diagnostics': diagnostics,
+            'web': web_runtime_settings(),
+        })
+
+    def _post_profile_preview(self, parsed, payload):
+        profile = payload.get('profile') if parsed.path == '/api/user-profile/preview' else payload.get('override')
+        if not isinstance(profile, dict):
+            return self._invalid_input('profile must be an object')
+        try:
+            profile = validate_unified_player_profile(profile)
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        return self._send(200, {
+            'prompt_preview': render_runtime_player_profile_markdown(profile),
+            'web': web_runtime_settings(),
+        })
+
+    def _post_user_profile(self, parsed, payload):
+        profile = payload.get('profile')
+        if not isinstance(profile, dict):
+            return self._invalid_input('profile must be an object')
+        try:
+            profile = validate_unified_player_profile(profile)
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        source_text = str(payload.get('source_text', '') or '')
+        path = save_base_player_profile(profile)
+        save_base_player_profile_source(source_text)
+        return self._send(200, {
+            'ok': True,
+            'path': path.name,
+            'profile': load_base_player_profile(),
+            'source_text': read_profile_source(base_player_profile_source_path()),
+            'prompt_preview': render_runtime_player_profile_markdown(load_base_player_profile()),
+            'avatar_url': '/user-avatar' if resolve_user_avatar_path() else None,
+            'web': web_runtime_settings(),
+        })
+
+    def _post_user_avatar(self, parsed, payload):
+        filename = str(payload.get('filename', '') or '').strip()
+        file_base64 = str(payload.get('file_base64', '') or '').strip()
+        if not filename or not file_base64:
+            return self._invalid_input('filename and file_base64 are required')
+        try:
+            file_bytes = decode_base64_limited(file_base64, max_bytes=MAX_AVATAR_BYTES, label='avatar')
+            path = save_user_avatar(filename, file_bytes)
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        except Exception as err:
+            return self._invalid_input(f'invalid avatar payload: {err}')
+        return self._send(200, {
+            'ok': True,
+            'path': path.name,
+            'avatar_url': '/user-avatar',
+            'web': web_runtime_settings(),
+        })
+
+    def _post_user_avatar_delete(self, parsed, payload):
+        delete_user_avatar()
+        return self._send(200, {
+            'ok': True,
+            'avatar_url': None,
+            'web': web_runtime_settings(),
+        })
+
+    def _post_chat_preview(self, parsed, payload):
+        content_b64 = str(payload.get('content_base64', '') or '').strip()
+        if not content_b64:
+            return self._invalid_input('content_base64 is required')
+        try:
+            content = decode_chat_import_content(content_b64)
+            card_meta = load_character_card_meta()
+            expected_name = card_meta.get('name', '') if card_meta else ''
+            result = preview_chat_import(content, expected_character_name=expected_name)
+        except Exception as err:
+            return self._invalid_input(str(err))
+        return self._send(200, result)
+
+    def _post_chat_import(self, parsed, payload):
+        content_b64 = str(payload.get('content_base64', '') or '').strip()
+        filename = str(payload.get('filename', '') or 'imported.jsonl').strip()
+        if not content_b64:
+            return self._invalid_input('content_base64 is required')
+        try:
+            content = decode_chat_import_content(content_b64)
+            card_meta = load_character_card_meta()
+            expected_name = card_meta.get('name', '') if card_meta else None
+            report = import_sillytavern_from_content(
+                content, filename,
+                character_id=active_character_id(),
+                expected_character_name=expected_name,
+            )
+        except (ValueError, UnicodeDecodeError, RuntimeError) as err:
+            return self._invalid_input(str(err))
+        sessions = list_sessions()
+        return self._send(200, {'report': report, 'sessions': sessions})
+
+    def _post_providers(self, parsed, payload):
+        try:
+            result = upsert_provider_config(payload)
+        except SiteConfigPermissionError:
+            return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可修改站点设置'}})
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        result['supported_api_types'] = list_provider_configs()['supported_api_types']
+        return self._send(200, result)
+
+    def _post_site_config(self, parsed, payload):
+        try:
+            result = update_site_config(payload)
+        except SiteConfigPermissionError:
+            return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可修改站点设置'}})
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        result['supported_api_types'] = list_provider_configs()['supported_api_types']
+        return self._send(200, result)
+
+    def _post_model_config(self, parsed, payload):
+        try:
+            result = update_model_config(payload)
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        return self._send(200, result)
+
+    def _post_narrator_preset(self, parsed, payload):
+        action = str(payload.get('action', 'save') or 'save').strip()
+        preset_id = str(payload.get('preset_id') or payload.get('id') or '').strip()
+        try:
+            if action == 'delete':
+                return self._send(200, delete_narrator_preset(preset_id))
+            if action == 'save':
+                content = payload.get('content')
+                if not isinstance(content, dict):
+                    raise ValueError('preset content must be an object')
+                return self._send(200, save_narrator_preset(preset_id, content))
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        return self._invalid_input('unsupported narrator preset action')
+
+    def _post_providers_discover(self, parsed, payload):
+        try:
+            result = discover_provider_models(str(payload.get('name', '') or ''))
+        except SiteConfigPermissionError:
+            return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可探测站点模型'}})
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        result['supported_api_types'] = list_provider_configs()['supported_api_types']
+        return self._send(200, result)
+
+    def _post_site_models_discover(self, parsed, payload):
+        try:
+            result = discover_site_models()
+        except SiteConfigPermissionError:
+            return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可探测站点模型'}})
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        result['supported_api_types'] = list_provider_configs()['supported_api_types']
+        return self._send(200, result)
+
+    def _post_auth_login(self, parsed, payload):
+        if not MULTI_USER_PRODUCT_ENABLED:
+            return self._send(403, _experimental_disabled_payload('multi-user login'))
+        uid = self._payload_string(payload, 'user_id')
+        pwd = self._payload_string(payload, 'password')
+        if uid is None or pwd is None:
+            return
+        if not check_login_throttle(self.client_address[0] if self.client_address else ''):
+            return self._send(429, {'error': {'code': 'RATE_LIMITED', 'message': '登录请求过于频繁，请稍后再试'}})
+        try:
+            token = login(uid, pwd)
+        except ValueError as err:
+            return self._send(401, {'error': {'code': 'AUTH_FAILED', 'message': str(err)}})
+        return self._send(200, {'token': token, 'user_id': uid}, extra_headers={'Set-Cookie': auth_cookie_header(token)})
+
+    def _post_auth_logout(self, parsed, payload):
+        if not MULTI_USER_PRODUCT_ENABLED:
+            return self._send(403, _experimental_disabled_payload('multi-user logout'))
+        token = self._extract_token()
+        if token:
+            logout(token)
+        return self._send(200, {'ok': True}, extra_headers={'Set-Cookie': clear_auth_cookie_header()})
+
+    def _post_auth_change_password(self, parsed, payload):
+        if not MULTI_USER_PRODUCT_ENABLED:
+            return self._send(403, _experimental_disabled_payload('change-password'))
+        token = self._extract_token()
+        # POST already rejected Cookie auth, but require a valid Bearer
+        # token here so unauthenticated callers cannot probe other
+        # users' passwords.
+        acting_uid = validate_token(token) if token else None
+        if not acting_uid and not is_multi_user_enabled():
+            acting_uid = DEFAULT_USER_ID
+        if not acting_uid:
+            return self._send(401, {'error': {'code': 'AUTH_REQUIRED', 'message': '请先登录'}})
+        old_pwd = payload.get('old_password')
+        if old_pwd is None:
+            old_pwd = ''
+        if not isinstance(old_pwd, str):
+            return self._invalid_input('old_password must be a string')
+        new_pwd = self._payload_string(payload, 'new_password')
+        if new_pwd is None:
+            return
+        try:
+            change_own_password(acting_uid, old_pwd, new_pwd, keep_token=token)
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        return self._send(200, {'ok': True})
+
+    def _post_users(self, parsed, payload):
+        if not MULTI_USER_PRODUCT_ENABLED:
+            return self._send(403, _experimental_disabled_payload('multi-user management'))
+        try:
+            action = payload_string(payload, 'action')
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        caller = self._authenticated_admin_user()
+        bootstrap_admin_password = is_admin_password_bootstrap_action(action)
+        if bootstrap_admin_password and not is_loopback_client(self.client_address[0]):
+            return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '管理员密码首次设置只允许从本机访问'}})
+        if caller != DEFAULT_USER_ID and not bootstrap_admin_password:
+            return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可管理用户'}})
+        if action == 'create':
+            uid = self._payload_string(payload, 'user_id')
+            pwd = self._payload_string(payload, 'password')
+            if uid is None or pwd is None:
+                return
+            try:
+                result = create_user(uid, pwd)
+            except ValueError as err:
+                return self._invalid_input(str(err))
+            return self._send(200, result)
+        elif action == 'delete':
+            uid = self._payload_string(payload, 'user_id')
+            if uid is None:
+                return
+            try:
+                delete_user(uid)
+            except ValueError as err:
+                return self._invalid_input(str(err))
+            return self._send(200, {'ok': True})
+        elif action == 'archive_orphan_dir':
+            uid = self._payload_string(payload, 'user_id')
+            if uid is None:
+                return
+            try:
+                result = archive_orphan_user_dir(uid)
+            except ValueError as err:
+                return self._invalid_input(str(err))
+            return self._send(200, result)
+        elif action == 'disable':
+            uid = self._payload_string(payload, 'user_id')
+            if uid is None:
+                return
+            try:
+                disable_user(uid, str(payload.get('reason', '') or ''))
+            except ValueError as err:
+                return self._invalid_input(str(err))
+            return self._send(200, {'ok': True})
+        elif action == 'enable':
+            uid = self._payload_string(payload, 'user_id')
+            if uid is None:
+                return
+            try:
+                enable_user(uid)
+            except ValueError as err:
+                return self._invalid_input(str(err))
+            return self._send(200, {'ok': True})
+        elif action == 'set_admin_password':
+            pwd = self._payload_string(payload, 'password')
+            if pwd is None:
+                return
+            try:
+                set_admin_password(pwd)
+            except ValueError as err:
+                return self._invalid_input(str(err))
+            return self._send(200, {'ok': True})
+        elif action == 'reset_password':
+            uid = self._payload_string(payload, 'user_id')
+            pwd = self._payload_string(payload, 'password')
+            if uid is None or pwd is None:
+                return
+            try:
+                reset_user_password(uid, pwd)
+            except ValueError as err:
+                return self._invalid_input(str(err))
+            return self._send(200, {'ok': True})
+        else:
+            return self._invalid_input('未知操作，支持: create, disable, enable, delete, archive_orphan_dir, reset_password, set_admin_password')
+
+    def _post_multi_user(self, parsed, payload):
+        if not MULTI_USER_PRODUCT_ENABLED:
+            return self._send(403, _experimental_disabled_payload('multi-user mode toggle'))
+        caller = self._authenticated_admin_user()
+        if caller != DEFAULT_USER_ID:
+            return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': '仅管理员可操作'}})
+        try:
+            enabled = payload_bool(payload, 'enabled')
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        password = self._payload_string(payload, 'password')
+        if password is None:
+            return
+        try:
+            login(DEFAULT_USER_ID, password)
+        except ValueError:
+            return self._send(401, {'error': {'code': 'AUTH_FAILED', 'message': '管理员密码错误'}})
+        try:
+            set_multi_user_enabled(enabled)
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        return self._send(200, {'multi_user_enabled': enabled})
+
+    _POST_ROUTES = {
+        '/api/new-game': _post_new_game,
+        '/api/delete-session': _post_delete_session,
+        '/api/regenerate-last': _post_regenerate_last,
+        '/api/delete-latest-turn': _post_delete_latest_turn,
+        '/api/message': _post_message,
+        '/api/session-audit': _post_session_audit,
+        '/api/character/select': _post_character_select,
+        '/api/character/delete': _post_character_delete,
+        '/api/character/rebuild-lorebook': _post_character_rebuild_lorebook,
+        '/api/characters/import': _post_characters_import,
+        '/api/character/profile-override': _post_character_profile_override,
+        '/api/characters/profile-override': _post_character_profile_override,
+        '/api/user-profile/normalize': _post_profile_normalize,
+        '/api/character/profile-override/normalize': _post_profile_normalize,
+        '/api/user-profile/preview': _post_profile_preview,
+        '/api/character/profile-override/preview': _post_profile_preview,
+        '/api/user-profile': _post_user_profile,
+        '/api/user-avatar': _post_user_avatar,
+        '/api/user-avatar/delete': _post_user_avatar_delete,
+        '/api/chat/preview': _post_chat_preview,
+        '/api/chat/import': _post_chat_import,
+        '/api/providers': _post_providers,
+        '/api/site-config': _post_site_config,
+        '/api/model-config': _post_model_config,
+        '/api/narrator-preset': _post_narrator_preset,
+        '/api/providers/discover': _post_providers_discover,
+        '/api/site-models/discover': _post_site_models_discover,
+        '/api/auth/login': _post_auth_login,
+        '/api/auth/logout': _post_auth_logout,
+        '/api/auth/change-password': _post_auth_change_password,
+        '/api/users': _post_users,
+        '/api/multi-user': _post_multi_user,
+    }
 
     def do_DELETE(self):
-        parsed = urlparse(self.path)
-        _, user_token, authorized = self._begin_request_user(parsed.path, 'DELETE')
-        multi_user_token = begin_multi_user_request_context() if authorized else None
-        if not authorized:
-            return
-        payload = self._read_json_payload()
-        if payload is None:
-            if user_token is not None:
-                reset_active_user_id(user_token)
-            if multi_user_token is not None:
-                reset_multi_user_request_context(multi_user_token)
-            return
-        if business_payload_has_user_id(parsed.path, payload):
-            self._invalid_input('business API must not include user_id')
-            if user_token is not None:
-                reset_active_user_id(user_token)
-            if multi_user_token is not None:
-                reset_multi_user_request_context(multi_user_token)
-            return
+        with self._request_scope('DELETE') as (parsed, authorized):
+            if not authorized:
+                return
+            payload = self._read_json_payload()
+            if payload is None:
+                return
+            if business_payload_has_user_id(parsed.path, payload):
+                return self._invalid_input('business API must not include user_id')
+            try:
+                handler = self._DELETE_ROUTES.get(parsed.path)
+                if handler is None:
+                    return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
+                return handler(self, parsed, payload)
+            except Exception as err:
+                return self._handle_exception(err, route=parsed.path)
 
+    def _delete_providers(self, parsed, payload):
         try:
-            if parsed.path == '/api/providers':
-                try:
-                    result = delete_provider_config(str(payload.get('name', '') or ''))
-                except SiteConfigPermissionError as err:
-                    return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': str(err)}})
-                except ValueError as err:
-                    return self._invalid_input(str(err))
-                result['supported_api_types'] = list_provider_configs()['supported_api_types']
-                return self._send(200, result)
-            return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': 'unknown route'}})
-        except Exception as err:
-            return self._handle_exception(err, route=parsed.path)
-        finally:
-            if user_token is not None:
-                reset_active_user_id(user_token)
-            if multi_user_token is not None:
-                reset_multi_user_request_context(multi_user_token)
+            result = delete_provider_config(str(payload.get('name', '') or ''))
+        except SiteConfigPermissionError as err:
+            return self._send(403, {'error': {'code': 'FORBIDDEN', 'message': str(err)}})
+        except ValueError as err:
+            return self._invalid_input(str(err))
+        result['supported_api_types'] = list_provider_configs()['supported_api_types']
+        return self._send(200, result)
+
+    _DELETE_ROUTES = {
+        '/api/providers': _delete_providers,
+    }
 
 
 def main():

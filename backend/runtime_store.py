@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+import copy
 import json
+import logging
 import os
 import re
 import tempfile
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -22,6 +25,48 @@ except ImportError:
 ROOT = SHARED_ROOT
 RUNTIME_WEB = APP_ROOT
 CONFIG = RUNTIME_WEB / 'config' / 'runtime.json'
+HISTORY_SHARD_SIZE = 24
+
+logger = logging.getLogger(__name__)
+
+# Single process-wide lock guarding the in-memory history cache and the
+# read-modify-write store helpers (history, event summaries, meta, shards).
+# Mirrors player_profile.PLAYER_PROFILE_LOCK. Reentrant so nested calls such as
+# append_history -> save_history -> invalidate_history_cache don't self-deadlock.
+_STORE_LOCK = threading.RLock()
+
+
+def _backup_corrupt_json(path: Path) -> None:
+    """Move a corrupt JSON file aside to ``<name>.corrupt`` so the bad bytes are
+    preserved for diagnosis instead of being silently overwritten by the next
+    save."""
+    backup = path.with_name(path.name + '.corrupt')
+    try:
+        os.replace(path, backup)
+        logger.warning('moved corrupt json aside: %s -> %s', path, backup.name)
+    except OSError:
+        logger.exception('failed to move corrupt json aside: %s', path)
+
+
+def _load_json(path: Path, default, *, backup_corrupt: bool = True):
+    """Load JSON from ``path``.
+
+    Returns a deep copy of ``default`` when the file is absent. When the file
+    exists but cannot be parsed, the failure is logged and (unless
+    ``backup_corrupt`` is False) the corrupt file is moved aside before the
+    default is returned -- so a corrupt file is never silently mistaken for a
+    missing one. Pass ``backup_corrupt=False`` for user-authored files (e.g.
+    config) that should be fixed in place rather than relocated.
+    """
+    if not path.exists():
+        return copy.deepcopy(default)
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except (ValueError, OSError):
+        logger.exception('failed to parse json: %s', path)
+        if backup_corrupt:
+            _backup_corrupt_json(path)
+        return copy.deepcopy(default)
 
 
 # ---------------------------------------------------------------------------
@@ -43,11 +88,12 @@ def _history_cache_key(path: Path) -> str:
 
 def invalidate_history_cache(session_id: str | None = None) -> None:
     """Clear cached history. Call after appending to history."""
-    if session_id:
-        path = session_paths(session_id)['history']
-        _history_cache.pop(_history_cache_key(path), None)
-    else:
-        _history_cache.clear()
+    with _STORE_LOCK:
+        if session_id:
+            path = session_paths(session_id)['history']
+            _history_cache.pop(_history_cache_key(path), None)
+        else:
+            _history_cache.clear()
 
 
 def character_data_path() -> Path:
@@ -76,21 +122,13 @@ def character_npc_profiles_dir() -> Path:
 
 
 def load_runtime_web_config() -> dict:
-    if not CONFIG.exists():
-        return {}
-    try:
-        return json.loads(CONFIG.read_text(encoding='utf-8'))
-    except Exception:
-        return {}
+    # User-authored config: log on corruption but never relocate the file, so
+    # the operator can fix it in place.
+    return _load_json(CONFIG, {}, backup_corrupt=False)
 
 
 def _read_json_file(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return {}
+    return _load_json(path, {}, backup_corrupt=False)
 
 
 def load_character_card_meta() -> dict:
@@ -133,6 +171,8 @@ def session_paths(session_id: str) -> dict:
         'persona_longterm_dir': persona_dir / 'longterm',
         'trace_dir': trace_dir,
         'history': memory_dir / 'history.jsonl',
+        'history_manifest': memory_dir / 'history_manifest.json',
+        'history_shards_dir': memory_dir / 'history_shards',
         'state': memory_dir / 'state.json',
         'continuity_hints': memory_dir / 'continuity_hints.json',
         'canon': memory_dir / 'canon.md',
@@ -145,29 +185,328 @@ def session_paths(session_id: str) -> dict:
     }
 
 
-def load_history(session_id: str) -> list:
-    path = session_paths(session_id)['history']
+def _turn_index_from_id(value: str) -> int:
+    match = re.search(r'(\d+)$', str(value or ''))
+    if not match:
+        return 0
+    try:
+        return int(match.group(1))
+    except Exception:
+        return 0
+
+
+def _history_shard_bounds(turn_index: int, shard_size: int = HISTORY_SHARD_SIZE) -> tuple[int, int]:
+    if turn_index <= 0:
+        return 0, 0
+    start = ((turn_index - 1) // shard_size) * shard_size + 1
+    return start, start + shard_size - 1
+
+
+def _history_shard_filename(start: int, end: int) -> str:
+    return f'turns-{start:06d}-{end:06d}.jsonl'
+
+
+def _read_jsonl_items(path: Path) -> list[dict]:
     if not path.exists():
         return []
+    items: list[dict] = []
     try:
-        mtime = path.stat().st_mtime
+        lines = path.read_text(encoding='utf-8').splitlines()
     except Exception:
-        mtime = 0.0
-    cache_key = _history_cache_key(path)
-    cached = _history_cache.get(cache_key)
-    if cached and cached[0] == mtime:
-        return list(cached[1])
-    items = []
-    for line in path.read_text(encoding='utf-8').splitlines():
-        s = line.strip()
-        if not s:
+        return []
+    for line in lines:
+        text = line.strip()
+        if not text:
             continue
         try:
-            items.append(json.loads(s))
+            item = json.loads(text)
         except Exception:
             continue
-    _history_cache[cache_key] = (mtime, items)
-    return list(items)
+        if isinstance(item, dict):
+            items.append(item)
+    return items
+
+
+def _complete_history_pairs(items: list[dict]) -> list[dict]:
+    pairs: list[dict] = []
+    current_user = None
+    for item in filter_committed_history_items(items):
+        if not isinstance(item, dict):
+            continue
+        role = item.get('role')
+        if role == 'user':
+            current_user = item
+        elif role == 'assistant' and current_user is not None and is_complete_assistant_item(item):
+            turn_index = len(pairs) + 1
+            pairs.append({
+                'turn_index': turn_index,
+                'turn_id': f'turn-{turn_index:04d}',
+                'user': current_user,
+                'assistant': item,
+            })
+            current_user = None
+    return pairs
+
+
+def _write_history_manifest(session_id: str, shards: list[dict], current_turn_end: int) -> None:
+    payload = {
+        'version': 1,
+        'shard_size': HISTORY_SHARD_SIZE,
+        'summary_chunk_size': 12,
+        'current_turn_end': current_turn_end,
+        'shards': shards,
+    }
+    _atomic_write_json(session_paths(session_id)['history_manifest'], payload)
+
+
+def _rebuild_history_shards(session_id: str, items: list[dict]) -> None:
+    paths = session_paths(session_id)
+    shard_dir = paths['history_shards_dir']
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    pairs = _complete_history_pairs(items)
+    grouped: dict[tuple[int, int], list[dict]] = {}
+    for pair in pairs:
+        turn_index = int(pair['turn_index'])
+        start, end = _history_shard_bounds(turn_index)
+        user_item = dict(pair['user'])
+        assistant_item = dict(pair['assistant'])
+        turn_id = str(pair['turn_id'])
+        user_item['turn_id'] = turn_id
+        assistant_item['turn_id'] = turn_id
+        grouped.setdefault((start, end), []).extend([user_item, assistant_item])
+    expected_names = {_history_shard_filename(start, end) for start, end in grouped}
+    for path in shard_dir.glob('turns-*.jsonl'):
+        if path.name not in expected_names:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+    shards = []
+    for start, end in sorted(grouped):
+        filename = _history_shard_filename(start, end)
+        rel_path = f'history_shards/{filename}'
+        content = ''.join(json.dumps(item, ensure_ascii=False) + '\n' for item in grouped[(start, end)])
+        _atomic_write_text(shard_dir / filename, content)
+        actual_turns = sorted({
+            _turn_index_from_id(str(item.get('turn_id', '') or ''))
+            for item in grouped[(start, end)]
+            if _turn_index_from_id(str(item.get('turn_id', '') or '')) > 0
+        })
+        turn_end = actual_turns[-1] if actual_turns else start - 1
+        first_summary = ((start - 1) // 12) + 1
+        last_summary = ((end - 1) // 12) + 1
+        shards.append({
+            'shard_id': filename[:-6],
+            'turn_start': start,
+            'turn_end': turn_end,
+            'path': rel_path,
+            'complete': turn_end >= end,
+            'summary_chunks': [f'chunk_{idx:04d}' for idx in range(first_summary, last_summary + 1)],
+        })
+    _write_history_manifest(session_id, shards, len(pairs))
+
+
+def load_history_manifest(session_id: str) -> dict:
+    default = {'version': 1, 'shard_size': HISTORY_SHARD_SIZE, 'summary_chunk_size': 12, 'current_turn_end': 0, 'shards': []}
+    data = _load_json(session_paths(session_id)['history_manifest'], default)
+    if not isinstance(data, dict):
+        return copy.deepcopy(default)
+    data.setdefault('version', 1)
+    data.setdefault('shard_size', HISTORY_SHARD_SIZE)
+    data.setdefault('summary_chunk_size', 12)
+    data.setdefault('current_turn_end', 0)
+    data.setdefault('shards', [])
+    if not isinstance(data.get('shards'), list):
+        data['shards'] = []
+    return data
+
+
+def _history_manifest_needs_rebuild(session_id: str, manifest: dict) -> bool:
+    paths = session_paths(session_id)
+    history_path = paths['history']
+    manifest_path = paths['history_manifest']
+    if not history_path.exists():
+        return False
+    try:
+        current_turn_end = int(manifest.get('current_turn_end', 0) or 0)
+    except (TypeError, ValueError):
+        return True
+    if not manifest_path.exists():
+        return True
+    if not manifest.get('shards'):
+        return current_turn_end > 0
+    try:
+        if history_path.stat().st_mtime > manifest_path.stat().st_mtime:
+            return True
+    except Exception:
+        return True
+    shard_dir = paths['history_shards_dir']
+    for shard in manifest.get('shards', []) or []:
+        if not isinstance(shard, dict):
+            return True
+        try:
+            start = int(shard.get('turn_start', 0) or 0)
+        except (TypeError, ValueError):
+            return True
+        end = start + HISTORY_SHARD_SIZE - 1
+        if start <= 0:
+            return True
+        if not (shard_dir / _history_shard_filename(start, end)).exists():
+            return True
+    return False
+
+
+def ensure_history_shards(session_id: str) -> dict:
+    with _STORE_LOCK:
+        manifest = load_history_manifest(session_id)
+        if not _history_manifest_needs_rebuild(session_id, manifest):
+            return manifest
+        items = load_history(session_id)
+        _rebuild_history_shards(session_id, items)
+        return load_history_manifest(session_id)
+
+
+def load_history_pair_count(session_id: str) -> int:
+    manifest = ensure_history_shards(session_id)
+    try:
+        return int(manifest.get('current_turn_end', 0) or 0)
+    except (TypeError, ValueError):
+        return len(_complete_history_pairs(load_history(session_id)))
+
+
+def _load_shard_items_for_turn(session_id: str, turn_index: int) -> list[dict]:
+    if turn_index <= 0:
+        return []
+    paths = session_paths(session_id)
+    start, end = _history_shard_bounds(turn_index)
+    return _read_jsonl_items(paths['history_shards_dir'] / _history_shard_filename(start, end))
+
+
+def _load_all_history_shard_items(session_id: str) -> list[dict]:
+    manifest = load_history_manifest(session_id)
+    paths = session_paths(session_id)
+    items: list[dict] = []
+    shards = [shard for shard in manifest.get('shards', []) or [] if isinstance(shard, dict)]
+    shards.sort(key=lambda shard: int(shard.get('turn_start', 0) or 0))
+    for shard in shards:
+        try:
+            start = int(shard.get('turn_start', 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if start <= 0:
+            continue
+        _start, end = _history_shard_bounds(start)
+        items.extend(_read_jsonl_items(paths['history_shards_dir'] / _history_shard_filename(start, end)))
+    return items
+
+
+def load_history_turn_pair(session_id: str, turn_index: int) -> dict:
+    ensure_history_shards(session_id)
+    items = _load_shard_items_for_turn(session_id, turn_index)
+    turn_id = f'turn-{turn_index:04d}'
+    user_item = None
+    assistant_item = None
+    for item in items:
+        if str(item.get('turn_id', '') or '') != turn_id:
+            continue
+        if item.get('role') == 'user':
+            user_item = item
+        elif item.get('role') == 'assistant' and is_complete_assistant_item(item):
+            assistant_item = item
+    if user_item is not None and assistant_item is not None:
+        return {'turn_index': turn_index, 'turn_id': turn_id, 'user': user_item, 'assistant': assistant_item}
+    for pair in _complete_history_pairs(load_history(session_id)):
+        if int(pair.get('turn_index', 0) or 0) == turn_index:
+            return pair
+    return {}
+
+
+def load_recent_history(session_id: str, limit_pairs: int) -> list[dict]:
+    if limit_pairs <= 0:
+        return []
+    pair_count = load_history_pair_count(session_id)
+    if pair_count <= 0 or pair_count <= limit_pairs:
+        return _select_recent_history_window(load_history(session_id), limit_pairs)
+    start_turn = max(1, pair_count - limit_pairs + 1)
+    needed_bounds = []
+    current = start_turn
+    while current <= pair_count:
+        bounds = _history_shard_bounds(current)
+        needed_bounds.append(bounds)
+        current = bounds[1] + 1
+    items: list[dict] = []
+    seen_bounds: set[tuple[int, int]] = set()
+    paths = session_paths(session_id)
+    for start, end in needed_bounds:
+        if (start, end) in seen_bounds:
+            continue
+        seen_bounds.add((start, end))
+        items.extend(_read_jsonl_items(paths['history_shards_dir'] / _history_shard_filename(start, end)))
+    if not items:
+        return _select_recent_history_window(load_history(session_id), limit_pairs)
+    filtered = []
+    for item in items:
+        turn_index = _turn_index_from_id(str(item.get('turn_id', '') or ''))
+        if start_turn <= turn_index <= pair_count:
+            filtered.append(item)
+    pair_roles: dict[int, set[str]] = {}
+    for item in filtered:
+        turn_index = _turn_index_from_id(str(item.get('turn_id', '') or ''))
+        if turn_index <= 0:
+            continue
+        role = str(item.get('role', '') or '')
+        if role == 'assistant' and not is_complete_assistant_item(item):
+            continue
+        pair_roles.setdefault(turn_index, set()).add(role)
+    expected_turns = set(range(start_turn, pair_count + 1))
+    complete_turns = {turn for turn, roles in pair_roles.items() if {'user', 'assistant'} <= roles}
+    if not expected_turns <= complete_turns:
+        return _select_recent_history_window(load_history(session_id), limit_pairs)
+    return filtered or _select_recent_history_window(load_history(session_id), limit_pairs)
+
+
+def _select_recent_history_window(items: list[dict], limit_pairs: int) -> list[dict]:
+    if limit_pairs <= 0:
+        return []
+    filtered = filter_committed_history_items(items)
+    if not filtered:
+        return []
+
+    pair_count = 0
+    start_index = len(filtered)
+    pending_user = False
+    for index in range(len(filtered) - 1, -1, -1):
+        role = filtered[index].get('role')
+        if role == 'assistant':
+            pending_user = True
+            start_index = index
+        elif role == 'user' and pending_user:
+            pair_count += 1
+            pending_user = False
+            start_index = index
+            if pair_count >= limit_pairs:
+                break
+    if pair_count == 0:
+        return filtered[-max(1, limit_pairs * 2):]
+    return filtered[start_index:]
+
+
+def load_history(session_id: str) -> list:
+    with _STORE_LOCK:
+        path = session_paths(session_id)['history']
+        if not path.exists():
+            return _load_all_history_shard_items(session_id)
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+        cache_key = _history_cache_key(path)
+        cached = _history_cache.get(cache_key)
+        if cached and cached[0] == mtime:
+            return list(cached[1])
+        items = _read_jsonl_items(path)
+        _history_cache[cache_key] = (mtime, items)
+        return list(items)
 
 
 def is_complete_assistant_item(item: dict) -> bool:
@@ -190,21 +529,24 @@ def filter_committed_history_items(items: list[dict]) -> list[dict]:
 
 
 def append_history(session_id: str, item: dict) -> None:
-    items = load_history(session_id)
-    if isinstance(item, dict) and item.get('role') == 'user':
-        while items and isinstance(items[-1], dict) and items[-1].get('role') == 'assistant' and not is_complete_assistant_item(items[-1]):
-            items.pop()
-            if items and isinstance(items[-1], dict) and items[-1].get('role') == 'user':
+    with _STORE_LOCK:
+        items = load_history(session_id)
+        if isinstance(item, dict) and item.get('role') == 'user':
+            while items and isinstance(items[-1], dict) and items[-1].get('role') == 'assistant' and not is_complete_assistant_item(items[-1]):
                 items.pop()
-    items.append(item)
-    save_history(session_id, items)
+                if items and isinstance(items[-1], dict) and items[-1].get('role') == 'user':
+                    items.pop()
+        items.append(item)
+        save_history(session_id, items)
 
 
 def save_history(session_id: str, items: list[dict]) -> None:
-    path = session_paths(session_id)['history']
-    content = ''.join(json.dumps(item, ensure_ascii=False) + '\n' for item in (items or []))
-    _atomic_write_text(path, content)
-    invalidate_history_cache(session_id)
+    with _STORE_LOCK:
+        path = session_paths(session_id)['history']
+        content = ''.join(json.dumps(item, ensure_ascii=False) + '\n' for item in (items or []))
+        _atomic_write_text(path, content)
+        _rebuild_history_shards(session_id, items)
+        invalidate_history_cache(session_id)
 
 
 def load_state(session_id: str) -> dict:
@@ -240,20 +582,11 @@ def load_state(session_id: str) -> dict:
             },
             'knowledge_records': [],
         }
-    try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return {}
+    return _load_json(path, {})
 
 
 def load_continuity_hints(session_id: str) -> list:
-    path = session_paths(session_id)['continuity_hints']
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return []
+    data = _load_json(session_paths(session_id)['continuity_hints'], [])
     if isinstance(data, dict):
         items = data.get('entries', [])
         return items if isinstance(items, list) else []
@@ -261,13 +594,7 @@ def load_continuity_hints(session_id: str) -> list:
 
 
 def load_summary_chunks(session_id: str) -> dict:
-    path = session_paths(session_id)['summary_chunks']
-    if not path.exists():
-        return {'version': 1, 'chunks': []}
-    try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return {'version': 1, 'chunks': []}
+    data = _load_json(session_paths(session_id)['summary_chunks'], {'version': 1, 'chunks': []})
     chunks = data.get('chunks', []) if isinstance(data, dict) else []
     return {'version': int(data.get('version', 1) or 1) if isinstance(data, dict) else 1, 'chunks': chunks if isinstance(chunks, list) else []}
 
@@ -297,13 +624,7 @@ def save_summary(session_id: str, text: str) -> None:
 
 
 def load_event_summaries(session_id: str) -> dict:
-    path = session_paths(session_id)['event_summaries']
-    if not path.exists():
-        return {'version': 1, 'items': []}
-    try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return {'version': 1, 'items': []}
+    data = _load_json(session_paths(session_id)['event_summaries'], {'version': 1, 'items': []})
     if not isinstance(data, dict):
         return {'version': 1, 'items': []}
     items = data.get('items', [])
@@ -320,34 +641,36 @@ def save_event_summaries(session_id: str, payload: dict) -> None:
 
 
 def append_event_summary(session_id: str, item: dict) -> None:
-    payload = load_event_summaries(session_id)
-    items = list(payload.get('items', []) or [])
-    items.append(item)
-    payload['items'] = items[-80:]
-    save_event_summaries(session_id, payload)
+    with _STORE_LOCK:
+        payload = load_event_summaries(session_id)
+        items = list(payload.get('items', []) or [])
+        items.append(item)
+        payload['items'] = items[-80:]
+        save_event_summaries(session_id, payload)
 
 
 def upsert_event_summary(session_id: str, item: dict) -> None:
-    payload = load_event_summaries(session_id)
-    turn_id = str(item.get('turn_id', '') or '').strip() if isinstance(item, dict) else ''
-    event_id = str(item.get('event_id', '') or '').strip() if isinstance(item, dict) else ''
-    items = []
-    replaced = False
-    for existing in payload.get('items', []) or []:
-        if not isinstance(existing, dict):
-            continue
-        same_turn = turn_id and str(existing.get('turn_id', '') or '').strip() == turn_id
-        same_event = event_id and str(existing.get('event_id', '') or '').strip() == event_id
-        if same_turn or same_event:
-            if not replaced:
-                items.append(item)
-                replaced = True
-            continue
-        items.append(existing)
-    if not replaced:
-        items.append(item)
-    payload['items'] = items[-80:]
-    save_event_summaries(session_id, payload)
+    with _STORE_LOCK:
+        payload = load_event_summaries(session_id)
+        turn_id = str(item.get('turn_id', '') or '').strip() if isinstance(item, dict) else ''
+        event_id = str(item.get('event_id', '') or '').strip() if isinstance(item, dict) else ''
+        items = []
+        replaced = False
+        for existing in payload.get('items', []) or []:
+            if not isinstance(existing, dict):
+                continue
+            same_turn = turn_id and str(existing.get('turn_id', '') or '').strip() == turn_id
+            same_event = event_id and str(existing.get('event_id', '') or '').strip() == event_id
+            if same_turn or same_event:
+                if not replaced:
+                    items.append(item)
+                    replaced = True
+                continue
+            items.append(existing)
+        if not replaced:
+            items.append(item)
+        payload['items'] = items[-80:]
+        save_event_summaries(session_id, payload)
 
 
 def load_canon(session_id: str) -> str:
@@ -361,13 +684,7 @@ def save_canon(session_id: str, text: str) -> None:
 
 
 def load_context(session_id: str) -> dict:
-    path = session_paths(session_id)['context']
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return {}
+    return _load_json(session_paths(session_id)['context'], {})
 
 
 def save_context(session_id: str, context: dict) -> None:
@@ -432,13 +749,7 @@ def save_turn_trace(session_id: str, turn_id: str, trace: dict) -> Path:
 
 
 def load_turn_trace(session_id: str, turn_id: str) -> dict:
-    path = _trace_file_path(session_id, turn_id)
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return {}
+    return _load_json(_trace_file_path(session_id, turn_id), {})
 
 
 def build_state_snapshot(state: dict) -> dict:
@@ -515,9 +826,8 @@ def _load_persona_dir(directory: Path) -> dict[str, dict]:
     if not directory.exists():
         return out
     for path in sorted(directory.glob('*.json')):
-        try:
-            data = json.loads(path.read_text(encoding='utf-8'))
-        except Exception:
+        data = _load_json(path, None)
+        if not isinstance(data, dict):
             continue
         display = data.get('display_name') or data.get('npc_id') or path.stem
         if display and display not in out:
@@ -737,12 +1047,8 @@ def seed_default_state(session_id: str) -> dict:
 
 
 def load_meta(session_id: str) -> dict:
-    path = session_paths(session_id)['meta']
-    if not path.exists():
-        return {'last_turn_id': 0, 'processed_client_turn_ids': {}}
-    try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
+    data = _load_json(session_paths(session_id)['meta'], {'last_turn_id': 0, 'processed_client_turn_ids': {}})
+    if not isinstance(data, dict):
         data = {}
     data.setdefault('last_turn_id', 0)
     data.setdefault('processed_client_turn_ids', {})
@@ -765,10 +1071,11 @@ MAX_IDEMPOTENCY_CACHE = 50
 
 
 def save_meta(session_id: str, meta: dict) -> None:
-    cache = meta.get('processed_client_turn_ids', {})
-    if isinstance(cache, dict) and len(cache) > MAX_IDEMPOTENCY_CACHE:
-        sorted_keys = sorted(cache.keys())
-        for key in sorted_keys[:len(cache) - MAX_IDEMPOTENCY_CACHE]:
-            del cache[key]
-    path = session_paths(session_id)['meta']
-    _atomic_write_json(path, meta)
+    with _STORE_LOCK:
+        cache = meta.get('processed_client_turn_ids', {})
+        if isinstance(cache, dict) and len(cache) > MAX_IDEMPOTENCY_CACHE:
+            sorted_keys = sorted(cache.keys())
+            for key in sorted_keys[:len(cache) - MAX_IDEMPOTENCY_CACHE]:
+                del cache[key]
+        path = session_paths(session_id)['meta']
+        _atomic_write_json(path, meta)

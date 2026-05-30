@@ -11,7 +11,7 @@ from object_bootstrap_agent import load_object_registry
 from clue_bootstrap_agent import load_clue_registry
 from player_profile import build_player_profile_detail_sections, format_player_profile_detail_sections, load_effective_player_profile, render_runtime_player_profile_markdown
 from selector import build_selector_decision
-from runtime_store import filter_committed_history_items, is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history, load_persona_index, load_state, load_summary, load_summary_chunks
+from runtime_store import filter_committed_history_items, is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history_pair_count, load_history_turn_pair, load_persona_index, load_recent_history, load_state, load_summary, load_summary_chunks
 from paths import APP_ROOT, SHARED_ROOT, read_json_file, resolve_layered_source
 from name_sanitizer import protagonist_names
 
@@ -781,6 +781,132 @@ def count_complete_turn_pairs(items: list[dict]) -> int:
     return pair_count
 
 
+def _complete_history_pair_records(items: list[dict]) -> list[dict]:
+    pairs: list[dict] = []
+    current_user = None
+    for item in filter_committed_history_items(items):
+        if not isinstance(item, dict):
+            continue
+        role = item.get('role')
+        if role == 'user':
+            current_user = item
+        elif role == 'assistant' and current_user is not None and is_complete_assistant_item(item):
+            pairs.append({
+                'turn_index': len(pairs) + 1,
+                'user': current_user,
+                'assistant': item,
+            })
+            current_user = None
+    return pairs
+
+
+def _source_turn_index_from_event(item: dict) -> int:
+    for field in ('turn_id', 'event_id'):
+        text = str(item.get(field, '') or '')
+        match = re.search(r'(\d+)$', text)
+        if match:
+            try:
+                return int(match.group(1))
+            except Exception:
+                return 0
+    return 0
+
+
+def _user_requests_prior_relation_evidence(user_text: str) -> bool:
+    """Return true when the user is asking to relate/explain prior clues.
+
+    These are discourse-level cues, not story-specific tokens. The intent is to
+    hydrate source prose whenever the user is hypothesizing about old material,
+    so summaries/indexes do not become the only grounding surface.
+    """
+    text = str(user_text or '').strip()
+    if not text:
+        return False
+    relation_cues = (
+        '是否', '是不是', '会不会', '有没有可能', '可能', '也许', '难道',
+        '有关', '关系', '关联', '同源', '类似', '像是', '是不是同',
+        '为什么', '原因', '来历', '背景', '过去', '以前', '怎么回事',
+        '猜', '推测', '怀疑', '验证', '确认', '查清', '弄清', '解释',
+    )
+    if any(cue in text for cue in relation_cues):
+        return True
+    return '?' in text or '？' in text
+
+
+def _clip_history_excerpt(text: str, *, max_chars: int = 520) -> str:
+    value = _normalize_compact_text(text)
+    if not value:
+        return ''
+    if len(value) <= max_chars:
+        return value
+    return value[: max(0, max_chars - 8)].rstrip() + '...[截断]'
+
+
+def _event_requires_source_evidence(event: dict, user_text: str, hit: dict | None = None) -> bool:
+    if _user_requests_prior_relation_evidence(user_text):
+        return True
+    if isinstance(hit, dict) and str(hit.get('reason', '') or '') == 'long_range_background':
+        return True
+    return False
+
+
+def build_history_evidence_pack(*, history_items: list[dict] | None = None, selected_events: list[dict], event_hits: list[dict], user_text: str = '', session_id: str = '', max_items: int = 8, max_total_chars: int = 3600) -> dict:
+    pairs = _complete_history_pair_records(history_items or [])
+    if not pairs and not session_id:
+        return {'items': [], 'total_chars': 0, 'dropped': 0}
+    pairs_by_turn = {int(pair['turn_index']): pair for pair in pairs}
+    hits_by_id = {
+        str(hit.get('event_id', '') or '').strip(): hit
+        for hit in (event_hits or [])
+        if isinstance(hit, dict) and str(hit.get('event_id', '') or '').strip()
+    }
+    out: list[dict] = []
+    total_chars = 0
+    seen_turns: set[int] = set()
+    for event in selected_events:
+        if not isinstance(event, dict):
+            continue
+        event_id = str(event.get('event_id', '') or event.get('turn_id', '') or '').strip()
+        hit = hits_by_id.get(event_id) or hits_by_id.get(str(event.get('turn_id', '') or '').strip())
+        if not _event_requires_source_evidence(event, user_text, hit):
+            continue
+        turn_index = _source_turn_index_from_event(event)
+        pair = load_history_turn_pair(session_id, turn_index) if session_id else pairs_by_turn.get(turn_index)
+        if not pair:
+            pair = pairs_by_turn.get(turn_index)
+        if not pair or turn_index in seen_turns:
+            continue
+        user_excerpt = _clip_history_excerpt(str(pair['user'].get('content', '') or ''), max_chars=220)
+        assistant_excerpt = _clip_history_excerpt(str(pair['assistant'].get('content', '') or ''), max_chars=620)
+        if not assistant_excerpt:
+            continue
+        remaining = max_total_chars - total_chars
+        if remaining <= 240:
+            break
+        if len(assistant_excerpt) > remaining:
+            assistant_excerpt = _clip_history_excerpt(assistant_excerpt, max_chars=remaining)
+        item = {
+            'evidence_id': f'H{len(out) + 1}',
+            'source': f'turn-{turn_index:04d}',
+            'event_id': event_id,
+            'reason': str(hit.get('reason', '') or 'selected_event') if isinstance(hit, dict) else 'selected_event',
+            'summary': _clip_history_excerpt(str(event.get('summary', '') or ''), max_chars=180),
+            'user_excerpt': user_excerpt,
+            'assistant_excerpt': assistant_excerpt,
+            'must_not_infer': [
+                '不得把本证据与其他摘要碎片拼接成未在原文出现的旧行动链。',
+                '不得新增谁曾到过某地、谁发现过某物、谁已经知情或已完成处理，除非摘录明示。',
+                '若摘录只证明线索相似或来源待查，只能写成不确定/需要查证，不能写成既定历史。',
+            ],
+        }
+        out.append(item)
+        seen_turns.add(turn_index)
+        total_chars += len(user_excerpt) + len(assistant_excerpt) + len(item['summary'])
+        if len(out) >= max_items:
+            break
+    return {'items': out, 'total_chars': total_chars, 'dropped': max(0, len(selected_events) - len(out))}
+
+
 def _summary_chunk_quarantine_reason(chunk: dict) -> str:
     text = json.dumps(chunk, ensure_ascii=False)
     for protagonist in protagonist_names():
@@ -907,8 +1033,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
 
     unified_memory_transaction = bool(memory_cfg.get('unified_transaction_enabled', True))
     persona = select_persona_summaries_for_runtime(onstage + relevant, session_id=session_id, unified_memory_transaction=unified_memory_transaction)
-    recent_history_all = load_history(session_id)
-    current_pair_count = count_complete_turn_pairs(recent_history_all)
+    current_pair_count = load_history_pair_count(session_id)
     npc_registry = load_npc_registry(session_id)
     object_registry = load_object_registry(session_id)
     clue_registry = load_clue_registry(session_id)
@@ -926,10 +1051,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         ) or min(6, recent_history_pairs)
     )
     recent_full_prose_turns = max(1, min(recent_full_prose_turns, recent_history_pairs))
-    recent_history = select_recent_history_window(
-        recent_history_all,
-        recent_history_pairs,
-    )
+    recent_history = load_recent_history(session_id, recent_history_pairs)
     keeper_records = retrieve_keeper_records(
         session_id,
         state_json,
@@ -1088,6 +1210,13 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
             or str(item.get('turn_id', '') or '').strip() in selected_event_ids
         )
     ]
+    history_evidence_pack = build_history_evidence_pack(
+        history_items=None,
+        selected_events=selected_event_summaries,
+        event_hits=selector_decision.get('event_hits', []) if isinstance(selector_decision.get('event_hits', []), list) else [],
+        user_text=user_text,
+        session_id=session_id,
+    )
     inject_lorebook_text = opening_lorebook_turn or bool(selector_decision.get('inject_lorebook_text')) or bool(lorebook_index_hits.get('items'))
     if inject_lorebook_text:
         selector_decision['inject_lorebook_text'] = True
@@ -1151,6 +1280,11 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         'context_audit': {
             **selector_decision,
             'quarantined_summary_chunks': quarantined_summary_chunks,
+            'history_evidence_pack': {
+                'items': len(history_evidence_pack.get('items', []) or []),
+                'total_chars': history_evidence_pack.get('total_chars', 0),
+                'dropped': history_evidence_pack.get('dropped', 0),
+            },
         },
         'scene_facts': {
             'time': state_json.get('time', '待确认'),
@@ -1188,5 +1322,6 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
         'selected_summary_chunks': [chunk for chunk in summary_chunks if str(chunk.get('chunk_id', '') or '') in {str(hit.get('chunk_id', '') or '') for hit in (selector_decision.get('summary_chunk_hits', []) or [])}] if bool(selector_decision.get('inject_summary')) else [],
         'event_summaries': event_summaries,
         'selected_event_summaries': selected_event_summaries,
+        'history_evidence_pack': history_evidence_pack,
         'npc_roster': selector_decision.get('npc_roster', []),
     }

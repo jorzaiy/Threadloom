@@ -45,6 +45,7 @@ ABSTRACT_CONTINUITY_SUFFIXES = ('机制', '系统', '规则', '判定', '反馈'
 ENTITY_DESCRIPTOR_SUFFIXES = (
     '身影', '背影', '影子', '影', '之人', '那人', '此人', '来人',
     '男人', '女人', '女子', '青年', '少年', '老者', '壮汉',
+    '妇人', '汉子', '老汉', '老妇', '车夫',
     '制服人', '黑衣人', '灰衣人', '白衣人', '毡笠人', '人',
 )
 GENERIC_SHADOW_LABELS = {'暗影', '黑影', '影子', '人影'}
@@ -619,9 +620,14 @@ def entity_descriptor_signature(name: str) -> str:
     text = sanitize_runtime_name(name)
     if not text:
         return ''
+    text = re.sub(r'[（(][^）)]{1,8}[）)]', '', text).strip()
     for suffix in ENTITY_DESCRIPTOR_SUFFIXES:
         if text.endswith(suffix) and len(text) > len(suffix):
-            return text[:-len(suffix)].strip()
+            stem = text[:-len(suffix)].strip()
+            stem = stem.replace('的', '').strip()
+            if len(stem) >= 3 and stem.endswith('子'):
+                stem = stem[:-1].strip()
+            return stem or text
     return text
 
 
@@ -2143,131 +2149,11 @@ def _signal_matches_resolved(signal_text: str, resolved_text: str) -> bool:
     return len(left_tokens & right_tokens) >= max(1, min(len(left_tokens), len(right_tokens)) // 2)
 
 
-def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id: str | None = None) -> dict:
-    prev = prev_state or {}
-    current = dict(state or {})
-    prev_actors = prev.get('actors', {}) if isinstance(prev.get('actors', {}), dict) else {}
-    current_actors = current.get('actors', {}) if isinstance(current.get('actors', {}), dict) else {}
-    current['actors'] = {**current_actors, **prev_actors}
-    actor_canonical_lookup = _actor_canonical_lookup(current['actors'])
-    for key in ('actor_context_index',):
-        value = current.get(key, prev.get(key, {}))
-        if not isinstance(value, dict):
-            value = prev.get(key, {}) if isinstance(prev.get(key, {}), dict) else {}
-        current[key] = value
-    for key in ('knowledge_records',):
-        value = current.get(key, prev.get(key, []))
-        if not isinstance(value, list):
-            value = prev.get(key, []) if isinstance(prev.get(key, []), list) else []
-        current[key] = value
-    scene_objective = current.get('scene_objective', prev.get('scene_objective', {}))
-    if isinstance(scene_objective, dict):
-        status = str(scene_objective.get('status', '') or 'active').strip().lower() or 'active'
-        if status not in {'active', 'resolved'}:
-            status = 'active'
-        label = str(scene_objective.get('label', '') or '').strip()
-        objective = str(scene_objective.get('objective', '') or '').strip()
-        completion_hint = str(scene_objective.get('completion_hint', '') or '').strip()
-        if objective or status == 'resolved':
-            current['scene_objective'] = {
-                **({'label': label[:40]} if label else {}),
-                **({'objective': objective[:160]} if objective else {}),
-                'status': status,
-                **({'completion_hint': completion_hint[:120]} if completion_hint else {}),
-            }
-        else:
-            current.pop('scene_objective', None)
-    else:
-        current.pop('scene_objective', None)
-
-    def _derive_names_from_scene_entities(items: list[dict], *, onstage_only: bool = False) -> list[str]:
-        out: list[str] = []
-        for item in items or []:
-            if not isinstance(item, dict):
-                continue
-            if onstage_only and not bool(item.get('onstage')):
-                continue
-            name = sanitize_runtime_name(item.get('primary_label', ''))
-            if not name or is_protagonist_name(name) or name in out or looks_like_bad_entity_fragment(name):
-                continue
-            out.append(name)
-            if len(out) >= 6:
-                break
-        return out
-
-    def _looks_like_fragmentary_core_value(value: str, field: str) -> bool:
-        text = str(value or '').strip()
-        if not text:
-            return True
-        actor_names = set(current.get('onstage_npcs', []) or []) | set(current.get('relevant_npcs', []) or [])
-        actor_names |= {str(item.get('primary_label', '') or '').strip() for item in (current.get('scene_entities', []) or []) if isinstance(item, dict)}
-        actor_names = {name for name in actor_names if name}
-        if len(text) < 4:
-            return True
-        if field != 'main_event' and field != 'immediate_goal' and len(text) > 42:
-            return True
-        if field == 'main_event' and _looks_like_header_only_event(text):
-            return True
-        if field == 'main_event' and _looks_like_location_only_event(text, current.get('location', '')):
-            return True
-        if '→' in text:
-            return True
-        if text.count('：') + text.count(':') >= 1 and len(text) <= 20:
-            return True
-        if text.startswith(('说：', '问：', '答：', '看着', '盯着', '靠着', '贴着', '撇撇嘴', '皱着眉', '抿着嘴', '仰着头', '缩在')):
-            return True
-        if text.startswith(('我', '你', '她', '他')) and len(text) <= 18:
-            return True
-        if text.endswith(('了', '着', '呢', '呀', '吧', '吗')) and len(text) <= 18:
-            return True
-        if field == 'immediate_goal' and len(text) <= 4:
-            return True
-        if field not in {'main_event', 'immediate_goal'} and actor_names and not any(name in text for name in actor_names) and '，' in text:
-            return True
-        return False
-
-    for key in ['time', 'location', 'main_event', 'immediate_goal']:
-        value = current.get(key)
-        if not isinstance(value, str) or not value.strip():
-            current[key] = prev.get(key, '待确认')
-        else:
-            current[key] = value.strip()
-    current['time'] = coarsen_current_time(current.get('time', '')) or current.get('time', '待确认')
-    current['main_event'] = _clean_main_event(current.get('main_event', '')) or current.get('main_event', '')
-
-    for key in ['main_event', 'immediate_goal']:
-        if _looks_like_fragmentary_core_value(current.get(key, ''), key):
-            previous_value = str(prev.get(key, '') or '').strip()
-            if previous_value and not _looks_like_fragmentary_core_value(previous_value, key):
-                current[key] = previous_value
-                continue
-            active_main = next((str(item.get('label', '') or '').strip() for item in (current.get('active_threads', []) or []) if isinstance(item, dict) and str(item.get('kind', '') or '') == 'main'), '')
-            if active_main and not _looks_like_fragmentary_core_value(active_main, key):
-                current[key] = active_main
-            elif key == 'immediate_goal':
-                current[key] = '待确认'
-
-    if isinstance(current.get('scene_entities', []), list):
-        current['scene_entities'] = _filter_scene_entities_with_person_evidence(current.get('scene_entities', []), current, prev)
-        current['scene_entities'] = _canonicalize_scene_entities_with_actors(current['scene_entities'], actor_canonical_lookup)
-
-    if isinstance(current.get('onstage_npcs', []), list):
-        current['onstage_npcs'] = _canonicalize_actor_names(current.get('onstage_npcs', []), actor_canonical_lookup, limit=6)
-    if isinstance(current.get('relevant_npcs', []), list):
-        current['relevant_npcs'] = _canonicalize_actor_names(current.get('relevant_npcs', []), actor_canonical_lookup, limit=6)
-
-    entity_onstage_names = _derive_names_from_scene_entities(current.get('scene_entities', []), onstage_only=True)
-    if entity_onstage_names:
-        current['onstage_npcs'] = entity_onstage_names
-    else:
-        current['onstage_npcs'] = dedupe_names(current.get('onstage_npcs', prev.get('onstage_npcs', [])), limit=6)
-    current['onstage_npcs'] = _filter_person_names_with_evidence(current['onstage_npcs'], current, prev, limit=6)
-    current['relevant_npcs'] = dedupe_names(
-        [name for name in current.get('relevant_npcs', prev.get('relevant_npcs', [])) if name not in current['onstage_npcs']],
-        limit=6,
-    )
-    current['relevant_npcs'] = _filter_person_names_with_evidence(current['relevant_npcs'], current, prev, limit=6)
-
+def _normalize_signal_layer(current: dict, prev: dict) -> None:
+    """Normalize carryover signals in place and derive immediate_risks /
+    carryover_clues from them. Explicitly resolved signals are filtered out of
+    the carried signals and the derived risk/clue lists. Extracted verbatim from
+    normalize_state_dict."""
     resolved_signals = _normalize_resolved_signals(current.get('resolved_signals', []))
     current['carryover_signals'] = normalize_carryover_signals(current.get('carryover_signals', prev.get('carryover_signals', [])))
     if resolved_signals:
@@ -2292,6 +2178,19 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             if not any(_signal_matches_resolved(item, marker) for marker in resolved_signals)
         ]
         current['resolved_signals'] = resolved_signals
+
+
+def _normalize_object_layer(current: dict, prev: dict) -> None:
+    """Normalize the object layer of ``current`` in place.
+
+    Merges tracked objects with the previous turn, retires
+    consumed/destroyed/lost/archived items into ``graveyard_objects``, and
+    rebuilds ``possession_state`` and ``object_visibility`` against the valid
+    holder set and the surviving object ids. Expects ``current`` to already have
+    its normalized ``onstage_npcs`` / ``relevant_npcs`` / ``actors``. Extracted
+    verbatim from normalize_state_dict; all object-pipeline locals are confined
+    here and are not consumed by later stages.
+    """
     tracked_objects = current.get('tracked_objects', prev.get('tracked_objects', []))
     if not isinstance(tracked_objects, list):
         tracked_objects = prev.get('tracked_objects', []) if isinstance(prev.get('tracked_objects', []), list) else []
@@ -2483,6 +2382,135 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
             continue
     current['tracked_objects'] = filtered_objects
     current['graveyard_objects'] = list(graveyard_by_id.values())[-40:]
+
+
+def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id: str | None = None) -> dict:
+    prev = prev_state or {}
+    current = dict(state or {})
+    prev_actors = prev.get('actors', {}) if isinstance(prev.get('actors', {}), dict) else {}
+    current_actors = current.get('actors', {}) if isinstance(current.get('actors', {}), dict) else {}
+    current['actors'] = {**current_actors, **prev_actors}
+    actor_canonical_lookup = _actor_canonical_lookup(current['actors'])
+    for key in ('actor_context_index',):
+        value = current.get(key, prev.get(key, {}))
+        if not isinstance(value, dict):
+            value = prev.get(key, {}) if isinstance(prev.get(key, {}), dict) else {}
+        current[key] = value
+    for key in ('knowledge_records',):
+        value = current.get(key, prev.get(key, []))
+        if not isinstance(value, list):
+            value = prev.get(key, []) if isinstance(prev.get(key, []), list) else []
+        current[key] = value
+    scene_objective = current.get('scene_objective', prev.get('scene_objective', {}))
+    if isinstance(scene_objective, dict):
+        status = str(scene_objective.get('status', '') or 'active').strip().lower() or 'active'
+        if status not in {'active', 'resolved'}:
+            status = 'active'
+        label = str(scene_objective.get('label', '') or '').strip()
+        objective = str(scene_objective.get('objective', '') or '').strip()
+        completion_hint = str(scene_objective.get('completion_hint', '') or '').strip()
+        if objective or status == 'resolved':
+            current['scene_objective'] = {
+                **({'label': label[:40]} if label else {}),
+                **({'objective': objective[:160]} if objective else {}),
+                'status': status,
+                **({'completion_hint': completion_hint[:120]} if completion_hint else {}),
+            }
+        else:
+            current.pop('scene_objective', None)
+    else:
+        current.pop('scene_objective', None)
+
+    def _derive_names_from_scene_entities(items: list[dict], *, onstage_only: bool = False) -> list[str]:
+        out: list[str] = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            if onstage_only and not bool(item.get('onstage')):
+                continue
+            name = sanitize_runtime_name(item.get('primary_label', ''))
+            if not name or is_protagonist_name(name) or name in out or looks_like_bad_entity_fragment(name):
+                continue
+            out.append(name)
+            if len(out) >= 6:
+                break
+        return out
+
+    def _looks_like_fragmentary_core_value(value: str, field: str) -> bool:
+        text = str(value or '').strip()
+        if not text:
+            return True
+        actor_names = set(current.get('onstage_npcs', []) or []) | set(current.get('relevant_npcs', []) or [])
+        actor_names |= {str(item.get('primary_label', '') or '').strip() for item in (current.get('scene_entities', []) or []) if isinstance(item, dict)}
+        actor_names = {name for name in actor_names if name}
+        if len(text) < 4:
+            return True
+        if field != 'main_event' and field != 'immediate_goal' and len(text) > 42:
+            return True
+        if field == 'main_event' and _looks_like_header_only_event(text):
+            return True
+        if field == 'main_event' and _looks_like_location_only_event(text, current.get('location', '')):
+            return True
+        if '→' in text:
+            return True
+        if text.count('：') + text.count(':') >= 1 and len(text) <= 20:
+            return True
+        if text.startswith(('说：', '问：', '答：', '看着', '盯着', '靠着', '贴着', '撇撇嘴', '皱着眉', '抿着嘴', '仰着头', '缩在')):
+            return True
+        if text.startswith(('我', '你', '她', '他')) and len(text) <= 18:
+            return True
+        if text.endswith(('了', '着', '呢', '呀', '吧', '吗')) and len(text) <= 18:
+            return True
+        if field == 'immediate_goal' and len(text) <= 4:
+            return True
+        if field not in {'main_event', 'immediate_goal'} and actor_names and not any(name in text for name in actor_names) and '，' in text:
+            return True
+        return False
+
+    for key in ['time', 'location', 'main_event', 'immediate_goal']:
+        value = current.get(key)
+        if not isinstance(value, str) or not value.strip():
+            current[key] = prev.get(key, '待确认')
+        else:
+            current[key] = value.strip()
+    current['time'] = coarsen_current_time(current.get('time', '')) or current.get('time', '待确认')
+    current['main_event'] = _clean_main_event(current.get('main_event', '')) or current.get('main_event', '')
+
+    for key in ['main_event', 'immediate_goal']:
+        if _looks_like_fragmentary_core_value(current.get(key, ''), key):
+            previous_value = str(prev.get(key, '') or '').strip()
+            if previous_value and not _looks_like_fragmentary_core_value(previous_value, key):
+                current[key] = previous_value
+                continue
+            active_main = next((str(item.get('label', '') or '').strip() for item in (current.get('active_threads', []) or []) if isinstance(item, dict) and str(item.get('kind', '') or '') == 'main'), '')
+            if active_main and not _looks_like_fragmentary_core_value(active_main, key):
+                current[key] = active_main
+            elif key == 'immediate_goal':
+                current[key] = '待确认'
+
+    if isinstance(current.get('scene_entities', []), list):
+        current['scene_entities'] = _filter_scene_entities_with_person_evidence(current.get('scene_entities', []), current, prev)
+        current['scene_entities'] = _canonicalize_scene_entities_with_actors(current['scene_entities'], actor_canonical_lookup)
+
+    if isinstance(current.get('onstage_npcs', []), list):
+        current['onstage_npcs'] = _canonicalize_actor_names(current.get('onstage_npcs', []), actor_canonical_lookup, limit=6)
+    if isinstance(current.get('relevant_npcs', []), list):
+        current['relevant_npcs'] = _canonicalize_actor_names(current.get('relevant_npcs', []), actor_canonical_lookup, limit=6)
+
+    entity_onstage_names = _derive_names_from_scene_entities(current.get('scene_entities', []), onstage_only=True)
+    if entity_onstage_names:
+        current['onstage_npcs'] = entity_onstage_names
+    else:
+        current['onstage_npcs'] = dedupe_names(current.get('onstage_npcs', prev.get('onstage_npcs', [])), limit=6)
+    current['onstage_npcs'] = _filter_person_names_with_evidence(current['onstage_npcs'], current, prev, limit=6)
+    current['relevant_npcs'] = dedupe_names(
+        [name for name in current.get('relevant_npcs', prev.get('relevant_npcs', [])) if name not in current['onstage_npcs']],
+        limit=6,
+    )
+    current['relevant_npcs'] = _filter_person_names_with_evidence(current['relevant_npcs'], current, prev, limit=6)
+
+    _normalize_signal_layer(current, prev)
+    _normalize_object_layer(current, prev)
 
     candidate_entities = current.get('scene_entities', [])
     if isinstance(candidate_entities, list):

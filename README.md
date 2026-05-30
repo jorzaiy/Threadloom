@@ -49,6 +49,7 @@ http://127.0.0.1:8765
 | [Operations](doc/OPERATIONS.md) | 启动、角色卡导入、多用户操作、公网部署检查清单 |
 | [Context Flow](doc/CONTEXT-FLOW.md) | 上下文装配与 prompt 流向 |
 | [Review](doc/REVIEW.md) | 当前审查记录与质量边界 |
+| [Narrative Graph / CodeGraph](doc/NARRATIVE-GRAPH-CODEGRAPH.md) | `codegraph` 相关性分析与 Threadloom 叙事图实施方案 |
 
 ## 数据与配置
 

@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
 
 try:
     from atomic_io import atomic_write_json
+    from name_sanitizer import sanitize_runtime_name, is_protagonist_name, looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
     from runtime_store import filter_committed_history_items, load_event_summaries, load_history, load_state, session_paths
 except ImportError:
     from .atomic_io import atomic_write_json
+    from .name_sanitizer import sanitize_runtime_name, is_protagonist_name, looks_like_bad_entity_fragment, looks_like_non_person_alias_fragment
     from .runtime_store import filter_committed_history_items, load_event_summaries, load_history, load_state, session_paths
 
 
@@ -23,6 +26,9 @@ MICRO_ACTION_PATTERNS = (
     '张了一下', '合上', '动了一下', '滑了一下', '抖了一下', '缩了一下',
     '攥紧', '松开', '半寸', '一寸', '两息', '三息', '盯着',
 )
+
+NPC_AUDIT_SUFFIXES = ('男人', '女人', '女子', '男子', '姑娘', '老者', '少年', '青年', '修士', '掌柜', '小二', '老板', '妇人', '汉子')
+NPC_AUDIT_PREFIXES = ('帷帽', '灰布衫', '黑脸膛', '干瘦', '鬓角', '嚼咸菜')
 
 
 def _text(value: Any) -> str:
@@ -128,6 +134,115 @@ def _persona_hook_findings(state: dict) -> list[dict]:
     return findings
 
 
+def _actor_surfaces(state: dict) -> set[str]:
+    surfaces: set[str] = set()
+    actors = state.get('actors', {}) if isinstance(state.get('actors', {}), dict) else {}
+    for actor in actors.values():
+        if not isinstance(actor, dict):
+            continue
+        for value in [actor.get('name', '')] + list(actor.get('aliases', []) or []):
+            name = sanitize_runtime_name(value)
+            if name:
+                surfaces.add(name)
+    for item in state.get('important_npcs', []) or []:
+        if not isinstance(item, dict):
+            continue
+        for value in [item.get('primary_label', '')] + list(item.get('aliases', []) or []):
+            name = sanitize_runtime_name(value)
+            if name:
+                surfaces.add(name)
+    for item in state.get('scene_entities', []) or []:
+        if not isinstance(item, dict):
+            continue
+        for value in [item.get('primary_label', '')] + list(item.get('aliases', []) or []):
+            name = sanitize_runtime_name(value)
+            if name:
+                surfaces.add(name)
+    return surfaces
+
+
+def _looks_like_npc_audit_name(value: object) -> bool:
+    name = sanitize_runtime_name(value)
+    if not name or is_protagonist_name(name) or looks_like_bad_entity_fragment(name) or looks_like_non_person_alias_fragment(name):
+        return False
+    if any(ch.isdigit() for ch in name):
+        return False
+    if len(name) > 8:
+        return False
+    if name in {'来人', '客人', '众人', '几人', '那人', '有人', '掌柜', '修士'}:
+        return False
+    return any(name.endswith(suffix) for suffix in NPC_AUDIT_SUFFIXES) or any(prefix in name for prefix in NPC_AUDIT_PREFIXES)
+
+
+def _recent_actor_mentions(history: list[dict], *, window_turns: int) -> dict[str, dict]:
+    mentions: dict[str, dict] = {}
+    for item in _recent_assistant_items(history, window_turns):
+        content = _text(item.get('content'))
+        if not content:
+            continue
+        candidates = set(re.findall(r'[\u4e00-\u9fff]{1,6}(?:男人|女人|女子|男子|姑娘|老者|少年|青年|修士|掌柜|小二|老板|妇人|汉子)', content))
+        for raw_name in candidates:
+            name = sanitize_runtime_name(raw_name)
+            for prefix in ('了个', '那个', '这个', '一位', '一个', '几个', '从', '朝', '把', '瞥了眼', '他收走', '不是朝', '气息从', '角落那桌'):
+                if name.startswith(prefix) and len(name) > len(prefix) + 2:
+                    name = name[len(prefix):]
+            if not _looks_like_npc_audit_name(name):
+                continue
+            entry = mentions.setdefault(name, {'name': name, 'sources': [], 'excerpt': ''})
+            entry['sources'].append(_turn_label(item, len(entry['sources'])))
+            if not entry['excerpt']:
+                idx = content.find(name)
+                entry['excerpt'] = content[max(0, idx - 50):idx + 110] if idx >= 0 else content[:160]
+    return mentions
+
+
+def npc_consistency_findings(state: dict, history: list[dict], event_items: list[dict], *, window_turns: int = 6) -> list[dict]:
+    known = _actor_surfaces(state)
+    findings: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(kind: str, severity: str, name: str, evidence: dict) -> None:
+        clean = sanitize_runtime_name(name)
+        key = (kind, clean)
+        if not clean or key in seen:
+            return
+        seen.add(key)
+        findings.append({'type': kind, 'severity': severity, 'name': clean, 'evidence': evidence})
+
+    for name, data in _recent_actor_mentions(history, window_turns=window_turns).items():
+        if name not in known and len(data.get('sources', [])) >= 2:
+            add('unregistered_npc_candidate', 'warning', name, data)
+
+    for item in (event_items or [])[-max(6, window_turns):]:
+        if not isinstance(item, dict):
+            continue
+        for actor in item.get('actors', []) or []:
+            name = sanitize_runtime_name(actor)
+            if _looks_like_npc_audit_name(name) and name not in known:
+                add('summary_actor_missing_from_registry', 'warning', name, {'event_id': item.get('event_id'), 'turn_id': item.get('turn_id')})
+
+    scope = state.get('knowledge_scope', {}) if isinstance(state.get('knowledge_scope', {}), dict) else {}
+    npc_local = scope.get('npc_local', {}) if isinstance(scope.get('npc_local', {}), dict) else {}
+    for raw_name, payload in npc_local.items():
+        name = sanitize_runtime_name(raw_name)
+        if _looks_like_npc_audit_name(name) and name not in known:
+            learned = payload.get('learned', []) if isinstance(payload, dict) and isinstance(payload.get('learned', []), list) else []
+            add('orphan_npc_knowledge_scope', 'warning', name, {'learned': learned[:3]})
+
+    entity_names_by_id: dict[str, set[str]] = {}
+    for item in (state.get('resolved_events', []) or [])[-20:]:
+        if not isinstance(item, dict):
+            continue
+        entity_id = _text(item.get('entity_id'))
+        name = sanitize_runtime_name(item.get('primary_label', ''))
+        if entity_id and name:
+            entity_names_by_id.setdefault(entity_id, set()).add(name)
+    for entity_id, names in entity_names_by_id.items():
+        if len(names) > 1:
+            add('scene_entity_id_reuse', 'warning', entity_id, {'names': sorted(names)})
+    return findings
+
+
 def _severity_from_issues(issues: list[dict]) -> str:
     if any(item.get('severity') == 'critical' for item in issues):
         return 'critical'
@@ -167,6 +282,7 @@ def run_session_audit(session_id: str, *, window_turns: int = 6, save: bool = Tr
     style = analyze_style_drift(history, window_turns=window_turns)
     polluted_events = _polluted_event_summaries(event_items)
     persona_findings = _persona_hook_findings(state)
+    npc_findings = npc_consistency_findings(state, history, event_items, window_turns=window_turns)
 
     issues: list[dict] = []
     if style['status'] in {'warning', 'critical'}:
@@ -193,6 +309,14 @@ def run_session_audit(session_id: str, *, window_turns: int = 6, save: bool = Tr
             'evidence': persona_findings,
             'suggested_action': '人工审查并将微动作改成更抽象的行为倾向。',
         })
+    if npc_findings:
+        issues.append({
+            'type': 'npc_consistency',
+            'severity': 'warning',
+            'message': '最近叙事或记忆中存在疑似 NPC，但未稳定进入 actor / important_npcs / scene_entities。',
+            'evidence': npc_findings,
+            'suggested_action': '审查候选 NPC；确认后注册 actor、important_npc 或添加忽略规则。',
+        })
 
     report = {
         'version': 1,
@@ -206,6 +330,7 @@ def run_session_audit(session_id: str, *, window_turns: int = 6, save: bool = Tr
             'style_status': style['status'],
             'polluted_event_summary_count': len(polluted_events),
             'persona_hook_issue_count': len(persona_findings),
+            'npc_consistency_issue_count': len(npc_findings),
         },
         'style_drift': style,
         'issues': issues,

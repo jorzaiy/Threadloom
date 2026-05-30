@@ -702,6 +702,261 @@ def validate_message_payload(payload: dict[str, Any]) -> tuple[bool, dict[str, A
     }
 
 
+def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id, debug_enabled, meta, turn_trace, finalize_response, append_turn_history):
+    """Handle an opening-choice turn end-to-end: bootstrap state from the chosen
+    opening, run narrator + skeleton/state keepers, commit history/state/meta, and
+    build the response + turn trace. Extracted (dedented) from the nested closure
+    in handle_message; the handle_message-local helpers finalize_response /
+    append_turn_history and the per-turn locals are passed in explicitly. Covered
+    by tests/test_handle_message_paths.py."""
+    state = initialize_opening_choice_state(session_id, choice, persist=False)
+    opening_prompt = build_opening_choice_reply(choice)
+    context = build_runtime_context(session_id, user_text=opening_prompt)
+    scene = context.get('scene_facts', {})
+    arbiter = run_arbiter(opening_prompt, scene)
+    arbiter_result = arbiter.get('results', []) if arbiter.get('arbiter_needed') else None
+    state_fragment = build_state_fragment(state, scene, user_text=opening_prompt, arbiter=arbiter)
+    context = dict(context)
+    context['state_fragment'] = state_fragment
+    system_prompt, user_prompt = build_narrator_input(context, opening_prompt, arbiter_result=arbiter_result)
+    reply, usage, narrator_retry_trace = _call_narrator_with_retries(system_prompt, user_prompt)
+    _message_stage('narrator_complete', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+    model_error = narrator_retry_trace.get('last_error') if narrator_retry_trace.get('all_failed') else None
+    if narrator_retry_trace.get('all_failed'):
+        response = {
+            'session_id': session_id,
+            'turn_id': turn_id,
+            'reply': '',
+            'usage': usage,
+            'narrator_retry': narrator_retry_trace,
+            'state_snapshot': build_state_snapshot(state),
+            'web': web_runtime_settings(),
+            'error': {'code': 'NARRATOR_UNAVAILABLE', 'message': '正文生成不完整，已重试 3 次，未提交本轮'},
+        }
+        trace = copy.deepcopy(turn_trace)
+        trace['mode'] = 'opening-choice-narrator-failed'
+        trace['opening'] = {
+            'choice': choice,
+            'opening_prompt': opening_prompt,
+        }
+        trace['runtime'] = {
+            'context': _trace_context_excerpt(context),
+            'arbiter': copy.deepcopy(arbiter),
+            'state_fragment_initial': copy.deepcopy(state_fragment),
+            'narrator': {
+                'system_prompt': _trim_trace_text(_redact_trace_prompt(system_prompt)),
+                'user_prompt': _trim_trace_text(user_prompt),
+                'prompt_block_stats': copy.deepcopy(prompt_block_stats(system_prompt)),
+                'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
+                'reply': '',
+                'usage': copy.deepcopy(usage),
+                'model_error': model_error,
+                'retry_trace': copy.deepcopy(narrator_retry_trace),
+            },
+        }
+        trace['post_turn'] = {
+            'state': copy.deepcopy(state),
+            'state_snapshot': build_state_snapshot(state),
+            'not_committed': True,
+        }
+        return finalize_response(response, trace=trace)
+    state['opening_started'] = True
+    state['state_keeper_bootstrapped'] = False
+    state_error = None
+    state_keeper_trace = {}
+    state_keeper_diagnostics = None
+    skeleton_keeper_trace = None
+    skeleton_keeper_diagnostics = None
+    try:
+        skeleton_result = call_skeleton_keeper(
+            state,
+            state_fragment,
+            reply,
+            return_trace=True,
+        )
+        skeleton_fragment = skeleton_result[0]
+        skeleton_usage = skeleton_result[1]
+        skeleton_keeper_trace = skeleton_result[2] if len(skeleton_result) > 2 else None
+    except Exception as err:
+        skeleton_keeper_diagnostics = {
+            'provider_requested': 'llm',
+            'provider_used': 'disabled-or-failed',
+            'model_usage': None,
+            'fallback_used': True,
+            'fallback_reason': str(err),
+        }
+    else:
+        state_fragment = merge_state_skeleton(state_fragment, skeleton_fragment)
+        skeleton_keeper_diagnostics = {
+            'provider_requested': 'llm',
+            'provider_used': 'llm',
+            'model_usage': skeleton_usage,
+            'fallback_used': False,
+            'fallback_reason': None,
+            'skeleton_fragment': skeleton_fragment,
+        }
+
+    try:
+        state, state_keeper_trace = call_state_keeper(
+            session_id,
+            reply,
+            state_fragment=state_fragment,
+            user_text=opening_prompt,
+            return_trace=True,
+        )
+        state_keeper_diagnostics = state.get('state_keeper_diagnostics', {})
+        state_keeper_diagnostics['bootstrap_turn'] = True
+        state['state_keeper_bootstrapped'] = True
+    except Exception as err:
+        state_error = str(err)
+        fragment_state = build_state_from_fragment(state, state_fragment, session_id)
+        fragment_state['state_keeper_diagnostics'] = _state_keeper_failure_diagnostics(err, state_error)
+        fragment_state['state_keeper_diagnostics']['bootstrap_turn'] = True
+        fragment_state['state_keeper_bootstrapped'] = _keeper_fallback_bootstrapped(fragment_state, skeleton_keeper_diagnostics)
+        state = fragment_state
+        state_keeper_diagnostics = fragment_state.get('state_keeper_diagnostics', {})
+        state['state_keeper_diagnostics'] = state_keeper_diagnostics
+
+    append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
+    _message_stage('history_committed', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+    state = merge_arbiter_state(state, arbiter)
+    state = apply_thread_tracker(state, user_text=opening_prompt, narrator_reply=reply, arbiter=arbiter)
+    state['continuity_hints'] = normalized_hint_entries(session_id)
+    state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
+    state = resolve_important_npc_continuity(state)
+    save_state(session_id, state)
+    _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+
+    response = {
+        'session_id': session_id,
+        'turn_id': turn_id,
+        'reply': reply,
+        'usage': usage,
+        'narrator_retry': narrator_retry_trace,
+        'state_snapshot': build_state_snapshot(state),
+        'web': web_runtime_settings(),
+    }
+    if debug_enabled:
+        response['debug'] = {
+            'scene_mode': 'opening-choice',
+            'arbiter_used': bool(arbiter.get('arbiter_needed')),
+            'arbiter_event_count': len(arbiter.get('results', [])),
+            'active_persona': [],
+            'loaded_preset': context.get('active_preset', {}).get('name', 'unknown'),
+            'loaded_onstage': state.get('onstage_npcs', []),
+            'model_error': model_error,
+            'narrator_retry': copy.deepcopy(narrator_retry_trace),
+            'state_keeper_diagnostics': copy.deepcopy(state_keeper_diagnostics) if isinstance(state_keeper_diagnostics, dict) else {},
+        }
+    meta['last_turn_id'] += 1
+    _cache_processed_turn(session_id, meta, client_turn_id, response)
+    _message_stage('idempotency_cached', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+    trace = copy.deepcopy(turn_trace)
+    trace['mode'] = 'opening-choice'
+    trace['opening'] = {
+        'choice': choice,
+        'opening_prompt': opening_prompt,
+    }
+    trace['runtime'] = {
+        'context': _trace_context_excerpt(context),
+        'arbiter': copy.deepcopy(arbiter),
+        'state_fragment_initial': copy.deepcopy(state_fragment),
+        'narrator': {
+            'system_prompt': _trim_trace_text(_redact_trace_prompt(system_prompt)),
+            'user_prompt': _trim_trace_text(user_prompt),
+            'prompt_block_stats': copy.deepcopy(prompt_block_stats(system_prompt)),
+            'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
+            'reply': reply,
+            'usage': copy.deepcopy(usage),
+            'model_error': model_error,
+            'retry_trace': copy.deepcopy(narrator_retry_trace),
+        },
+        'skeleton_keeper': {
+            'diagnostics': copy.deepcopy(skeleton_keeper_diagnostics),
+            'trace': copy.deepcopy(skeleton_keeper_trace),
+        },
+        'state_keeper': {
+            'diagnostics': copy.deepcopy(state_keeper_diagnostics),
+            'trace': copy.deepcopy(state_keeper_trace),
+            'state_error': state_error,
+        },
+    }
+    trace['post_turn'] = {
+        'state': copy.deepcopy(state),
+        'state_snapshot': build_state_snapshot(state),
+    }
+    _message_stage('response_ready', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+    return finalize_response(response, trace=trace)
+
+
+def _simple_opening_response(reply, *, usage_model, scene_mode, session_id, turn_id, ts, meta, client_turn_id, debug_enabled, state, turn_trace, finalize_response, append_turn_history):
+    """Commit a no-narrator opening/guard turn (opening-menu guard, already-started
+    guard, opening-command). These three paths share an identical commit tail;
+    only the reply text, usage model label, and scene/trace mode differ. Extracted
+    from handle_message; covered by tests/test_handle_message_paths.py."""
+    append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
+    response = {
+        'session_id': session_id,
+        'turn_id': turn_id,
+        'reply': reply,
+        'usage': {'model': usage_model, 'input_tokens': 0, 'output_tokens': 0},
+        'state_snapshot': build_state_snapshot(state),
+        'web': web_runtime_settings(),
+    }
+    if debug_enabled:
+        response['debug'] = {
+            'scene_mode': scene_mode,
+            'arbiter_used': False,
+            'arbiter_event_count': 0,
+            'active_persona': [],
+            'loaded_preset': 'world-sim-balanced',
+            'loaded_onstage': [],
+            'model_error': None,
+        }
+    meta['last_turn_id'] += 1
+    if client_turn_id:
+        meta['processed_client_turn_ids'][client_turn_id] = response
+    save_meta(session_id, meta)
+    trace = copy.deepcopy(turn_trace)
+    trace['mode'] = scene_mode
+    trace['post_turn'] = {
+        'state': copy.deepcopy(state),
+        'state_snapshot': build_state_snapshot(state),
+    }
+    return finalize_response(response, trace=trace)
+
+
+def _recent_history_pairs(history: list, limit: int = 3) -> list:
+    """Collapse a flat history list into the last ``limit`` (user, assistant)
+    content tuples. Extracted from handle_message; pure and independently
+    testable."""
+    pairs = []
+    current_user = None
+    for item in history:
+        if item.get('role') == 'user':
+            current_user = item
+        elif item.get('role') == 'assistant' and current_user is not None:
+            pairs.append((str(current_user.get('content', '') or ''), str(item.get('content', '') or '')))
+            current_user = None
+    return pairs[-limit:]
+
+
+def _apply_pending_npc_bios(state: dict, turn_number: int) -> None:
+    """Apply keeper-produced NPC bios onto existing actors in place, then drop
+    the ``_pending_npc_bios`` marker. Runs after actor_registry so a later
+    normalize pass cannot overwrite them. Extracted from handle_message."""
+    pending_bios = state.pop('_pending_npc_bios', None)
+    if pending_bios and isinstance(pending_bios, list):
+        actors = state.get('actors', {})
+        if isinstance(actors, dict):
+            for item in pending_bios:
+                actor_id = item.get('actor_id', '')
+                bio = item.get('bio', '')
+                if actor_id in actors and bio:
+                    actors[actor_id]['bio'] = bio
+                    actors[actor_id]['bio_updated_turn'] = turn_number
+
+
 def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     ok, parsed = validate_message_payload(payload)
     if not ok:
@@ -749,295 +1004,92 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         if assistant_item is not None:
             append_history(session_id, assistant_item)
 
-    def finalize_opening_choice(choice: str) -> dict[str, Any]:
-        state = initialize_opening_choice_state(session_id, choice, persist=False)
-        opening_prompt = build_opening_choice_reply(choice)
-        context = build_runtime_context(session_id, user_text=opening_prompt)
-        scene = context.get('scene_facts', {})
-        arbiter = run_arbiter(opening_prompt, scene)
-        arbiter_result = arbiter.get('results', []) if arbiter.get('arbiter_needed') else None
-        state_fragment = build_state_fragment(state, scene, user_text=opening_prompt, arbiter=arbiter)
-        context = dict(context)
-        context['state_fragment'] = state_fragment
-        system_prompt, user_prompt = build_narrator_input(context, opening_prompt, arbiter_result=arbiter_result)
-        reply, usage, narrator_retry_trace = _call_narrator_with_retries(system_prompt, user_prompt)
-        _message_stage('narrator_complete', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-        model_error = narrator_retry_trace.get('last_error') if narrator_retry_trace.get('all_failed') else None
-        if narrator_retry_trace.get('all_failed'):
-            response = {
-                'session_id': session_id,
-                'turn_id': turn_id,
-                'reply': '',
-                'usage': usage,
-                'narrator_retry': narrator_retry_trace,
-                'state_snapshot': build_state_snapshot(state),
-                'web': web_runtime_settings(),
-                'error': {'code': 'NARRATOR_UNAVAILABLE', 'message': '正文生成不完整，已重试 3 次，未提交本轮'},
-            }
-            trace = copy.deepcopy(turn_trace)
-            trace['mode'] = 'opening-choice-narrator-failed'
-            trace['opening'] = {
-                'choice': choice,
-                'opening_prompt': opening_prompt,
-            }
-            trace['runtime'] = {
-                'context': _trace_context_excerpt(context),
-                'arbiter': copy.deepcopy(arbiter),
-                'state_fragment_initial': copy.deepcopy(state_fragment),
-                'narrator': {
-                    'system_prompt': _trim_trace_text(_redact_trace_prompt(system_prompt)),
-                    'user_prompt': _trim_trace_text(user_prompt),
-                    'prompt_block_stats': copy.deepcopy(prompt_block_stats(system_prompt)),
-                    'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
-                    'reply': '',
-                    'usage': copy.deepcopy(usage),
-                    'model_error': model_error,
-                    'retry_trace': copy.deepcopy(narrator_retry_trace),
-                },
-            }
-            trace['post_turn'] = {
-                'state': copy.deepcopy(state),
-                'state_snapshot': build_state_snapshot(state),
-                'not_committed': True,
-            }
-            return finalize_response(response, trace=trace)
-        state['opening_started'] = True
-        state['state_keeper_bootstrapped'] = False
-        state_error = None
-        state_keeper_trace = {}
-        state_keeper_diagnostics = None
-        skeleton_keeper_trace = None
-        skeleton_keeper_diagnostics = None
-        try:
-            skeleton_result = call_skeleton_keeper(
-                state,
-                state_fragment,
-                reply,
-                return_trace=True,
-            )
-            skeleton_fragment = skeleton_result[0]
-            skeleton_usage = skeleton_result[1]
-            skeleton_keeper_trace = skeleton_result[2] if len(skeleton_result) > 2 else None
-        except Exception as err:
-            skeleton_keeper_diagnostics = {
-                'provider_requested': 'llm',
-                'provider_used': 'disabled-or-failed',
-                'model_usage': None,
-                'fallback_used': True,
-                'fallback_reason': str(err),
-            }
-        else:
-            state_fragment = merge_state_skeleton(state_fragment, skeleton_fragment)
-            skeleton_keeper_diagnostics = {
-                'provider_requested': 'llm',
-                'provider_used': 'llm',
-                'model_usage': skeleton_usage,
-                'fallback_used': False,
-                'fallback_reason': None,
-                'skeleton_fragment': skeleton_fragment,
-            }
-
-        try:
-            state, state_keeper_trace = call_state_keeper(
-                session_id,
-                reply,
-                state_fragment=state_fragment,
-                user_text=opening_prompt,
-                return_trace=True,
-            )
-            state_keeper_diagnostics = state.get('state_keeper_diagnostics', {})
-            state_keeper_diagnostics['bootstrap_turn'] = True
-            state['state_keeper_bootstrapped'] = True
-        except Exception as err:
-            state_error = str(err)
-            fragment_state = build_state_from_fragment(state, state_fragment, session_id)
-            fragment_state['state_keeper_diagnostics'] = _state_keeper_failure_diagnostics(err, state_error)
-            fragment_state['state_keeper_diagnostics']['bootstrap_turn'] = True
-            fragment_state['state_keeper_bootstrapped'] = _keeper_fallback_bootstrapped(fragment_state, skeleton_keeper_diagnostics)
-            state = fragment_state
-            state_keeper_diagnostics = fragment_state.get('state_keeper_diagnostics', {})
-            state['state_keeper_diagnostics'] = state_keeper_diagnostics
-
-        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
-        _message_stage('history_committed', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-        state = merge_arbiter_state(state, arbiter)
-        state = apply_thread_tracker(state, user_text=opening_prompt, narrator_reply=reply, arbiter=arbiter)
-        state['continuity_hints'] = normalized_hint_entries(session_id)
-        state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
-        state = resolve_important_npc_continuity(state)
-        save_state(session_id, state)
-        _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-
-        response = {
-            'session_id': session_id,
-            'turn_id': turn_id,
-            'reply': reply,
-            'usage': usage,
-            'narrator_retry': narrator_retry_trace,
-            'state_snapshot': build_state_snapshot(state),
-            'web': web_runtime_settings(),
-        }
-        if debug_enabled:
-            response['debug'] = {
-                'scene_mode': 'opening-choice',
-                'arbiter_used': bool(arbiter.get('arbiter_needed')),
-                'arbiter_event_count': len(arbiter.get('results', [])),
-                'active_persona': [],
-                'loaded_preset': context.get('active_preset', {}).get('name', 'unknown'),
-                'loaded_onstage': state.get('onstage_npcs', []),
-                'model_error': model_error,
-                'narrator_retry': copy.deepcopy(narrator_retry_trace),
-                'state_keeper_diagnostics': copy.deepcopy(state_keeper_diagnostics) if isinstance(state_keeper_diagnostics, dict) else {},
-            }
-        meta['last_turn_id'] += 1
-        _cache_processed_turn(session_id, meta, client_turn_id, response)
-        _message_stage('idempotency_cached', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-        trace = copy.deepcopy(turn_trace)
-        trace['mode'] = 'opening-choice'
-        trace['opening'] = {
-            'choice': choice,
-            'opening_prompt': opening_prompt,
-        }
-        trace['runtime'] = {
-            'context': _trace_context_excerpt(context),
-            'arbiter': copy.deepcopy(arbiter),
-            'state_fragment_initial': copy.deepcopy(state_fragment),
-            'narrator': {
-                'system_prompt': _trim_trace_text(_redact_trace_prompt(system_prompt)),
-                'user_prompt': _trim_trace_text(user_prompt),
-                'prompt_block_stats': copy.deepcopy(prompt_block_stats(system_prompt)),
-                'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
-                'reply': reply,
-                'usage': copy.deepcopy(usage),
-                'model_error': model_error,
-                'retry_trace': copy.deepcopy(narrator_retry_trace),
-            },
-            'skeleton_keeper': {
-                'diagnostics': copy.deepcopy(skeleton_keeper_diagnostics),
-                'trace': copy.deepcopy(skeleton_keeper_trace),
-            },
-            'state_keeper': {
-                'diagnostics': copy.deepcopy(state_keeper_diagnostics),
-                'trace': copy.deepcopy(state_keeper_trace),
-                'state_error': state_error,
-            },
-        }
-        trace['post_turn'] = {
-            'state': copy.deepcopy(state),
-            'state_snapshot': build_state_snapshot(state),
-        }
-        _message_stage('response_ready', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-        return finalize_response(response, trace=trace)
-
     state = load_state(session_id)
     if state.get('opening_mode') == 'menu' and not state.get('opening_resolved'):
         choice = resolve_opening_choice(text)
         if choice is not None:
-            return finalize_opening_choice(choice)
+            return _finalize_opening_choice(
+                choice,
+                session_id=session_id,
+                turn_id=turn_id,
+                ts=ts,
+                client_turn_id=client_turn_id,
+                debug_enabled=debug_enabled,
+                meta=meta,
+                turn_trace=turn_trace,
+                finalize_response=finalize_response,
+                append_turn_history=append_turn_history,
+            )
 
         reply = build_opening_reply(text) if is_opening_command(text) else '当前还在选择开局。请直接报数字、开局标题，或输入“随机开局”。'
-        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
-        response = {
-            'session_id': session_id,
-            'turn_id': turn_id,
-            'reply': reply,
-            'usage': {'model': 'opening-menu-guard', 'input_tokens': 0, 'output_tokens': 0},
-            'state_snapshot': build_state_snapshot(state),
-            'web': web_runtime_settings(),
-        }
-        if debug_enabled:
-            response['debug'] = {
-                'scene_mode': 'opening-menu',
-                'arbiter_used': False,
-                'arbiter_event_count': 0,
-                'active_persona': [],
-                'loaded_preset': 'world-sim-balanced',
-                'loaded_onstage': [],
-                'model_error': None,
-            }
-        meta['last_turn_id'] += 1
-        if client_turn_id:
-            meta['processed_client_turn_ids'][client_turn_id] = response
-        save_meta(session_id, meta)
-        trace = copy.deepcopy(turn_trace)
-        trace['mode'] = 'opening-menu'
-        trace['post_turn'] = {
-            'state': copy.deepcopy(state),
-            'state_snapshot': build_state_snapshot(state),
-        }
-        return finalize_response(response, trace=trace)
+        return _simple_opening_response(
+            reply,
+            usage_model='opening-menu-guard',
+            scene_mode='opening-menu',
+            session_id=session_id,
+            turn_id=turn_id,
+            ts=ts,
+            meta=meta,
+            client_turn_id=client_turn_id,
+            debug_enabled=debug_enabled,
+            state=state,
+            turn_trace=turn_trace,
+            finalize_response=finalize_response,
+            append_turn_history=append_turn_history,
+        )
 
     if meta['last_turn_id'] == 0:
         choice = resolve_opening_choice(text)
         if choice is not None:
-            return finalize_opening_choice(choice)
+            return _finalize_opening_choice(
+                choice,
+                session_id=session_id,
+                turn_id=turn_id,
+                ts=ts,
+                client_turn_id=client_turn_id,
+                debug_enabled=debug_enabled,
+                meta=meta,
+                turn_trace=turn_trace,
+                finalize_response=finalize_response,
+                append_turn_history=append_turn_history,
+            )
 
     if state.get('opening_resolved') and state.get('opening_started') and is_opening_command(text):
         reply = '当前开局已经开始。若要重新选择开局，请点击“开始新游戏”。'
-        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
-        response = {
-            'session_id': session_id,
-            'turn_id': turn_id,
-            'reply': reply,
-            'usage': {'model': 'opening-guard', 'input_tokens': 0, 'output_tokens': 0},
-            'state_snapshot': build_state_snapshot(state),
-            'web': web_runtime_settings(),
-        }
-        if debug_enabled:
-            response['debug'] = {
-                'scene_mode': 'opening-guard',
-                'arbiter_used': False,
-                'arbiter_event_count': 0,
-                'active_persona': [],
-                'loaded_preset': 'world-sim-balanced',
-                'loaded_onstage': [],
-                'model_error': None,
-            }
-        meta['last_turn_id'] += 1
-        if client_turn_id:
-            meta['processed_client_turn_ids'][client_turn_id] = response
-        save_meta(session_id, meta)
-        trace = copy.deepcopy(turn_trace)
-        trace['mode'] = 'opening-guard'
-        trace['post_turn'] = {
-            'state': copy.deepcopy(state),
-            'state_snapshot': build_state_snapshot(state),
-        }
-        return finalize_response(response, trace=trace)
+        return _simple_opening_response(
+            reply,
+            usage_model='opening-guard',
+            scene_mode='opening-guard',
+            session_id=session_id,
+            turn_id=turn_id,
+            ts=ts,
+            meta=meta,
+            client_turn_id=client_turn_id,
+            debug_enabled=debug_enabled,
+            state=state,
+            turn_trace=turn_trace,
+            finalize_response=finalize_response,
+            append_turn_history=append_turn_history,
+        )
 
     if meta['last_turn_id'] == 0 and is_opening_command(text):
         state = initialize_opening_state(session_id)
         reply = build_opening_reply(text)
-        append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
-        response = {
-            'session_id': session_id,
-            'turn_id': turn_id,
-            'reply': reply,
-            'usage': {'model': 'opening', 'input_tokens': 0, 'output_tokens': 0},
-            'state_snapshot': build_state_snapshot(state),
-            'web': web_runtime_settings(),
-        }
-        if debug_enabled:
-            response['debug'] = {
-                'scene_mode': 'opening',
-                'arbiter_used': False,
-                'arbiter_event_count': 0,
-                'active_persona': [],
-                'loaded_preset': 'world-sim-balanced',
-                'loaded_onstage': [],
-                'model_error': None,
-            }
-        meta['last_turn_id'] += 1
-        if client_turn_id:
-            meta['processed_client_turn_ids'][client_turn_id] = response
-        save_meta(session_id, meta)
-        trace = copy.deepcopy(turn_trace)
-        trace['mode'] = 'opening'
-        trace['post_turn'] = {
-            'state': copy.deepcopy(state),
-            'state_snapshot': build_state_snapshot(state),
-        }
-        return finalize_response(response, trace=trace)
+        return _simple_opening_response(
+            reply,
+            usage_model='opening',
+            scene_mode='opening',
+            session_id=session_id,
+            turn_id=turn_id,
+            ts=ts,
+            meta=meta,
+            client_turn_id=client_turn_id,
+            debug_enabled=debug_enabled,
+            state=state,
+            turn_trace=turn_trace,
+            finalize_response=finalize_response,
+            append_turn_history=append_turn_history,
+        )
 
     context = build_runtime_context(session_id, user_text=text)
     if not state:
@@ -1325,16 +1377,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state['continuity_hints'] = normalized_hint_entries(session_id)
     state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
     state = resolve_important_npc_continuity(state)
-    recent_pairs = []
-    history_after_append = load_history(session_id)
-    current_user = None
-    for item in history_after_append:
-        if item.get('role') == 'user':
-            current_user = item
-        elif item.get('role') == 'assistant' and current_user is not None:
-            recent_pairs.append((str(current_user.get('content', '') or ''), str(item.get('content', '') or '')))
-            current_user = None
-    recent_pairs = recent_pairs[-3:]
+    recent_pairs = _recent_history_pairs(load_history(session_id), limit=3)
 
     state = _add_lightweight_knowledge_delta(state, reply)
     state = update_actor_registry(
@@ -1349,16 +1392,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state, memory_canonicalization_changes = canonicalize_state_memory(state)
     state, stale_memory_changes = resolve_stale_state_threads(state)
     # Apply pending NPC bios from keeper (after actor_registry to avoid normalize overwrite)
-    pending_bios = state.pop('_pending_npc_bios', None)
-    if pending_bios and isinstance(pending_bios, list):
-        actors = state.get('actors', {})
-        if isinstance(actors, dict):
-            for item in pending_bios:
-                actor_id = item.get('actor_id', '')
-                bio = item.get('bio', '')
-                if actor_id in actors and bio:
-                    actors[actor_id]['bio'] = bio
-                    actors[actor_id]['bio_updated_turn'] = current_turn_num
+    _apply_pending_npc_bios(state, current_turn_num)
     # Single authoritative turn commit after keeper, arbiter, thread/npc trackers,
     # and actor registry have all merged their bindings. update_actor_registry
     # contains its own LLM-failure fallback so it does not raise out, which lets
