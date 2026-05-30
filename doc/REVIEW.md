@@ -446,3 +446,20 @@ session `0a1f32` 中 `main_event` 和 thread label 反复出现"只有时间+地
 - 全量 `python3 -m pytest -q`：`428 passed, 1 skipped`（较改动前 +9，全部来自新 server 路由测试）。
 - server.py 重构通过“字符串字面量多重集 HEAD↔工作树 diff”核对：所有响应字段、错误码、消息字符串计数不变，差异仅为有意去重的 session 前导消息与两处显式 404，证明 50+ handler body 转写忠实。
 - `_load_json` 行为单测：缺失→独立 default、损坏→default + `.corrupt` 备份、用户配置损坏→原地保留。
+
+### 2026-05-30 (续): 中期项 —— 补测试与 god-function 拆分
+
+承接上一条的地基收紧，本轮推进 REVIEW 列出的中期项：给未覆盖模块补单测，并把两个 god-function 拆成命名可测单元（行为不变）。
+
+补测试（这些模块之前 0 覆盖）：
+- `tests/test_atomic_io.py`（11）：原子写入成功/失败的原子性、损坏不污染原文件、json/text/bytes round-trip、`mode` 权限、父目录创建。
+- `tests/test_continuity_resolver.py`（9）：important NPC 续场的证据打分、跳过条件、`relevant_npcs` 6 上限、输入不可变（deepcopy）。
+- `tests/test_bootstrap_agents.py`（32）：npc/object/clue 三个 bootstrap agent 的 normalize/merge/启发式提取/物件标签校验/name canonicalize，以及 `ensure_npc_registry` 的 LLM-mock 解析、processed_pairs 门控与坏回复 heuristic fallback。
+
+god-function 拆分（行为保持，由既有测试守护）：
+- `state_bridge.normalize_state_dict`（466 行）抽出 `_normalize_object_layer`（~190 行：tracked object 合并/退役入 graveyard/possession/visibility/decay）与 `_normalize_signal_layer`（~28 行：carryover signals → risks/clues），主函数降到 ~280 行；由 `test_state_fragment`（127）+ `test_state_keeper_partial_accept` 等 141 个既有测试守护。
+- `handler_message.handle_message`（807 行）抽出纯函数 `_recent_history_pairs` 与 `_apply_pending_npc_bios`，并新增 `tests/test_handler_message_helpers.py`（8）直接覆盖。
+
+已识别但本轮未做（风险边界）：`handle_message` 仍无端到端直测（`test_regenerate_turn` 把它整体 mock 了，`test_opening_memory_transaction` 测的是 `opening.initialize_opening_choice_state` 而非 handler）。其 178 行 `finalize_opening_choice` 闭包与多条 guard 路径的深度拆分应先建 characterization 测试 harness（mock narrator / skeleton+state keeper / storage 驱动各路径），再做提取，避免在零覆盖的中枢代码上引入静默回归。
+
+验证：全量 `python3 -m pytest -q` = `488 passed, 1 skipped`（较上一条 +60，全部为新增测试）。

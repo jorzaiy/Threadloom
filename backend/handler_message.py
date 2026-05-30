@@ -702,6 +702,37 @@ def validate_message_payload(payload: dict[str, Any]) -> tuple[bool, dict[str, A
     }
 
 
+def _recent_history_pairs(history: list, limit: int = 3) -> list:
+    """Collapse a flat history list into the last ``limit`` (user, assistant)
+    content tuples. Extracted from handle_message; pure and independently
+    testable."""
+    pairs = []
+    current_user = None
+    for item in history:
+        if item.get('role') == 'user':
+            current_user = item
+        elif item.get('role') == 'assistant' and current_user is not None:
+            pairs.append((str(current_user.get('content', '') or ''), str(item.get('content', '') or '')))
+            current_user = None
+    return pairs[-limit:]
+
+
+def _apply_pending_npc_bios(state: dict, turn_number: int) -> None:
+    """Apply keeper-produced NPC bios onto existing actors in place, then drop
+    the ``_pending_npc_bios`` marker. Runs after actor_registry so a later
+    normalize pass cannot overwrite them. Extracted from handle_message."""
+    pending_bios = state.pop('_pending_npc_bios', None)
+    if pending_bios and isinstance(pending_bios, list):
+        actors = state.get('actors', {})
+        if isinstance(actors, dict):
+            for item in pending_bios:
+                actor_id = item.get('actor_id', '')
+                bio = item.get('bio', '')
+                if actor_id in actors and bio:
+                    actors[actor_id]['bio'] = bio
+                    actors[actor_id]['bio_updated_turn'] = turn_number
+
+
 def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     ok, parsed = validate_message_payload(payload)
     if not ok:
@@ -1325,16 +1356,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state['continuity_hints'] = normalized_hint_entries(session_id)
     state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
     state = resolve_important_npc_continuity(state)
-    recent_pairs = []
-    history_after_append = load_history(session_id)
-    current_user = None
-    for item in history_after_append:
-        if item.get('role') == 'user':
-            current_user = item
-        elif item.get('role') == 'assistant' and current_user is not None:
-            recent_pairs.append((str(current_user.get('content', '') or ''), str(item.get('content', '') or '')))
-            current_user = None
-    recent_pairs = recent_pairs[-3:]
+    recent_pairs = _recent_history_pairs(load_history(session_id), limit=3)
 
     state = _add_lightweight_knowledge_delta(state, reply)
     state = update_actor_registry(
@@ -1349,16 +1371,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state, memory_canonicalization_changes = canonicalize_state_memory(state)
     state, stale_memory_changes = resolve_stale_state_threads(state)
     # Apply pending NPC bios from keeper (after actor_registry to avoid normalize overwrite)
-    pending_bios = state.pop('_pending_npc_bios', None)
-    if pending_bios and isinstance(pending_bios, list):
-        actors = state.get('actors', {})
-        if isinstance(actors, dict):
-            for item in pending_bios:
-                actor_id = item.get('actor_id', '')
-                bio = item.get('bio', '')
-                if actor_id in actors and bio:
-                    actors[actor_id]['bio'] = bio
-                    actors[actor_id]['bio_updated_turn'] = current_turn_num
+    _apply_pending_npc_bios(state, current_turn_num)
     # Single authoritative turn commit after keeper, arbiter, thread/npc trackers,
     # and actor registry have all merged their bindings. update_actor_registry
     # contains its own LLM-failure fallback so it does not raise out, which lets
