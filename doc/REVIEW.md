@@ -463,3 +463,15 @@ god-function 拆分（行为保持，由既有测试守护）：
 已识别但本轮未做（风险边界）：`handle_message` 仍无端到端直测（`test_regenerate_turn` 把它整体 mock 了，`test_opening_memory_transaction` 测的是 `opening.initialize_opening_choice_state` 而非 handler）。其 178 行 `finalize_opening_choice` 闭包与多条 guard 路径的深度拆分应先建 characterization 测试 harness（mock narrator / skeleton+state keeper / storage 驱动各路径），再做提取，避免在零覆盖的中枢代码上引入静默回归。
 
 验证：全量 `python3 -m pytest -q` = `488 passed, 1 skipped`（较上一条 +60，全部为新增测试）。
+
+### 2026-05-30 (续2): handle_message characterization harness + finalize_opening_choice 提取
+
+补上前一条标记为"待办"的部分：先给 `handle_message` 建 characterization 测试 harness，再在其守护下把 178 行 `finalize_opening_choice` 闭包提到模块级。
+
+- `tests/test_handle_message_paths.py`（10）：用 fake 替换 narrator / skeleton+state keeper / storage / context / trackers，驱动**真实** `handle_message` 走完每条路径——runtime 提交、debug 块、幂等命中短路、narrator 失败（NARRATOR_UNAVAILABLE）、partial（NARRATOR_INCOMPLETE）、opening-menu guard、opening-choice、opening-choice narrator 失败不提交、opening-command、opening-guard。断言可观察契约（响应形态、是否提交 history/state/meta、幂等缓存），不测 keeper 内部。这是该函数首个端到端覆盖。
+- 在 harness 守护下把 `finalize_opening_choice` 提为模块级 `_finalize_opening_choice(choice, *, session_id, ...)`（10 个显式参数，并注入 `finalize_response` / `append_turn_history` 两个 handler-local 闭包）；`handle_message` 从 807 → 632 行。
+- 行为不变核验：harness 18 测全过；"字符串字面量多重集 HEAD↔工作树 diff" 完全一致（纯结构搬移，无逻辑字面量改动）。
+
+仍可继续：handle_message 三条 opening guard 路径（menu-guard / guard / command）的响应构建尾部仍有可合并的样板；现已被 harness 覆盖，后续可安全去重。
+
+验证：全量 `python3 -m pytest -q` = `498 passed, 1 skipped`（+10 为新 harness）。
