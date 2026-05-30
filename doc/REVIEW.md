@@ -548,6 +548,6 @@ god-function 拆分（行为保持，由既有测试守护）：
 
 效果：e23032 模拟下一回合即把 石根 建成 `npc_019`（personality 空，待 keeper 填）；该会话 locked+present 的 `['石根','灵貂']` 中仅 石根 新增（灵貂已是 actor），无 actor 洪泛。成为 actor 后，keeper 后续即可往他身上挂性格钩子 + 关系。
 
-仍待观察（第二层，用户暂缓）：即便已是 actor，personality 4/22、relationship 4/22 偏少，说明 keeper 对这两项产出本身偏保守；视 石根 入册后几轮的实际生成再决定是否加强 keeper 侧。
+第二层核查（turn-trace 实证，40 轮）：keeper 其实**会**产出关系——`npc_relationships` 出现 14/40 次，**含 turn-194 给 石根 的"初识"**；只是绑定要求 NPC 已是 actor（`_find_actor_id_by_name` 找不到就丢），所以石根 的关系被丢弃了。`persona_patches` 仅 5/40 且几乎全是灵貂——因为 keeper prompt 明确"persona_patches 只能绑定已存在 actor_id"，石根 不是 actor 自然不写。**结论**：relationship 与 personality-hooks 都被"非 actor"卡住，本次解锁**同时打通两者**——石根 入册后，keeper 已有的关系产出会绑定、且 keeper 变得有资格给他写 persona_patches。无需额外改动；跑几轮后查 石根 的 `relationship_to_protagonist` 与 `actor_persona_hooks` 即可验证。
 
 测试：新增 `test_actor_promotion.py`（4）；既有 `test_actor_registry` 不受影响。全量 `518 passed, 1 skipped`。
