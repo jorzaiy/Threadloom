@@ -856,7 +856,10 @@ def _valid_actor_candidate(item: dict) -> dict | None:
     name = sanitize_runtime_name(item.get('name', ''))
     if not name or is_protagonist_name(name) or looks_like_bad_entity_fragment(name):
         return None
-    if not (_looks_like_person_alias(name) or _is_descriptive_actor_name(name)):
+    # `trusted` candidates come from a locked important_npc the importance tracker
+    # already validated, so they bypass the alias/descriptive name-pattern gate
+    # (which drops bare proper names like 石根). The LLM path never sets it.
+    if not item.get('trusted') and not (_looks_like_person_alias(name) or _is_descriptive_actor_name(name)):
         return None
     aliases = []
     for alias in item.get('aliases', []) or []:
@@ -963,16 +966,24 @@ def _fallback_actor_candidates(state: dict, *, recent_text: str = '') -> list[di
     candidates: list[dict] = []
     seen: set[str] = set()
 
-    def add(name: object, *, aliases: list[str] | None = None, identity: str = '', appearance: str = '') -> None:
+    def add(name: object, *, aliases: list[str] | None = None, identity: str = '', appearance: str = '', trusted: bool = False) -> None:
         clean = sanitize_runtime_name(name)
         if not clean or clean in seen or is_protagonist_name(clean):
             return
-        if _looks_like_proper_person_name(clean):
-            return
-        if not (_looks_like_person_alias(clean) or _is_descriptive_actor_name(clean)):
-            return
-        if not _candidate_recently_mentioned(clean, state, recent_text):
-            return
+        if trusted:
+            # A locked important_npc has already been validated as a recurring
+            # character by the importance tracker, so bypass the name-pattern gate
+            # (which otherwise drops bare proper/given names like 石根 in no-LLM
+            # mode); only guard against obvious junk fragments.
+            if looks_like_bad_entity_fragment(clean):
+                return
+        else:
+            if _looks_like_proper_person_name(clean):
+                return
+            if not (_looks_like_person_alias(clean) or _is_descriptive_actor_name(clean)):
+                return
+            if not _candidate_recently_mentioned(clean, state, recent_text):
+                return
         seen.add(clean)
         candidates.append({
             'name': clean,
@@ -980,6 +991,7 @@ def _fallback_actor_candidates(state: dict, *, recent_text: str = '') -> list[di
             'personality': '',
             'appearance': _clean_text(appearance, 120),
             'identity': _clean_text(identity or '相关场景人物', 80),
+            'trusted': trusted,
         })
 
     for entity in state.get('scene_entities', []) or []:
@@ -996,6 +1008,21 @@ def _fallback_actor_candidates(state: dict, *, recent_text: str = '') -> list[di
     for name, payload in npc_local.items():
         learned = payload.get('learned', []) if isinstance(payload, dict) and isinstance(payload.get('learned', []), list) else []
         add(name, identity='有本地知情记录的场景人物', appearance='；'.join(str(item) for item in learned[:2]))
+
+    # Locked important NPCs are recurring characters the importance tracker has
+    # already validated; promote a present/active one even if its bare name fails
+    # the alias/descriptive heuristics (e.g. 石根), so it gets an actor slot the
+    # keeper can attach personality hooks + relationship_to_protagonist to. A
+    # neutral identity is used so a situational role_label doesn't fossilize.
+    for item in state.get('important_npcs', []) or []:
+        if not isinstance(item, dict) or not item.get('locked'):
+            continue
+        label = sanitize_runtime_name(item.get('primary_label', ''))
+        if not label:
+            continue
+        if not (item.get('present_now') or _candidate_recently_mentioned(label, state, recent_text)):
+            continue
+        add(item.get('primary_label', ''), aliases=item.get('aliases', []) or [], trusted=True)
     return candidates
 
 

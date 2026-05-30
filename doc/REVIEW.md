@@ -537,3 +537,17 @@ god-function 拆分（行为保持，由既有测试守护）：
 - 整段 try/except 包裹：audit 失败只 `logger.exception`，**绝不阻断已提交的回合**（专门测试 `test_session_audit_failure_never_blocks_turn` 守护）。
 - 无 LLM、读已缓存数据 + 两个小 JSON + 启发式扫描，每 3 轮一次，开销可忽略。
 - 测试：`test_handle_message_paths.py` 新增 3 项（consolidation 跑 / 非 consolidation 跳过 / 失败不阻断）。全量 `514 passed, 1 skipped`。
+
+### 2026-05-30 (续8): 锁定 important_npc 提升为 actor —— 解锁 NPC 性格/关系生成（石根 案例）
+
+用户反馈：NPC 应"性格稳定 + 关系随经历成长"，但这部分很弱——石根 出现很多轮，性格、与主角关系（临时队友）一直没生成。
+
+诊断（e23032 实测）：石根 是 `locked` / score 9 / `present_now` 的 important_npc + onstage scene_entity（持"路牌"），却**不在 `actors` 里**。根因：unified 模式 `use_llm=False` 只走启发式 `_fallback_actor_candidates`，而它（以及创建时复用的 `_valid_actor_candidate`）的名字模式闸门会丢弃裸专名（石根：非专名识别/非别称/非描述）——专名 actor 本是留给 LLM 路径，而 unified 把它关了。`personality` 与 `relationship_to_protagonist` 只挂在 actor 上，keeper 的 `persona_patches` / `npc_relationships` 也只绑定既有 actor_id → 没 actor 槽 = 性格/关系全被丢。
+
+修复（用户选"先做解锁"）：`_fallback_actor_candidates` 新增 trusted 路径——把 `locked` 且（`present_now` 或本轮被提及）的 important_npc 作为候选并标 `trusted`；`_valid_actor_candidate` 对 trusted 候选跳过名字模式闸门（保留 junk/protagonist 过滤）。依据：important_npc 的锁定本身已是 importance tracker 验证过的"反复出现人物"信号。初始 identity 用中性 `相关场景人物`，不固化情景化 role_label。
+
+效果：e23032 模拟下一回合即把 石根 建成 `npc_019`（personality 空，待 keeper 填）；该会话 locked+present 的 `['石根','灵貂']` 中仅 石根 新增（灵貂已是 actor），无 actor 洪泛。成为 actor 后，keeper 后续即可往他身上挂性格钩子 + 关系。
+
+仍待观察（第二层，用户暂缓）：即便已是 actor，personality 4/22、relationship 4/22 偏少，说明 keeper 对这两项产出本身偏保守；视 石根 入册后几轮的实际生成再决定是否加强 keeper 侧。
+
+测试：新增 `test_actor_promotion.py`（4）；既有 `test_actor_registry` 不受影响。全量 `518 passed, 1 skipped`。
