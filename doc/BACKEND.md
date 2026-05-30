@@ -6,9 +6,9 @@
 
 ## 当前文件
 
-- `server.py`：HTTP 服务入口
+- `server.py`：HTTP 服务入口；`do_GET/do_POST/do_DELETE` 通过 `_GET_ROUTES/_POST_ROUTES/_DELETE_ROUTES` 的 path→handler 分发表路由到 `_get_* / _post_* / _delete_*` handler；请求壳由 `_request_scope(method)` context manager 统一管理（解析用户/多用户上下文，`finally` 必定重置 token），session 路由前导统一走 `_resolve_scoped_session`
 - `handler_message.py`：`POST /api/message` 主链入口
-- `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照
+- `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照；JSON 读取统一走 `_load_json(path, default, *, backup_corrupt=...)`，区分“文件缺失”（返回 default 深拷贝）与“解析损坏”（`logger.exception` + 把坏文件移到 `<name>.corrupt` 后返回 default），机器生成的 session 数据默认备份、用户手编文件只记录不挪动；`_history_cache` 与 history/event-summary/meta/分片的 read-modify-write 由模块级 `_STORE_LOCK`（RLock）串行化
 - `paths.py`：三层路径管理（user / character / session 分层路径解析），提供 `active_user_id` / `active_character_id` context var 与 request-local override 机制
 - `atomic_io.py`：原子文件读写原语（写临时文件 → fsync → `os.replace`），供 `runtime_store.py` / `keeper_archive.py` 等写入层统一使用
 - `bootstrap_session.py`：新 session bootstrap
@@ -343,6 +343,8 @@ python3 backend/import_character_card.py /path/to/card.raw-card.json
 ## 开发与 LSP
 
 当前后端仍按脚本方式运行：开发时从 `backend/` 目录执行 `python3 server.py`，测试时用 `PYTHONPATH=backend` 暴露同级模块。因此 `backend/*.py` 里的 `import user_manager` / `import model_config` 这类导入是运行时契约，不应和普通功能修复混在一起批量改成包内相对导入。
+
+pytest 侧由仓库根 `conftest.py` 在收集前把仓库根与 `backend/` 同时放上 `sys.path`，使单文件运行（`pytest tests/test_foo.py`）与全量运行的收集行为一致，无需各测试文件各自插 `sys.path`；`pytest.ini` 的 `testpaths = tests` 让 bare `pytest` 只收集 `tests/`。依赖本地 live HTTP 服务、会改配置或使用旧 session 路径的手动脚本放在 `scripts/manual-checks/`，不进入 pytest 回归集。
 
 仓库根目录的 `pyrightconfig.json` 与 `basedpyrightconfig.json` 用于让 Pyright / Basedpyright LSP 匹配这个现实：
 

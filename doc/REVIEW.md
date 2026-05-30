@@ -405,3 +405,44 @@ session `0a1f32` 中 `main_event` 和 thread label 反复出现"只有时间+地
 **根因**：`_add_lightweight_knowledge_delta` 每轮把物品持有状态追加到 `knowledge_scope.protagonist.learned`，然后 `[-10:]` 截断把 keeper 提取的关键知识挤掉。到 `update_actor_registry` 转写 `knowledge_records` 时，信息已丢失。
 
 **修复**：`_add_lightweight_knowledge_delta` 直接写入 `knowledge_records`，不再经过 `knowledge_scope` 中间层，避免与 keeper 输出竞争配额。
+
+## 2026-05-30: 地基收紧 —— 测试地雷、store loader、并发锁、server 路由分发
+
+本轮不改 runtime 行为，只针对外部审查指出的“实现层债务”做四项最高性价比收口，并补齐 server 路由层缺失的回归测试。
+
+### 1. 测试地雷清理 + 统一 sys.path
+
+**问题**：`tests/` 下 4 个 script 式文件（`test_full_regression.py`、`test_keeper_e2e.py`、`test_keeper_summary.py`、`test_http_regression_current.py`）不是可被 pytest 收集的单元测试——前三个的 `test_` 函数带必填位置参数，第四个在隔离运行时因 `from backend.runtime_store import` 触发 `ModuleNotFoundError: character_assets` 而 collection error，只在全量跑时被其他文件的 `sys.path` 插入掩盖，是顺序相关的隐患。
+
+**修复**：
+- 4 个脚本 `git mv` 到 `scripts/manual-checks/`（去掉 `test_` 前缀），修正其 `sys.path` 引导以适配新深度，并附 `README` 说明它们是手动 live 脚本。
+- 新增仓库根 `conftest.py`，在任何测试收集前把仓库根与 `backend/` 同时放上 `sys.path`，使单文件运行与全量运行的收集行为一致，彻底消除顺序相关的 collection error。
+- `pytest.ini` 增加 `testpaths = tests`，bare `pytest` 只收集 `tests/`。
+
+### 2. runtime_store loader 区分“缺失”与“损坏”
+
+**问题**：`runtime_store.py` 约 11 个 loader 用 `try: json.loads(...) except Exception: return {}` 静默吞掉解析失败；尤其 `load_state` 在 `state.json` 损坏时返回 `{}`，与“文件不存在”完全无法区分，会静默走 seed-default 把整个会话状态丢掉。
+
+**修复**：抽出统一 `_load_json(path, default, *, backup_corrupt=True)`——缺失返回 default 的深拷贝；解析失败 `logger.exception` 记录，并把损坏文件 `os.replace` 移到 `<name>.corrupt` 保留后再返回 default。机器生成的 session 数据用 `backup_corrupt=True`，用户手编文件（`config/runtime.json`、`character-data.json`）用 `backup_corrupt=False` 只记录不挪动。所有简单 loader 改用此 helper，消除重复样板。
+
+### 3. _history_cache 与核心 read-modify-write 加锁
+
+**问题**：模块级 `_history_cache` 在 `ThreadingHTTPServer` 下被无锁读写；`append_history`、`append/upsert_event_summary`、`save_meta`、history 分片重建等 read-modify-write 只靠 server 层 per-session 进程内锁，跨 session 并发无保护。
+
+**修复**：参照 `player_profile.PLAYER_PROFILE_LOCK`，新增模块级 `_STORE_LOCK = threading.RLock()`，包住 `_history_cache` 读写与 `load_history / save_history / append_history / append_event_summary / upsert_event_summary / save_meta / ensure_history_shards`。用 RLock 以支持 `append_history -> save_history -> invalidate_history_cache` 的嵌套重入。
+
+### 4. server.py 路由分发表
+
+**问题**：`do_POST`（530 行）、`do_GET`（318 行）是扁平 `if parsed.path == ...` 链，每条路由重复 `session_id 提取 → normalize → scope 校验` 样板，且 token 重置样板在每个 early return 重复约 8 处，易漏。
+
+**修复**：
+- `_request_scope(method)` context manager 统一请求壳（解析用户上下文 + 多用户 contextvar，`finally` 必定重置），token 重置从约 8 处收敛到 1 处。
+- `_resolve_scoped_session(raw, *, allow_missing)` 收敛约 9 处 session 前导，失败时发对应 400/404/409 并返回 None。
+- `do_GET/do_POST/do_DELETE` 改为 `_GET_ROUTES / _POST_ROUTES / _DELETE_ROUTES` 的 path→handler 分发表 + 提取的 `_get_* / _post_* / _delete_*` handler；favicon / character-cover 原先的 fall-through 改为显式 `unknown route` 404（行为不变）。
+- 新增 `tests/test_server_routing.py`（server.py 首个单元测试）：钉死三张表的精确路由集合、handler 可调用、共享 handler 身份，以及 `_resolve_scoped_session` 与 health 分发行为。
+
+### 验证
+
+- 全量 `python3 -m pytest -q`：`428 passed, 1 skipped`（较改动前 +9，全部来自新 server 路由测试）。
+- server.py 重构通过“字符串字面量多重集 HEAD↔工作树 diff”核对：所有响应字段、错误码、消息字符串计数不变，差异仅为有意去重的 session 前导消息与两处显式 404，证明 50+ handler body 转写忠实。
+- `_load_json` 行为单测：缺失→独立 default、损坏→default + `.corrupt` 备份、用户配置损坏→原地保留。

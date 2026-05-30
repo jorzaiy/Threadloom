@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 
 # Add backend to path
-sys.path.insert(0, str(Path(__file__).parent / 'backend'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'backend'))
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ sys.path.insert(0, str(ROOT / 'backend'))
 
 import json
 
-from context_builder import _format_persona_profile_content, _slim_character_core, filter_valid_summary_chunks, load_lorebook_source_hits, load_npc_profiles, npc_profile_load_audit, select_lorebook_text_for_turn, select_persona_summaries_for_runtime, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
+from context_builder import _format_persona_profile_content, _slim_character_core, build_history_evidence_pack, filter_valid_summary_chunks, load_lorebook_source_hits, load_npc_profiles, npc_profile_load_audit, select_lorebook_text_for_turn, select_persona_summaries_for_runtime, select_recent_history_window, summarize_lorebook_entries  # noqa: E402
 from persona_runtime import build_persona_seed  # noqa: E402
 from persona_updater import _observed_context  # noqa: E402
 from runtime_store import save_persona_seed  # noqa: E402
@@ -112,6 +112,134 @@ def test_narrator_prompt_warns_recent_prose_is_not_style_sample():
     assert '不是文风样本' in system_prompt
     assert '不要模仿最近叙事中过密的动作拆解' in system_prompt
     assert '减少无剧情功能的微动作链' in system_prompt
+
+
+def test_history_evidence_pack_hydrates_high_risk_event_source_prose():
+    history = [
+        {'role': 'user', 'content': '去药铺问掌柜井里的东西'},
+        {
+            'role': 'assistant',
+            'content': '陆小环进了主街药铺。掌柜只说井边的暗红泥屑早年见过，年轻男人鞋面上有相似气味，但没人说沈青去过井边。',
+            'completion_status': 'complete',
+        },
+    ]
+    events = [{
+        'event_id': 'evt_0001',
+        'turn_id': 'turn-0001',
+        'summary': '陆小环进入药铺，掌柜提到井边暗红泥屑。',
+        'keywords': ['药铺掌柜', '井', '残留'],
+    }]
+
+    pack = build_history_evidence_pack(
+        history_items=history,
+        selected_events=events,
+        event_hits=[{'event_id': 'evt_0001', 'reason': 'long_range_background'}],
+        user_text='沈青经脉残留和药铺掌柜井边发现的东西是什么关系？',
+    )
+
+    assert len(pack['items']) == 1
+    assert pack['items'][0]['source'] == 'turn-0001'
+    assert '没人说沈青去过井边' in pack['items'][0]['assistant_excerpt']
+    assert '不得把本证据与其他摘要碎片拼接' in pack['items'][0]['must_not_infer'][0]
+
+
+def test_history_evidence_pack_hydrates_conjectural_cross_event_hits_without_story_tokens():
+    history = [
+        {'role': 'user', 'content': '查看塔楼里的旧仪器'},
+        {
+            'role': 'assistant',
+            'content': '林岚在塔楼只记录到银色仪器持续发热，没有看见任何人与远处灯塔接触。',
+            'completion_status': 'complete',
+        },
+        {'role': 'user', 'content': '去港口看灯塔'},
+        {
+            'role': 'assistant',
+            'content': '港口灯塔在雾里亮了三次，守灯人说这只是旧机关的周期反应，未确认和塔楼仪器有关。',
+            'completion_status': 'complete',
+        },
+    ]
+    events = [{
+        'event_id': 'evt_alpha',
+        'turn_id': 'turn-0001',
+        'summary': '林岚在塔楼记录银色仪器发热。',
+        'keywords': ['塔楼仪器'],
+    }, {
+        'event_id': 'evt_beta',
+        'turn_id': 'turn-0002',
+        'summary': '港口灯塔亮起，守灯人称是旧机关周期反应。',
+        'keywords': ['港口灯塔'],
+    }]
+
+    pack = build_history_evidence_pack(
+        history_items=history,
+        selected_events=events,
+        event_hits=[{'event_id': 'evt_alpha'}, {'event_id': 'evt_beta'}],
+        user_text='塔楼仪器和港口灯塔会不会有关？是不是同一个机关导致的？',
+    )
+
+    assert [item['source'] for item in pack['items']] == ['turn-0001', 'turn-0002']
+    assert '没有看见任何人与远处灯塔接触' in pack['items'][0]['assistant_excerpt']
+    assert '未确认和塔楼仪器有关' in pack['items'][1]['assistant_excerpt']
+
+
+def test_narrator_prompt_injects_history_evidence_above_event_index():
+    system_prompt, _user_prompt = build_narrator_input({
+        'active_preset': {},
+        'scene_facts': {},
+        'history_evidence_pack': {
+            'items': [{
+                'evidence_id': 'H1',
+                'source': 'turn-0001',
+                'event_id': 'evt_0001',
+                'reason': 'long_range_background',
+                'summary': '药铺掌柜提到井边线索。',
+                'user_excerpt': '询问药铺掌柜。',
+                'assistant_excerpt': '掌柜只说井边暗红泥屑早年见过，并未说沈青到过井边。',
+                'must_not_infer': ['不得新增沈青到过井边。'],
+            }],
+        },
+        'selected_event_summaries': [{
+            'event_id': 'evt_0001',
+            'turn_id': 'turn-0001',
+            'summary': '药铺掌柜提到井边线索。',
+        }],
+    }, '继续问沈青经脉残留')
+
+    assert '【历史原文证据包】' in system_prompt
+    assert '掌柜只说井边暗红泥屑早年见过' in system_prompt
+    assert '不得把多个真实碎片拼成新的旧行动链' in system_prompt
+    assert system_prompt.index('【历史原文证据包】') < system_prompt.index('【命中事件索引】')
+
+
+def test_narrator_prompt_preserves_user_conjecture_as_uncertain_without_story_tokens():
+    system_prompt, _user_prompt = build_narrator_input({
+        'active_preset': {},
+        'scene_facts': {},
+        'recent_history': [],
+    }, '塔楼仪器和港口灯塔会不会有关？')
+
+    assert '用户把多个旧线索、人物、地点、物件或现象放在一起提问' in system_prompt
+    assert '必须保留不确定性' in system_prompt
+    assert '人物-地点-动作链' in system_prompt
+    assert '药铺' not in system_prompt
+    assert '井' not in system_prompt
+
+
+def test_narrator_prompt_injects_selected_npc_profiles_with_scope_limits():
+    system_prompt, _user_prompt = build_narrator_input({
+        'active_preset': {},
+        'scene_facts': {},
+        'npc_profiles': [{
+            'name': '门内干瘦之手',
+            'content': 'role_label: 从厚木门内伸出的手\nappearance_note: 指节粗，指甲缝有朱砂粉',
+        }],
+    }, '继续观察')
+
+    assert '【命中 NPC 档案】' in system_prompt
+    assert '### 门内干瘦之手' in system_prompt
+    assert '指节粗，指甲缝有朱砂粉' in system_prompt
+    assert '不表示该 NPC 当前在场' in system_prompt
+    assert '不得把某个 NPC 的身份、外貌、手部特征、地点来源、行为方式或表达钩子转移给其他 NPC' in system_prompt
 
 
 def test_opening_lorebook_turn_prefers_full_source_summary_over_index():

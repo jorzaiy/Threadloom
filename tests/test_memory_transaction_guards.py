@@ -41,6 +41,15 @@ def test_state_keeper_rejects_length_truncated_output(monkeypatch):
         state_keeper.call_state_keeper('session', '正文', state_fragment={'time': '上午', 'location': '茶肆', 'main_event': '对话', 'immediate_goal': '继续'})
 
 
+def test_state_keeper_prompt_forbids_promoting_user_hypothesis():
+    prompt = state_keeper.STATE_KEEPER_FILL_SYSTEM
+
+    assert '提问、猜测、类比、求证或推理' in prompt
+    assert '不得把它写成 carryover_signals' in prompt
+    assert '必须保留不确定性' in prompt
+    assert '不得改写成“已经证实' in prompt
+
+
 def test_unified_event_ledger_uses_heuristic_not_reverted_keeper_signal_shortcut():
     ledger = event_ledger.build_event_ledger_with_llm(
         user_text='继续追问',

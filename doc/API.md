@@ -796,6 +796,7 @@ partial 回复路径会：
 - 只允许删除当前 session 的最后一轮，不支持删除历史中间轮次。
 - 完整回合会读取最新 turn trace 的 `pre_turn.state` 与 `pre_turn.persona_layers`，恢复 `state.json` 和 session-local persona。
 - 删除该 turn 的 `event_summaries` 项，清空 `summary_chunks` 与 `keeper_record_archive` 派生缓存，并重建 `summary.md`。
+- `history.jsonl` 仍会作为 legacy 原始流水更新；24 轮 history shard 与 `history_manifest.json` 是派生缓存，会随 `save_history()` 重建。若 shard 缺失或过期，运行期读取会回退到 `history.jsonl`。
 - 清理对应 `processed_client_turn_ids`、`turn_audits` 和 `last_turn_audit`，并回退 `meta.last_turn_id`。
 - 如果最新完整回合缺少 turn trace，会拒绝删除，避免只删 history 而留下 keeper/state 污染。
 

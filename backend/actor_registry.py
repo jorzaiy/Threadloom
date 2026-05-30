@@ -947,8 +947,95 @@ def _candidate_overlaps_existing_actor(candidate: dict, actors: dict, state: dic
     return False
 
 
-def _fallback_actor_candidates(_state: dict) -> list[dict]:
-    return []
+def _candidate_recently_mentioned(name: str, state: dict, recent_text: str) -> bool:
+    clean = sanitize_runtime_name(name)
+    if not clean:
+        return False
+    if clean in recent_text:
+        return True
+    for item in state.get('turn_event_summary', {}).get('actors', []) if isinstance(state.get('turn_event_summary', {}), dict) else []:
+        if sanitize_runtime_name(item) == clean:
+            return True
+    return False
+
+
+def _fallback_actor_candidates(state: dict, *, recent_text: str = '') -> list[dict]:
+    candidates: list[dict] = []
+    seen: set[str] = set()
+
+    def add(name: object, *, aliases: list[str] | None = None, identity: str = '', appearance: str = '') -> None:
+        clean = sanitize_runtime_name(name)
+        if not clean or clean in seen or is_protagonist_name(clean):
+            return
+        if _looks_like_proper_person_name(clean):
+            return
+        if not (_looks_like_person_alias(clean) or _is_descriptive_actor_name(clean)):
+            return
+        if not _candidate_recently_mentioned(clean, state, recent_text):
+            return
+        seen.add(clean)
+        candidates.append({
+            'name': clean,
+            'aliases': [sanitize_runtime_name(alias) for alias in (aliases or []) if sanitize_runtime_name(alias) and sanitize_runtime_name(alias) != clean][:6],
+            'personality': '',
+            'appearance': _clean_text(appearance, 120),
+            'identity': _clean_text(identity or '相关场景人物', 80),
+        })
+
+    for entity in state.get('scene_entities', []) or []:
+        if not isinstance(entity, dict):
+            continue
+        add(entity.get('primary_label', ''), aliases=entity.get('aliases', []) or [], identity=entity.get('role_label', ''))
+
+    summary = state.get('turn_event_summary', {}) if isinstance(state.get('turn_event_summary', {}), dict) else {}
+    for name in summary.get('actors', []) or []:
+        add(name, identity='当前事件参与者')
+
+    scope = state.get('knowledge_scope', {}) if isinstance(state.get('knowledge_scope', {}), dict) else {}
+    npc_local = scope.get('npc_local', {}) if isinstance(scope.get('npc_local', {}), dict) else {}
+    for name, payload in npc_local.items():
+        learned = payload.get('learned', []) if isinstance(payload, dict) and isinstance(payload.get('learned', []), list) else []
+        add(name, identity='有本地知情记录的场景人物', appearance='；'.join(str(item) for item in learned[:2]))
+    return candidates
+
+
+def _ensure_created_actor_state_entries(state: dict, actors: dict, actor_id: str, candidate: dict) -> None:
+    name = _actor_name(actors.get(actor_id, {})) or sanitize_runtime_name(candidate.get('name', ''))
+    if not name:
+        return
+    aliases = _actor_aliases(actors.get(actor_id, {}))
+    scene_entities = state.get('scene_entities', []) if isinstance(state.get('scene_entities', []), list) else []
+    if not any(isinstance(item, dict) and _actor_name_matches({'name': item.get('primary_label', ''), 'aliases': item.get('aliases', [])}, name) for item in scene_entities):
+        scene_entities.insert(0, {
+            'entity_id': actor_id,
+            'primary_label': name,
+            'aliases': aliases,
+            'role_label': candidate.get('identity') or '相关场景人物',
+            'onstage': False,
+            'possible_link': actor_id,
+        })
+        state['scene_entities'] = scene_entities[:12]
+
+    important = state.get('important_npcs', []) if isinstance(state.get('important_npcs', []), list) else []
+    if not any(isinstance(item, dict) and _actor_name_matches({'name': item.get('primary_label', ''), 'aliases': item.get('aliases', [])}, name) for item in important):
+        important.insert(0, {
+            'key': f'important:{name}',
+            'primary_label': name,
+            'aliases': aliases,
+            'role_label': candidate.get('identity') or '相关场景人物',
+            'anchor_type': 'continuous',
+            'worldbook_candidate': False,
+            'reference_source': 'actor_registry_fallback',
+            'importance_score': 5,
+            'locked': True,
+            'retained': True,
+            'present_now': False,
+            'inactive_turns': 0,
+            'last_location': state.get('location', ''),
+            'last_main_event': state.get('main_event', ''),
+            'newly_locked': True,
+        })
+        state['important_npcs'] = important[:20]
 
 
 def _mentioned_actor_ids(actors: dict, text: str) -> set[str]:
@@ -1093,9 +1180,11 @@ def update_actor_registry(state: dict, *, narrator_reply: str, turn_number: int,
             diagnostics['error'] = error
         if error:
             diagnostics['fallback_used'] = True
-            candidates = _fallback_actor_candidates(current)
+            recent_text = '\n'.join([user_text, narrator_reply] + [f'{user}\n{assistant}' for user, assistant in (recent_pairs or [])[-3:]])
+            candidates = _fallback_actor_candidates(current, recent_text=recent_text)
     else:
-        candidates = _fallback_actor_candidates(current)
+        recent_text = '\n'.join([user_text, narrator_reply] + [f'{user}\n{assistant}' for user, assistant in (recent_pairs or [])[-3:]])
+        candidates = _fallback_actor_candidates(current, recent_text=recent_text)
 
     created_ids = []
     for raw_candidate in candidates:
@@ -1119,6 +1208,7 @@ def update_actor_registry(state: dict, *, narrator_reply: str, turn_number: int,
             'identity': candidate.get('identity', ''),
             'created_turn': int(turn_number or 1),
         }
+        _ensure_created_actor_state_entries(current, actors, actor_id, candidate)
         created_ids.append(actor_id)
 
     alias_updates = _upsert_revealed_actor_aliases(actors, narrator_reply)
