@@ -185,6 +185,16 @@ GENERIC_CLAIM_TOKENS = {
     '这个', '那个', '他们', '她们', '我们', '你们', '自己', '东西', '事情', '时候', '地方',
     '没有', '不是', '已经', '可能', '只是', '继续', '还是', '然后', '旁边', '里面', '外面',
 }
+SCENE_SHIFT_USER_CUES = (
+    '回到', '回去', '回来', '离开', '前往', '赶往', '去往', '走到', '走向', '走进', '走出',
+    '走回', '跑到', '跑向', '进入', '出去', '出来', '上车', '下车', '上去', '下去', '跳下',
+    '跃下', '飞往', '传送', '抵达', '来到', '赶到', '沿着', '穿过', '跨进', '转移', '带到',
+    '被带到', '梦到', '梦见', '回忆', '想起', '记起',
+)
+SCENE_LOCATION_STOP_TOKENS = {
+    '当前', '地点', '时间', '这里', '那里', '这边', '那边', '附近', '一带', '外面', '里面',
+    '边上', '方向', '原地', '途中', '路上',
+}
 
 
 def _normal_text(text: str) -> str:
@@ -212,6 +222,71 @@ def _extract_current_user_text(text: str) -> str:
     if match:
         return match.group(1).strip()
     return value
+
+
+def _user_allows_scene_shift(current_user_text: str) -> bool:
+    value = str(current_user_text or '')
+    if not value.strip():
+        return False
+    return any(cue in value for cue in SCENE_SHIFT_USER_CUES)
+
+
+def _reply_current_location(text: str) -> str:
+    body = str(text or '')
+    match = re.search(r'【\s*当前地点\s*[:：]\s*([^】]+?)\s*】', body)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r'【\s*当前时间\s*[:：][^】]*】\s*【\s*当前地点\s*[:：]\s*([^】]+?)\s*】', body)
+    if match:
+        return match.group(1).strip()
+    return ''
+
+
+def _scene_location_tokens(text: str) -> set[str]:
+    tokens: set[str] = set()
+    for raw in re.split(r'[\s，,、/|｜;；:：()（）\[\]【】]+', str(text or '')):
+        value = raw.strip(' -—._\t\r\n')
+        if len(value) < 2 or value in SCENE_LOCATION_STOP_TOKENS:
+            continue
+        if re.fullmatch(r'[\u4e00-\u9fff]+', value):
+            tokens.add(value)
+            if len(value) >= 3:
+                for size in (2, 3, 4):
+                    for idx in range(0, max(0, len(value) - size + 1)):
+                        piece = value[idx:idx + size]
+                        if piece not in SCENE_LOCATION_STOP_TOKENS:
+                            tokens.add(piece)
+        elif len(value) >= 3:
+            tokens.add(value)
+    return tokens
+
+
+def _scene_location_supported(location: str, grounding_text: str, current_user_text: str) -> bool:
+    source = _normal_text(str(grounding_text or '') + '\n' + str(current_user_text or ''))
+    if not source:
+        return False
+    tokens = _scene_location_tokens(location)
+    if not tokens:
+        return True
+    return any(_normal_text(token) in source for token in tokens if len(_normal_text(token)) >= 2)
+
+
+def _unsupported_scene_shift_reason(reply: str, grounding_text: str, user_text: str = '') -> str:
+    """Reject narrator jumps to an unsupported explicit current location.
+
+    This intentionally only handles explicit current-location headers. It is a
+    narrow guard against model-side scene bleed while leaving ordinary movement
+    and low-key spatial progression to the normal storyteller.
+    """
+    location = _reply_current_location(reply)
+    if not location:
+        return ''
+    current_user_text = _extract_current_user_text(user_text)
+    if _scene_location_supported(location, grounding_text, current_user_text):
+        return ''
+    if _user_allows_scene_shift(current_user_text):
+        return ''
+    return 'unsupported_scene_shift'
 
 
 def _looks_like_conjectural_prior_query(text: str) -> bool:
@@ -305,6 +380,19 @@ def _narrator_grounding_retry_prompt(system_prompt: str, rejected_reply: str, *,
     )
 
 
+def _narrator_scene_drift_retry_prompt(system_prompt: str, rejected_reply: str, *, attempt_count: int) -> str:
+    excerpt = _trim_trace_text(str(rejected_reply or ''), 900)
+    severity = '第二次仍然' if attempt_count >= 2 else '上一次'
+    return (
+        system_prompt
+        + '\n\n【上次回复已被系统拒绝：场景漂移】\n'
+        + f'{severity}无依据改写了当前时间、地点、在场人物或主事件。现在必须重写本轮，不要延续上次文本。\n'
+        + '必须承接【最近完整上下文】和【当前用户输入】里的当前场景；除非用户本轮明确移动、回忆、入梦、被带走或最近正文已经给出可见过渡，否则不得切换到新地点、新时段或新事件。\n'
+        + '如果需要推进，只能让当前场景内的 NPC、物件、环境或风险产生可见反应；不要凭空跳到旧素材、远处地点、回忆片段或无因果的新镜头。\n'
+        + f'被拒绝片段摘录（不要承接其中场景）：\n{excerpt}\n'
+    )
+
+
 def _call_narrator_with_retries(
     system_prompt: str,
     user_prompt: str,
@@ -348,7 +436,11 @@ def _call_narrator_with_retries(
                 attempt['finish_reason'] = finish_reason
                 attempts.append(attempt)
                 continue
-            rejection_reason = narrator_reply_rejection_reason(reply) or _unsupported_prior_event_assertion_reason(reply, system_prompt, user_prompt)
+            rejection_reason = (
+                narrator_reply_rejection_reason(reply)
+                or _unsupported_scene_shift_reason(reply, system_prompt, user_prompt)
+                or _unsupported_prior_event_assertion_reason(reply, system_prompt, user_prompt)
+            )
             heuristic_incomplete = bool(rejection_reason) or looks_incomplete_reply(reply)
             if finish_reason in ('length', 'error') or heuristic_incomplete:
                 last_error = 'incomplete narrator reply'
@@ -369,6 +461,9 @@ def _call_narrator_with_retries(
                 elif rejection_reason in {'unsupported_prior_event_assertion', 'unsupported_conjecture_to_history_assertion'}:
                     current_system_prompt = _narrator_grounding_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
                     attempt['corrective_retry_prompt'] = 'grounding_prior_event'
+                elif rejection_reason == 'unsupported_scene_shift':
+                    current_system_prompt = _narrator_scene_drift_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
+                    attempt['corrective_retry_prompt'] = 'scene_drift'
                 logger.warning(
                     'NARRATOR_INCOMPLETE_REJECTED attempt=%s role=%s model=%s finish_reason=%s heuristic=%s reason=%s reply_chars=%s reply_tail=%r',
                     attempt_count,

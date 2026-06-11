@@ -149,6 +149,86 @@ def test_narrator_retries_conjecture_to_prior_history_assertion(monkeypatch):
     assert '把用户的提问、猜测、类比、求证或人物推理改写成已完成旧事实' in prompts[1]
 
 
+def test_scene_drift_guard_rejects_unsupported_current_location_jump():
+    grounding = (
+        '【当前事件目标】\n'
+        '目标：决定是否用最后一点肉喂食青鳞螭幼体，观察其反应\n\n'
+        '【最近6轮完整上下文】\n'
+        '九幽历三千七百二十二年，四月二十，凌晨。断桥驿外，官道坡顶，骡车车厢。\n'
+        '陆小环看着青鳞螭幼体，灵貂蹲在膝盖上，石根坐在车厢里。\n'
+    )
+    user_prompt = (
+        '【当前用户输入】\n'
+        '轻轻的笑，朝那小东西勾勾手指，又多放出一些灵力，从衣带里拿出那片包好的风干肉隔着车厢挥了挥\n\n'
+        '【近端约束提醒】\n'
+        '只输出正文。'
+    )
+    reply = (
+        '【当前时间：傍晚】【当前地点：拢翠崖，崖边小径】\n\n'
+        '拢翠崖，傍晚，暴雨如注。\n\n'
+        '那人将陆小环往肩上一扛，脚尖在崖边一点，整个人便跃了下去。'
+    )
+
+    assert handler_message._unsupported_scene_shift_reason(reply, grounding, user_prompt) == 'unsupported_scene_shift'
+
+
+def test_scene_drift_guard_allows_user_triggered_location_shift():
+    grounding = '【最近6轮完整上下文】\n她还在骡车车厢里。'
+    user_prompt = '【当前用户输入】\n下车走进断桥驿。\n\n【近端约束提醒】\n只输出正文。'
+    reply = '【当前时间：凌晨】【当前地点：断桥驿】\n\n陆小环跳下车，走进驿站门口。'
+
+    assert handler_message._unsupported_scene_shift_reason(reply, grounding, user_prompt) == ''
+
+
+def test_narrator_retries_unsupported_scene_shift(monkeypatch):
+    drift_reply = (
+        '【当前时间：傍晚】【当前地点：拢翠崖，崖边小径】\n\n'
+        '拢翠崖，傍晚，暴雨如注。\n\n'
+        '那人将陆小环往肩上一扛，脚尖在崖边一点，整个人便跃了下去。'
+    )
+    fixed_reply = '【当前时间：凌晨】【当前地点：断桥驿外，骡车车厢】\n\n青鳞螭闻到风干肉的气味，往前蹭了半寸。'
+    replies = [
+        (drift_reply, {'finish_reason': 'stop', 'model': 'narrator'}),
+        (fixed_reply, {'finish_reason': 'stop', 'model': 'narrator'}),
+    ]
+    prompts = []
+
+    def fake_resolve_provider_model(role):
+        return _model_config(role)
+
+    def fake_call_model(_model_cfg, system_prompt, _user_prompt):
+        prompts.append(system_prompt)
+        return replies.pop(0)
+
+    monkeypatch.setattr(handler_message, 'resolve_provider_model', fake_resolve_provider_model)
+    monkeypatch.setattr(handler_message, 'call_model', fake_call_model)
+
+    system_prompt = (
+        '【当前事件目标】\n'
+        '目标：决定是否用最后一点肉喂食青鳞螭幼体，观察其反应\n\n'
+        '【最近6轮完整上下文】\n'
+        '九幽历三千七百二十二年，四月二十，凌晨。断桥驿外，官道坡顶，骡车车厢。\n'
+        '陆小环看着青鳞螭幼体，灵貂蹲在膝盖上，石根坐在车厢里。\n'
+    )
+    user_prompt = (
+        '【当前用户输入】\n'
+        '轻轻的笑，朝那小东西勾勾手指，又多放出一些灵力，从衣带里拿出那片包好的风干肉隔着车厢挥了挥\n\n'
+        '【近端约束提醒】\n'
+        '只输出正文。'
+    )
+
+    reply, usage, trace = handler_message._call_narrator_with_retries(system_prompt, user_prompt)
+
+    assert reply == fixed_reply
+    assert usage['finish_reason'] == 'stop'
+    assert trace['all_failed'] is False
+    assert trace['attempts'][0]['ok'] is False
+    assert trace['attempts'][0]['rejection_reason'] == 'unsupported_scene_shift'
+    assert trace['attempts'][0]['corrective_retry_prompt'] == 'scene_drift'
+    assert trace['attempts'][1]['ok'] is True
+    assert '上次回复已被系统拒绝：场景漂移' in prompts[1]
+
+
 def test_narrator_grounding_guard_allows_supported_prior_chain():
     reply = '林岚和守灯人围着塔楼旧仪器，一起把港口灯塔点亮了。'
     grounding = '【历史原文证据包】\n林岚和守灯人围着塔楼旧仪器，一起把港口灯塔点亮了。'
