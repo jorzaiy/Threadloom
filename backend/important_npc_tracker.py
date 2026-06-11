@@ -224,7 +224,7 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
             'present_now': present_now,
             'inactive_turns': inactive_turns,
             'last_location': current_location if present_now or not prev.get('last_location') else prev.get('last_location'),
-            'last_main_event': current_main_event or prev.get('last_main_event'),
+            'last_main_event': current_main_event if present_now or not prev.get('last_main_event') else prev.get('last_main_event'),
             'newly_locked': not previously_locked,
         })
 
@@ -258,8 +258,8 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
                 'retained': True,
                 'present_now': False,
                 'inactive_turns': 0,
-                'last_location': current_location,
-                'last_main_event': current_main_event,
+                'last_location': '',
+                'last_main_event': '',
                 'newly_locked': False,
             })
 
@@ -282,8 +282,6 @@ def update_important_npcs(state: dict, history: list[dict], reference_candidates
         carried['retained'] = True
         carried['present_now'] = False
         carried['inactive_turns'] = int(prev.get('inactive_turns', 0) or 0) + 1
-        if current_main_event:
-            carried['last_main_event'] = current_main_event
         carried['newly_locked'] = False
         next_items.append(carried)
         seen.add(key)

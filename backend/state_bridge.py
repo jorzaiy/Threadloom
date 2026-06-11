@@ -2600,7 +2600,7 @@ def normalize_state_dict(state: dict, prev_state: dict | None = None, session_id
         if not isinstance(item, dict):
             continue
         label = sanitize_runtime_name(item.get('primary_label', ''))
-        if current_main_event:
+        if current_main_event and label and label in onstage_names:
             item['last_main_event'] = current_main_event
         if current_location and label and label in onstage_names:
             item['last_location'] = current_location
