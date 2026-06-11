@@ -123,3 +123,16 @@ V2 落地后**删掉**：clobber loop、`important_npc_tracker.py`、`continuity
 ## 第一刀（最小）
 
 只做迁移步骤 1 的最小切片：`backend/fact_log.py`（facts/entities schema + commit 的确定性骨架）+ `project()` 只渲染 `onstage_npcs / important_npcs / 每实体 last_event` 三个字段 + 一个测试：拿 e23032 现有 history 重放，diff 投影出的这三个字段 vs 现 `state.json`。**先证明"投影能复刻现状"，再谈替换。**
+
+---
+
+## 实施状态（2026-06-10，分支 `memory-v2`，未并入 master）
+
+**已落地**：
+
+- **slice 1 · `backend/fact_log.py`** — `Resolver`（只并语法助词「的/地/得」，偏欠并：append-only 下过并难撤、欠并易补）+ `FactLog.commit_turn / seed_from_state / truncate_after / project` + `save/load`（`facts.jsonl` + `entities.json`）。`project()` 纯折叠出 `onstage_npcs / important_npcs / 每实体 last_event`；`last_event` 是查询而非存储字段，**结构上消除了 last_main_event 覆盖（P1）**。测试 `tests/test_fact_log.py`（9 例，含 e23032 重放）。
+- **影子接入 · `handler_message._shadow_commit_fact_log`** — 在权威 `save_state` 之后旁路写 fact + `project()`，把与线上 `state.json` 的 diff 追加到 `<session>/diagnostics/factlog_shadow.jsonl`；老 session 首遇时从上一轮 state 种子化一次（approach A 懒迁移）。全程 try/except 包住，**零行为变更**。
+- **可行性已验证** — e23032 40 轮重放：`onstage_match=true`，per-entity last_event 5 个不同值 vs 线上 1 个（P1 改善已体现在诊断里）。
+- 探针 `scripts/factlog_probe.py`（真实数据快速验证，可独立重跑）。
+
+**下一步（步骤 2，未做）**：攒够真实游玩的影子 diff、确认 `onstage_match` 稳且 `important_only_live` 可控后，让 `project()` 成为这三字段的权威写入者，删除旧 reconciliation 阶段（clobber loop、`important_npc_tracker`、`continuity_resolver`）。观察方式见 `doc/OPERATIONS.md` 的 fact-log 影子诊断条目。

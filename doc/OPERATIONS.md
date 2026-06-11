@@ -431,6 +431,7 @@ server {
 - NPC / object / clue registry 当前已改为批量刷新：默认累计到至少 3 个新的对话对后才触发一次 sidecar 更新，不再每轮都检查一次 gemma
 - entity candidate judge 当前已收成单一入口：保留 `state_updater.py` 中的判定，移除 `state_bridge.py` 中的重复 judge，减少每轮额外 gemma 调用
 - 调试面板当前展示本轮注入和写回诊断，而不是完整记忆表。重点包括：`Prompt Blocks`、世界书 / NPC 候选注入概览、`Event Memory`、selector `event_hits / summary_chunk_hits / inject_summary`、最新 event summary、`state_keeper_diagnostics`、arbiter 结果和 completion / finish reason。
+- 记忆 V2 fact-log 影子诊断（`memory-v2` 分支）：每轮在 `<session>/diagnostics/factlog_shadow.jsonl` 追加一行，比对 V2 投影与线上 `state.json`。重点字段：`onstage_match`（应稳定 `true`）、`important_only_live`（老系统有、投影漏掉的人物——决定步骤 2 能否替换的关键风险信号）、`proj_distinct_events` vs `live_distinct_events`（V2 的 last_event 不应塌方到 1）。影子层只读不写真相、出错只打 warning，不影响回合；详见 `doc/MEMORY-V2-DESIGN.md`。
 - 调试时判断世界书实际注入体量，应优先看 `selected_summary_chars / source_hit_chars / index_hit_chars / foundation_chars / effective_total_chars`，不要只看旧 `total_chars`。
 - 轻量物件状态层已接入：
   - `tracked_objects`

@@ -97,6 +97,7 @@
 - 管理 `session_id`
 - 调用 runtime
 - 返回 reply 与状态快照
+- （影子模式）权威 `save_state` 后旁路调用记忆 V2 fact-log 并写 diff 诊断；只读不写真相，见 `doc/MEMORY-V2-DESIGN.md`
 
 不负责：
 - 叙事决策
