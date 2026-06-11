@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import copy
+import json
 import logging
 import re
 import time
@@ -12,7 +13,7 @@ try:
     from .continuity_hints import normalized_hint_entries
     from .important_npc_tracker import update_important_npcs
     from .thread_tracker import apply_thread_tracker
-    from .runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, upsert_event_summary, web_runtime_settings
+    from .runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, session_paths, upsert_event_summary, web_runtime_settings
     from .actor_registry import update_actor_registry
     from .summary_updater import update_summary
     from .summary_chunks import update_summary_chunks
@@ -31,6 +32,7 @@ try:
     from .event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
     from .memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
     from .session_auditor import run_session_audit
+    from .fact_log import FactLog
 except ImportError:
     from arbiter_runtime import run_arbiter
     from arbiter_state import merge_arbiter_state
@@ -38,7 +40,7 @@ except ImportError:
     from continuity_hints import normalized_hint_entries
     from important_npc_tracker import update_important_npcs
     from thread_tracker import apply_thread_tracker
-    from runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, upsert_event_summary, web_runtime_settings
+    from runtime_store import append_history, build_state_snapshot, load_canon, load_continuity_hints, load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, save_meta, save_state, save_turn_trace, seed_default_state, session_paths, upsert_event_summary, web_runtime_settings
     from actor_registry import update_actor_registry
     from summary_updater import update_summary
     from summary_chunks import update_summary_chunks
@@ -57,6 +59,7 @@ except ImportError:
     from event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
     from memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
     from session_auditor import run_session_audit
+    from fact_log import FactLog
 
 
 TRACE_PROMPT_LIMIT = 4000
@@ -767,6 +770,49 @@ def _save_turn_trace_safe(session_id: str, turn_id: str, trace: dict) -> None:
         save_turn_trace(session_id, turn_id, trace)
     except Exception as exc:
         logger.warning('Failed to save turn trace for session=%s turn=%s: %s', session_id, turn_id, exc)
+
+
+def _shadow_commit_fact_log(session_id: str, turn_id: str, turn_number: int, prev_state: dict, state: dict) -> None:
+    """Shadow-only V2 fact-log write + diff vs the authoritative state (no behavior
+    change). Appends this turn's facts, projects a view, and logs how it compares
+    to state.json into diagnostics/factlog_shadow.jsonl. On a brand-new fact log
+    for a session that already has history, seeds once from the prior state
+    (approach A lazy migration). Fully guarded — must never affect the turn.
+    """
+    try:
+        paths = session_paths(session_id)
+        memory_dir = paths['memory_dir']
+        log = FactLog.load(memory_dir)
+        if not log.facts and isinstance(prev_state, dict) and prev_state.get('important_npcs'):
+            log.seed_from_state(prev_state, as_of_turn=max(1, int(turn_number) - 1))
+        log.commit_turn(state if isinstance(state, dict) else {}, int(turn_number))
+        log.save(memory_dir)
+
+        view = log.project()
+        proj_on = set(view['onstage_npcs'])
+        live_on = {n for n in (state.get('onstage_npcs', []) or []) if isinstance(n, str)}
+        proj_imp = {n['primary_label'] for n in view['important_npcs']}
+        live_imp = {x.get('primary_label', '') for x in (state.get('important_npcs', []) or []) if isinstance(x, dict)}
+        record = {
+            'turn_id': turn_id,
+            'turn': int(turn_number),
+            'facts': len(log.facts),
+            'entities': len(log.resolver.entities),
+            'onstage_match': proj_on == live_on,
+            'onstage_only_proj': sorted(proj_on - live_on),
+            'onstage_only_live': sorted(live_on - proj_on),
+            'important_overlap': len(proj_imp & live_imp),
+            'important_only_proj': sorted(proj_imp - live_imp),
+            'important_only_live': sorted(live_imp - proj_imp),
+            'proj_distinct_events': len(set(view['entity_last_event'].values())),
+            'live_distinct_events': len({str(x.get('last_main_event', '')) for x in (state.get('important_npcs', []) or []) if isinstance(x, dict)}),
+        }
+        diag_dir = paths['session_dir'] / 'diagnostics'
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        with open(diag_dir / 'factlog_shadow.jsonl', 'a', encoding='utf-8') as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + '\n')
+    except Exception as err:  # shadow must never break a turn
+        logger.warning('FACTLOG_SHADOW_FAILED turn=%s err=%s', turn_id, err)
 
 
 def update_stub_state(state: dict, text: str, context: dict) -> dict:
@@ -1518,6 +1564,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     # us collapse the prior intermediate save into this final write.
     save_state(session_id, state)
     _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+    _shadow_commit_fact_log(session_id, turn_id, current_turn_num, prev_state, state)
     committed_response = {
         'session_id': session_id,
         'turn_id': turn_id,
