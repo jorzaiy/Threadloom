@@ -47,6 +47,8 @@ class Entity:
     canonical: str
     kind: str = 'person'           # person | object | place | protagonist
     aliases: list = field(default_factory=list)   # variant names, excludes canonical
+    persona: str = ''              # 稳定性格/特质：确立一次、之后稳定，叫法变了也不丢
+    identity: str = ''             # 稳定身份标签
 
 
 class Resolver:
@@ -73,7 +75,7 @@ class Resolver:
             if nk:
                 self._by_norm.setdefault(nk, ent.id)
 
-    def resolve(self, name: str, *, kind: str = 'person') -> str | None:
+    def resolve(self, name: str, *, kind: str = 'person', aliases=None) -> str | None:
         name = sanitize_runtime_name(name) or str(name or '').strip()
         if not name:
             return None
@@ -81,20 +83,38 @@ class Resolver:
             if 'protagonist' not in self.entities:
                 self._register(Entity(id='protagonist', canonical=name, kind='protagonist'))
             return 'protagonist'
-        if name in self._by_name:
-            return self._by_name[name]
-        nk = _norm_key(name)
-        eid = self._by_norm.get(nk) if nk else None
+        # name + caller-supplied aliases are all surface forms of ONE entity.
+        surfaces = [name] + [sanitize_runtime_name(a) or str(a or '').strip() for a in (aliases or [])]
+        surfaces = [s for s in surfaces if s and not is_protagonist_name(s)]
+        # known entity: exact name/alias hit first (trusted), then particle-norm
+        eid = next((self._by_name[s] for s in surfaces if s in self._by_name), None)
+        if eid is None:
+            eid = next((self._by_norm[_norm_key(s)] for s in surfaces if _norm_key(s) in self._by_norm), None)
         if eid is None:
             self._seq += 1
             eid = f'e{self._seq:03d}'
             self._register(Entity(id=eid, canonical=name, kind=kind, aliases=[]))
-        else:                                   # particle-variant of a known name
-            ent = self.entities[eid]
-            if name != ent.canonical and name not in ent.aliases:
-                ent.aliases.append(name)
-            self._by_name[name] = ent.id
+        ent = self.entities[eid]
+        for s in surfaces:                       # unify name + aliases onto one id
+            if s != ent.canonical and s not in ent.aliases:
+                ent.aliases.append(s)
+            self._by_name[s] = eid
+            nk = _norm_key(s)
+            if nk:
+                self._by_norm.setdefault(nk, eid)
         return eid
+
+    def set_persona(self, eid: str, persona: str, *, identity: str = '') -> None:
+        """确立一次、之后稳定——锁住 NPC 性格，不被后续轮次的漂移覆盖。"""
+        ent = self.entities.get(eid)
+        if ent is None:
+            return
+        persona = str(persona or '').strip()
+        if persona and not ent.persona:
+            ent.persona = persona
+        identity = str(identity or '').strip()
+        if identity and not ent.identity:
+            ent.identity = identity
 
 
 def _fact(fid, turn, predicate, *, subject=None, obj=None, value=None,
@@ -119,11 +139,21 @@ class FactLog:
 
     # -- writes -------------------------------------------------------------
     def commit_turn(self, state: dict, turn: int) -> list[dict]:
-        """Derive this turn's facts from its primitives (who's present + the beat)."""
+        """Derive this turn's facts from its primitives. Also registers known
+        actors (canonical id + alias unification), fixes their persona once (then
+        stable), and records per-NPC knowledge deltas as `knows` facts."""
+        new: list[dict] = []
+        # 0. known cast: unify entities by alias + lock persona (once, stable)
+        for a in (state.get('actors') or {}).values():
+            if not isinstance(a, dict) or a.get('kind') == 'protagonist':
+                continue
+            eid = self.resolver.resolve(a.get('name', ''), aliases=a.get('aliases'))
+            if eid:
+                self.resolver.set_persona(eid, a.get('personality', ''), identity=a.get('identity', ''))
+        # 1. presence + this turn's beat
         loc = str(state.get('location', '') or '').strip()
         main_event = str(state.get('main_event', '') or '').strip()
         onstage = [n for n in (state.get('onstage_npcs') or []) if isinstance(n, str) and n.strip()]
-        new: list[dict] = []
         ent_ids: list[str] = []
         for name in onstage:
             eid = self.resolver.resolve(name)
@@ -134,6 +164,21 @@ class FactLog:
             new.append(_fact(self._next(), turn, 'observation', beat=True, text=main_event,
                              entities=ent_ids,
                              span={'turn_id': f'turn-{turn:04d}', 'excerpt': main_event[:120]}))
+        # 2. knowledge-boundary delta: what each NPC newly learned -> `knows` facts
+        #    (a whitelist — absence means "does not know", the safe default)
+        npc_local = (state.get('knowledge_scope') or {}).get('npc_local') or {}
+        if isinstance(npc_local, dict):
+            for nm, payload in npc_local.items():
+                eid = self.resolver.resolve(nm)
+                if not eid or self.resolver.entities[eid].kind == 'protagonist':
+                    continue
+                learned = payload.get('learned') if isinstance(payload, dict) else payload
+                if isinstance(learned, list):
+                    for item in learned:
+                        text = str(item or '').strip()
+                        if text:
+                            new.append(_fact(self._next(), turn, 'knows', subject=eid, value=text,
+                                             span={'turn_id': f'turn-{turn:04d}'}))
         self.facts.extend(new)
         return new
 
@@ -196,35 +241,52 @@ class FactLog:
 
 
 def project(facts: list[dict], entities: dict) -> dict:
-    """Pure fold. `important_npcs` and per-entity `last_event` are derived, never
-    stored — so nothing downstream can clobber them."""
+    """Pure fold. `important_npcs`, per-entity `last_event`, persona and the
+    knowledge boundary are all derived, never stored — so nothing downstream can
+    clobber them. `knowledge_boundary` is a whitelist: an entity absent from it
+    knows none of the protagonist's hidden facts (the safe default)."""
+    empty = {'onstage_npcs': [], 'important_npcs': [], 'entity_last_event': {},
+             'entity_persona': {}, 'knowledge_boundary': {}}
     if not facts:
-        return {'onstage_npcs': [], 'important_npcs': [], 'entity_last_event': {}}
+        return empty
     latest = max(f['turn'] for f in facts)
     present_turns: dict[str, set] = {}    # turns an entity was on-stage
     seen_turns: dict[str, set] = {}       # turns an entity was present OR mentioned
     last_loc: dict[str, tuple] = {}
     last_event: dict[str, tuple] = {}
+    boundary: dict[str, list] = {}        # entity -> things it has learned (whitelist)
     for f in facts:
         t = f['turn']
-        if f['predicate'] == 'present':
+        pred = f['predicate']
+        if pred == 'present':
             s = f['subject']
             present_turns.setdefault(s, set()).add(t)
             seen_turns.setdefault(s, set()).add(t)
             if s not in last_loc or t >= last_loc[s][0]:
                 last_loc[s] = (t, f.get('value') or '')
-        elif f['predicate'] == 'observation' and f.get('beat'):
+        elif pred == 'observation' and f.get('beat'):
             for eid in f.get('entities', []):
                 seen_turns.setdefault(eid, set()).add(t)
                 cur = last_event.get(eid)
                 if cur is None or t > cur[0]:
                     last_event[eid] = (t, f.get('text') or '')
+        elif pred == 'knows':
+            vals = boundary.setdefault(f['subject'], [])
+            v = f.get('value') or ''
+            if v and v not in vals:
+                vals.append(v)
 
     def canon(eid):
         e = entities.get(eid)
         if e is None:
             return eid
         return e.canonical if isinstance(e, Entity) else e.get('canonical', eid)
+
+    def persona_of(eid):
+        e = entities.get(eid)
+        if e is None:
+            return ''
+        return e.persona if isinstance(e, Entity) else e.get('persona', '')
 
     # Importance candidates = anyone seen (present or mentioned), ranked by how
     # many turns they were actually on-stage, then by recency.
@@ -246,4 +308,6 @@ def project(facts: list[dict], entities: dict) -> dict:
         'onstage_npcs': [canon(e) for e in ranked if latest in present_turns.get(e, set())],
         'important_npcs': important,
         'entity_last_event': {canon(e): v[1] for e, v in last_event.items()},
+        'entity_persona': {canon(eid): persona_of(eid) for eid in entities if persona_of(eid)},
+        'knowledge_boundary': {canon(e): vals for e, vals in boundary.items()},
     }

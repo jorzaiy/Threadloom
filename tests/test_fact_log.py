@@ -127,10 +127,71 @@ class E23032ReplayTests(unittest.TestCase):
 
         # projection reproduces the latest-turn onstage set
         self.assertEqual(set(view['onstage_npcs']), set(state.get('onstage_npcs', []) or []))
-        # and gives DISTINCT per-entity events where the stored state collapsed to one
-        stored_distinct = {str(x.get('last_main_event', '')) for x in state.get('important_npcs', [])}
-        self.assertEqual(len(stored_distinct), 1)                       # the P1 symptom
+        # V2 projection gives DISTINCT per-entity events (the property the old clobber
+        # destroyed). e23032's live state.json no longer shows the P1 symptom now that
+        # the fix shipped, so we assert only the V2 invariant, not the old breakage.
         self.assertGreater(len(set(view['entity_last_event'].values())), 1)
+
+
+class PersonaAndKnowledgeTests(unittest.TestCase):
+    """The 'foundation': canonical entity carries a stable persona + a knowledge
+    boundary, so 'NPC turns into someone else' and 'knows what it shouldn't' can't
+    happen at the entity layer."""
+
+    def test_persona_attached_to_canonical_survives_alias_variant(self):
+        state = {
+            'location': '集市', 'main_event': '带短刀男人盯着摊位。',
+            'onstage_npcs': ['带短刀男人'],                       # particle variant
+            'actors': {'a1': {'kind': 'npc', 'name': '带短刀的男人',
+                              'personality': '沉默警惕', 'identity': '佣兵'}},
+        }
+        log = FactLog()
+        log.commit_turn(state, 1)
+        view = log.project()
+        # variant unified onto the canonical entity; persona is reachable
+        self.assertEqual(view['entity_persona'].get('带短刀的男人'), '沉默警惕')
+        self.assertIn('带短刀的男人', view['onstage_npcs'])
+
+    def test_persona_is_locked_after_first_established(self):
+        s1 = {'location': 'x', 'main_event': 'e1', 'onstage_npcs': ['沈青'],
+              'actors': {'a': {'kind': 'npc', 'name': '沈青', 'personality': '紧张拘谨'}}}
+        s2 = {'location': 'x', 'main_event': 'e2', 'onstage_npcs': ['沈青'],
+              'actors': {'a': {'kind': 'npc', 'name': '沈青', 'personality': '暴躁好斗'}}}  # keeper drift
+        log = FactLog()
+        log.commit_turn(s1, 1)
+        log.commit_turn(s2, 2)
+        self.assertEqual(log.project()['entity_persona']['沈青'], '紧张拘谨')  # not overwritten
+
+    def test_alias_unification_merges_knowledge(self):
+        state = {
+            'location': 'x', 'main_event': 'e', 'onstage_npcs': [],
+            'actors': {'a': {'kind': 'npc', 'name': '面摊老板', 'aliases': ['面摊摊主', '摊主']}},
+            'knowledge_scope': {'npc_local': {
+                '面摊摊主': {'learned': ['陆小环带灵貂吃面']},
+                '摊主': {'learned': ['陆小环要去玄幽城']},
+            }},
+        }
+        log = FactLog()
+        log.commit_turn(state, 1)
+        kb = log.project()['knowledge_boundary']
+        self.assertIn('面摊老板', kb)                              # unified to canonical
+        self.assertEqual(set(kb['面摊老板']), {'陆小环带灵貂吃面', '陆小环要去玄幽城'})
+        self.assertNotIn('摊主', kb)                               # no second entity
+
+    def test_knowledge_boundary_is_whitelist_default_unknown(self):
+        known = {'location': 'x', 'main_event': 'e', 'onstage_npcs': ['张三'],
+                 'actors': {'a': {'kind': 'npc', 'name': '张三'}},
+                 'knowledge_scope': {'npc_local': {'张三': {'learned': ['主角是散修']}}}}
+        log = FactLog()
+        log.commit_turn(known, 1)
+        self.assertEqual(log.project()['knowledge_boundary'].get('张三'), ['主角是散修'])
+
+        # an NPC with no `knows` fact is simply absent -> knows nothing (safe default)
+        unknown = {'location': 'x', 'main_event': 'e', 'onstage_npcs': ['李四'],
+                   'actors': {'b': {'kind': 'npc', 'name': '李四'}}}
+        log2 = FactLog()
+        log2.commit_turn(unknown, 1)
+        self.assertNotIn('李四', log2.project()['knowledge_boundary'])
 
 
 if __name__ == '__main__':
