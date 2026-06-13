@@ -132,7 +132,8 @@ V2 落地后**删掉**：clobber loop、`important_npc_tracker.py`、`continuity
 
 - **slice 1 · `backend/fact_log.py`** — `Resolver`（只并语法助词「的/地/得」，偏欠并：append-only 下过并难撤、欠并易补）+ `FactLog.commit_turn / seed_from_state / truncate_after / project` + `save/load`（`facts.jsonl` + `entities.json`）。`project()` 纯折叠出 `onstage_npcs / important_npcs / 每实体 last_event`；`last_event` 是查询而非存储字段，**结构上消除了 last_main_event 覆盖（P1）**。测试 `tests/test_fact_log.py`（9 例，含 e23032 重放）。
 - **影子接入 · `handler_message._shadow_commit_fact_log`** — 在权威 `save_state` 之后旁路写 fact + `project()`，把与线上 `state.json` 的 diff 追加到 `<session>/diagnostics/factlog_shadow.jsonl`；老 session 首遇时从上一轮 state 种子化一次（approach A 懒迁移）。全程 try/except 包住，**零行为变更**。
+- **地基扩展（persona + 知情边界）· `fact_log` 实体层** — `Entity` 加稳定 `persona`（确立一次即锁定、叫法变了不丢 → 治"NPC 玩着变一个人"）+ `identity`；`Resolver` 消费 keeper 的 aliases 做归一；`commit_turn` 注册 actors + 锁 persona + 从 `knowledge_scope.npc_local` 派生 `knows` fact；`project()` 增出 `entity_persona` 与 `knowledge_boundary`（**白名单：实体不在其中 = 不知道任何隐藏事实**，治"知情边界退步"；证否约束故不靠检索）。测试增至 13 例。**归一边界**：只并助词变体 + keeper 已标的 aliases；keeper 没关联的同义碎片（面摊老板/面摊摊主/摊主）不自动并，留同义层/auditor。
 - **可行性已验证** — e23032 40 轮重放：`onstage_match=true`，per-entity last_event 5 个不同值 vs 线上 1 个（P1 改善已体现在诊断里）。
 - 探针 `scripts/factlog_probe.py`（真实数据快速验证，可独立重跑）。
 
-**下一步（步骤 2，未做）**：攒够真实游玩的影子 diff、确认 `onstage_match` 稳且 `important_only_live` 可控后，让 `project()` 成为这三字段的权威写入者，删除旧 reconciliation 阶段（clobber loop、`important_npc_tracker`、`continuity_resolver`）。观察方式见 `doc/OPERATIONS.md` 的 fact-log 影子诊断条目。
+**下一步（步骤 2，未做）**：攒够真实游玩的影子 diff、确认 `onstage_match` 稳且 `important_only_live` 可控后，让 `project()` 成为这些字段的权威写入者（含让 narrator 直接读投影出的 **persona 与知情边界**——用户最痛的两项），删除旧 reconciliation 阶段（clobber loop、`important_npc_tracker`、`continuity_resolver`）。观察方式见 `doc/OPERATIONS.md` 的 fact-log 影子诊断条目。

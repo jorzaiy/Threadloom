@@ -44,7 +44,7 @@
 - `continuity_hints.py`：连续性提示加载封装；从 `runtime_store` 读取 continuity_hints，供上下文装配层使用
 - `event_ledger.py`：事件账本；产出阶段事件摘要并保存 `time_anchor/location_anchor`，不再负责人物短期状态写回。统一记忆事务模式下使用 heuristic ledger，不复用 keeper signals 作为事件摘要来源
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
-- `fact_log.py`：记忆 V2 核心（**影子模式**，未接管真相）；单一 append-only fact 日志 + 一处确定性实体 `Resolver`（只并语法助词、偏欠并）+ `commit_turn / seed_from_state / project`，纯折叠出 `onstage_npcs / important_npcs / 每实体 last_event`；`last_event` 为查询而非存储字段，结构上消除 `last_main_event` 覆盖。设计见 `doc/MEMORY-V2-DESIGN.md`
+- `fact_log.py`：记忆 V2 核心（**影子模式**，未接管真相）；单一 append-only fact 日志 + 一处确定性实体 `Resolver`（并语法助词 + 消费 keeper aliases，偏欠并）+ `commit_turn / seed_from_state / project`。`project()` 纯折叠出 `onstage_npcs / important_npcs / 每实体 last_event`（`last_event` 为查询而非存储字段，结构上消除 `last_main_event` 覆盖）、`entity_persona`（实体上稳定性格：确立即锁、叫法变了不丢）、`knowledge_boundary`（`knows` fact 白名单，实体不在其中=不知道隐藏事实）。设计见 `doc/MEMORY-V2-DESIGN.md`
 - `opening.py`：opening 菜单与开局状态机；菜单/direct-start 仍可保存阶段 checkpoint，但 opening choice 进入首个 narrator 回合时可跳过 checkpoint，由 `handler_message.py` 在该 turn 结束时统一提交最终 state
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
@@ -374,6 +374,7 @@ pytest 侧由仓库根 `conftest.py` 在收集前把仓库根与 `backend/` 同�
 
 - 修复 `state_bridge.py` / `important_npc_tracker.py`：离场重要 NPC 的 `last_main_event` 被每轮全局 `main_event` 无条件覆盖（典型表现：20 个 important NPC 只剩 1 个不同值，且污染 `continuity_resolver` 的 last_event==当前事件召回信号），现与 `last_location` 一样按 onstage 门控；carried 分支与 keeper-registry 兜底的覆盖也一并去掉。
 - 新增 `backend/fact_log.py` + `handler_message._shadow_commit_fact_log`：单一 append-only fact 日志的影子层，每轮在权威 `save_state` 后旁路写 fact，并把投影 vs 线上 state 的 diff 写入 `<session>/diagnostics/factlog_shadow.jsonl`，全程 try/except 包住，**零行为变更**。详见 `doc/MEMORY-V2-DESIGN.md`、观察口径见 `doc/OPERATIONS.md`。
+- 地基扩展（实体层 persona + 知情边界）：`Entity` 加稳定 `persona`（确立一次即锁定、叫法变了不丢 → 防"NPC 玩着变一个人"）+ 知情边界 `knowledge_boundary`（`knows` fact 白名单，实体不在其中=不知道主角隐藏事实 → 防知情边界退步，且这是证否约束、不靠检索）；`Resolver` 现消费 keeper 给的 aliases 把同一人的变体归一。仅并助词变体 + keeper 已标 aliases；keeper 没关联的同义碎片（面摊老板/面摊摊主/摊主）不自动并，留同义层/auditor。
 
 ### State Keeper 三层架构与调度策略
 
