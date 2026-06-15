@@ -7,14 +7,14 @@
 ## 当前文件
 
 - `server.py`：HTTP 服务入口；`do_GET/do_POST/do_DELETE` 通过 `_GET_ROUTES/_POST_ROUTES/_DELETE_ROUTES` 的 path→handler 分发表路由到 `_get_* / _post_* / _delete_*` handler；请求壳由 `_request_scope(method)` context manager 统一管理（解析用户/多用户上下文，`finally` 必定重置 token），session 路由前导统一走 `_resolve_scoped_session`
-- `handler_message.py`：`POST /api/message` 主链入口；权威 `save_state` 之后挂了 `_shadow_commit_fact_log`（记忆 V2 fact-log 影子旁路，只写诊断、不改行为）
+- `handler_message.py`：`POST /api/message` 主链入口；权威 `save_state` 之后挂了 `_shadow_commit_fact_log`（记忆 V2 fact-log 影子旁路，只写诊断、不改行为）；narrator 前用 `_load_factlog_view` 把 fact-log 投影注入 prompt（步骤 2 接管，开关 `THREADLOOM_FACTLOG_NARRATOR`）
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照；JSON 读取统一走 `_load_json(path, default, *, backup_corrupt=...)`，区分“文件缺失”（返回 default 深拷贝）与“解析损坏”（`logger.exception` + 把坏文件移到 `<name>.corrupt` 后返回 default），机器生成的 session 数据默认备份、用户手编文件只记录不挪动；`_history_cache` 与 history/event-summary/meta/分片的 read-modify-write 由模块级 `_STORE_LOCK`（RLock）串行化
 - `paths.py`：三层路径管理（user / character / session 分层路径解析），提供 `active_user_id` / `active_character_id` context var 与 request-local override 机制
 - `atomic_io.py`：原子文件读写原语（写临时文件 → fsync → `os.replace`），供 `runtime_store.py` / `keeper_archive.py` 等写入层统一使用
 - `bootstrap_session.py`：新 session bootstrap
 - `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed；summary chunk 只在当前 turn 有足够直接锚点时回流
 - `selector.py`：NPC 候选召回决策层；根据 onstage / relevant_npcs、active_threads、recent_history 与 important_npcs 信号判断是否注入 NPC profile 候选，并按话题相关度排序
-- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及事件时间轴、recent window 前段 event outline + 近端完整正文
+- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及事件时间轴、recent window 前段 event outline + 近端完整正文；`_format_factlog_cast()` 渲染 fact-log 投影的【人物档案·权威】块（归并名+锁定 persona+知情边界白名单，插在旧块前、冲突以它为准；开关 `THREADLOOM_FACTLOG_NARRATOR` 默认开、空则回退）
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `llm_manager.py`：统一 LLM 角色调用管理层；封装 `call_role_llm()`，按角色 key 查找模型配置并调用 `model_client`，供各 agent 统一使用
 - `safe_http.py`：SSRF 安全 HTTP 连接辅助；DNS 预解析 + IP pin，按 `_LOOPBACK_HOSTS` 白名单放行 loopback，拒绝私网/link-local 直连，防止 DNS rebinding 攻击
@@ -374,7 +374,9 @@ pytest 侧由仓库根 `conftest.py` 在收集前把仓库根与 `backend/` 同�
 
 - 修复 `state_bridge.py` / `important_npc_tracker.py`：离场重要 NPC 的 `last_main_event` 被每轮全局 `main_event` 无条件覆盖（典型表现：20 个 important NPC 只剩 1 个不同值，且污染 `continuity_resolver` 的 last_event==当前事件召回信号），现与 `last_location` 一样按 onstage 门控；carried 分支与 keeper-registry 兜底的覆盖也一并去掉。
 - 新增 `backend/fact_log.py` + `handler_message._shadow_commit_fact_log`：单一 append-only fact 日志的影子层，每轮在权威 `save_state` 后旁路写 fact，并把投影 vs 线上 state 的 diff 写入 `<session>/diagnostics/factlog_shadow.jsonl`，全程 try/except 包住，**零行为变更**。详见 `doc/MEMORY-V2-DESIGN.md`、观察口径见 `doc/OPERATIONS.md`。
-- 地基扩展（实体层 persona + 知情边界）：`Entity` 加稳定 `persona`（确立一次即锁定、叫法变了不丢 → 防"NPC 玩着变一个人"）+ 知情边界 `knowledge_boundary`（`knows` fact 白名单，实体不在其中=不知道主角隐藏事实 → 防知情边界退步，且这是证否约束、不靠检索）；`Resolver` 现消费 keeper 给的 aliases 把同一人的变体归一。仅并助词变体 + keeper 已标 aliases；keeper 没关联的同义碎片（面摊老板/面摊摊主/摊主）不自动并，留同义层/auditor。
+- 地基扩展（实体层 persona + 知情边界）：`Entity` 加稳定 `persona`（确立一次即锁定、叫法变了不丢 → 防"NPC 玩着变一个人"）+ 知情边界 `knowledge_boundary`（`knows` fact 白名单，实体不在其中=不知道主角隐藏事实 → 防知情边界退步，且这是证否约束、不靠检索）；`Resolver` 现消费 keeper 给的 aliases 把同一人的变体归一。
+- 归并增强（commit `113ddbe`）：resolver 现还并 **前缀类别简称**（灰衣青年→灰衣青年修士）+ **晚到别名触发对已分裂实体的合并**（短工→桥上探头男人，并消费 `scene_entities` 别名）；读时经 `canon_eid` 折叠、不改 append-only 日志。仍欠并防过并：同义词（灰衣/灰布衫）、双字基名（张三/张三丰）不自动并。
+- 步骤 2（narrator 接管，commit `8cd77ad`）：`narrator_input` 新增 **【人物档案·权威】块**，由 fact-log 投影提供 归并名/锁定 persona/知情边界白名单，插在旧【知情边界】/【人物注册表】前并声明冲突以它为准；`handler_message._load_factlog_view` 注入；开关 `THREADLOOM_FACTLOG_NARRATOR`（默认开）+ 回退安全。**首次改变 narrator 输出**。
 
 ### State Keeper 三层架构与调度策略
 
