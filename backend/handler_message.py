@@ -2,6 +2,7 @@
 import copy
 import json
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -772,6 +773,24 @@ def _save_turn_trace_safe(session_id: str, turn_id: str, trace: dict) -> None:
         logger.warning('Failed to save turn trace for session=%s turn=%s: %s', session_id, turn_id, exc)
 
 
+def _load_factlog_view(session_id: str) -> dict | None:
+    """Load the fact-log projection (merged cast / locked persona / knowledge
+    boundary) for the narrator prompt. Flag-gated + guarded: returns None when
+    disabled or on any error, so the turn falls back to legacy actor/knowledge
+    rendering. Reads the log as of the previous turn (this turn isn't committed yet)."""
+    if os.environ.get('THREADLOOM_FACTLOG_NARRATOR', '1') == '0':
+        return None
+    try:
+        memory_dir = session_paths(session_id)['memory_dir']
+        log = FactLog.load(memory_dir)
+        if not log.facts:
+            return None
+        return log.project()
+    except Exception as err:  # narrator must never break on a fact-log issue
+        logger.warning('FACTLOG_VIEW_FAILED session=%s err=%s', session_id, err)
+        return None
+
+
 def _shadow_commit_fact_log(session_id: str, turn_id: str, turn_number: int, prev_state: dict, state: dict) -> None:
     """Shadow-only V2 fact-log write + diff vs the authoritative state (no behavior
     change). Appends this turn's facts, projects a view, and logs how it compares
@@ -1274,6 +1293,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state_keeper_trace = None
     context = dict(context)
     context['state_fragment'] = state_fragment
+    context['factlog'] = _load_factlog_view(session_id)
     system_prompt, user_prompt = build_narrator_input(context, text, arbiter_result=arbiter_result)
     prompt_stats = prompt_block_stats(system_prompt)
     turn_trace['runtime']['narrator'] = {

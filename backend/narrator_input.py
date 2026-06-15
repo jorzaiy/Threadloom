@@ -569,6 +569,47 @@ def _format_tracked_objects(objects: list[dict], possession: list[dict], visibil
     return '\n'.join(lines) if lines else '暂无'
 
 
+def _format_factlog_cast(view: dict | None, limit: int = 8) -> str:
+    """权威人物块：fact-log 投影给出的归并实体 + 锁定 persona + 知情边界白名单。
+    只在有数据时渲染；空则返回 '' 走旧的 actor/knowledge 渲染。"""
+    if not isinstance(view, dict):
+        return ''
+    important = view.get('important_npcs') if isinstance(view.get('important_npcs'), list) else []
+    persona_map = view.get('entity_persona') if isinstance(view.get('entity_persona'), dict) else {}
+    alias_map = view.get('entity_aliases') if isinstance(view.get('entity_aliases'), dict) else {}
+    boundary_map = view.get('knowledge_boundary') if isinstance(view.get('knowledge_boundary'), dict) else {}
+    rows = []
+    for npc in important[:limit]:
+        if not isinstance(npc, dict):
+            continue
+        name = str(npc.get('primary_label', '') or '').strip()
+        if not name:
+            continue
+        aliases = [a for a in (alias_map.get(name) or []) if a and a != name][:4]
+        status = '在场' if npc.get('present_now') else f"离场{int(npc.get('inactive_turns', 0) or 0)}轮"
+        head = name + (f"（别称：{' / '.join(aliases)}）" if aliases else '')
+        parts = [f"[{status}]"]
+        persona = str(persona_map.get(name, '') or '').strip()
+        if persona:
+            parts.append(f"性格={persona}")
+        learned = boundary_map.get(name) if isinstance(boundary_map.get(name), list) else []
+        if learned:
+            parts.append("已知=" + '；'.join(str(x) for x in learned[:8]))
+        else:
+            parts.append("已知=（无：对主角隐藏身份与私密信息一无所知）")
+        rows.append(f"- {head}：{'；'.join(parts)}")
+    if not rows:
+        return ''
+    header = (
+        '【人物档案·权威】\n'
+        '- 本块由记忆系统按 canonical 实体给出，是 NPC 身份、性格与知情边界的权威来源；与下方【人物注册表】【知情边界】冲突时，以本块为准。\n'
+        '- 同一人物的不同称呼已归并（括号内为别称），不要当成不同的人，也不要用别称另起一个新角色。\n'
+        '- 知情边界是白名单：只有“已知”列出的才是该 NPC 知道的；未列出的（尤其主角隐藏身份/私密信息）一律视为该 NPC 不知道，不得在其对白或行动中承接。\n'
+        '- 性格为长期稳定设定，按它演绎；不要让人物无故性情大变。'
+    )
+    return header + '\n' + '\n'.join(rows)
+
+
 def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional[dict] = None) -> tuple[str, str]:
     scene = context.get('scene_facts', {})
     persona = context.get('persona', [])
@@ -626,6 +667,12 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
             '不要把玩家偏好、安全边界或私密资料写成世界内其他角色自动知道的事实。\n'
             + player_detail_md
         )
+
+    # 人物档案·权威（fact-log 投影：归并实体 + 锁定 persona + 知情边界白名单）。
+    # 放在旧的【知情边界】【人物注册表】之前，声明为权威；空时自动回退到旧渲染。
+    factlog_cast = _format_factlog_cast(context.get('factlog'))
+    if factlog_cast:
+        blocks.append(factlog_cast)
 
     # 知情边界：结构化版本 + 通用规则
     knowledge_scope = scene.get('knowledge_scope', {})

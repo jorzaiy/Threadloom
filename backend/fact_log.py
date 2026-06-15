@@ -331,7 +331,7 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
     needs rewriting when two entities later turn out to be one person."""
     cz = canon_eid or (lambda e: e)
     empty = {'onstage_npcs': [], 'important_npcs': [], 'entity_last_event': {},
-             'entity_persona': {}, 'knowledge_boundary': {}}
+             'entity_persona': {}, 'entity_aliases': {}, 'knowledge_boundary': {}}
     if not facts:
         return empty
     latest = max(f['turn'] for f in facts)
@@ -384,6 +384,18 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
             return False
         return bool(e.merged_into if isinstance(e, Entity) else e.get('merged_into', ''))
 
+    def aliases_of(eid):
+        e = _ent(eid)
+        if e is None:
+            return []
+        return list((e.aliases if isinstance(e, Entity) else e.get('aliases', [])) or [])
+
+    def kind_of(eid):
+        e = _ent(eid)
+        if e is None:
+            return ''
+        return e.kind if isinstance(e, Entity) else e.get('kind', '')
+
     # Importance candidates = anyone seen (present or mentioned), ranked by how
     # many turns they were actually on-stage, then by recency.
     ranked = sorted(seen_turns,
@@ -406,5 +418,7 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
         'entity_last_event': {canon(e): v[1] for e, v in last_event.items()},
         'entity_persona': {canon(eid): persona_of(eid) for eid in entities
                            if persona_of(eid) and not merged(eid)},
+        'entity_aliases': {canon(eid): aliases_of(eid) for eid in entities
+                           if not merged(eid) and kind_of(eid) != 'protagonist'},
         'knowledge_boundary': {canon(e): vals for e, vals in boundary.items()},
     }
