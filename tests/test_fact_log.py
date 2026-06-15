@@ -194,5 +194,55 @@ class PersonaAndKnowledgeTests(unittest.TestCase):
         self.assertNotIn('李四', log2.project()['knowledge_boundary'])
 
 
+class MergeAndShortFormTests(unittest.TestCase):
+    """Two new high-precision unifications — category-suffix short form and
+    late-alias-triggered merge — without over-merging."""
+
+    def test_prefix_short_form_merges(self):
+        r = Resolver()
+        full = r.resolve('灰衣青年修士')
+        short = r.resolve('灰衣青年')                       # prefix short form
+        self.assertEqual(r.canon_eid(short), r.canon_eid(full))
+
+    def test_no_overmerge_two_char_names(self):
+        r = Resolver()
+        self.assertNotEqual(r.canon_eid(r.resolve('张三')), r.canon_eid(r.resolve('张三丰')))
+
+    def test_no_overmerge_synonyms(self):
+        r = Resolver()
+        self.assertNotEqual(r.canon_eid(r.resolve('灰衣年轻人')), r.canon_eid(r.resolve('灰布衫年轻人')))
+
+    def test_late_alias_triggers_merge(self):
+        r = Resolver()
+        a = r.resolve('短工')
+        b = r.resolve('桥上探头男人')
+        self.assertNotEqual(a, b)
+        c = r.resolve('桥上探头男人', aliases=['短工'])     # later mention reveals same person
+        self.assertEqual(r.canon_eid(a), r.canon_eid(c))
+        self.assertEqual(r.canon_eid(b), r.canon_eid(c))
+
+    def test_merge_folds_present_and_knowledge_in_project(self):
+        log = FactLog()
+        log.commit_turn({'location': '桥', 'main_event': '桥上有人探头', 'onstage_npcs': ['桥上探头男人'],
+                         'knowledge_scope': {'npc_local': {'短工': {'learned': ['主角在捞东西']}}}}, 1)
+        log.commit_turn({'location': '桥', 'main_event': '短工下来帮忙', 'onstage_npcs': ['桥上探头男人'],
+                         'actors': {'a': {'kind': 'npc', 'name': '桥上探头男人', 'aliases': ['短工']}}}, 2)
+        view = log.project()
+        bridge = [n['primary_label'] for n in view['important_npcs']
+                  if n['primary_label'] in ('桥上探头男人', '短工')]
+        self.assertEqual(len(bridge), 1)                                       # not split in two
+        self.assertIn('主角在捞东西', view['knowledge_boundary'].get(bridge[0], []))  # knowledge folded in
+
+    def test_save_load_preserves_merge(self):
+        import tempfile
+        log = FactLog()
+        log.resolver.resolve('短工')
+        log.resolver.resolve('桥上探头男人', aliases=['短工'])
+        with tempfile.TemporaryDirectory() as d:
+            log.save(d)
+            r2 = FactLog.load(d)
+        self.assertEqual(r2.resolver.resolve('短工'), r2.resolver.resolve('桥上探头男人'))
+
+
 if __name__ == '__main__':
     unittest.main()

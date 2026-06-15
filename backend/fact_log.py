@@ -41,6 +41,26 @@ def _norm_key(name: str) -> str:
     return _PARTICLE.sub('', (name or '').strip())
 
 
+# Conservative Chinese role-category suffixes — used to fold a prefix short form
+# like "灰衣青年" into "灰衣青年修士". Only these specific category tails merge.
+_CATEGORY_SUFFIX = (
+    '修士', '青年', '少年', '男人', '男子', '女人', '女子', '汉子', '大汉', '老者', '老头',
+    '老汉', '妇人', '后生', '道人', '道士', '和尚', '尼姑', '姑娘', '小子', '书生', '女孩',
+)
+
+
+def _is_short_for(short: str, full: str) -> bool:
+    """short == full minus one category suffix, with a >=3-char base so two-char
+    names (张三 / 张三丰) never collapse."""
+    if len(full) <= len(short) or not full.startswith(short) or len(short) < 3:
+        return False
+    return full[len(short):] in _CATEGORY_SUFFIX
+
+
+def _simplify_compatible(a: str, b: str) -> bool:
+    return _is_short_for(a, b) or _is_short_for(b, a)
+
+
 @dataclass
 class Entity:
     id: str
@@ -49,31 +69,72 @@ class Entity:
     aliases: list = field(default_factory=list)   # variant names, excludes canonical
     persona: str = ''              # 稳定性格/特质：确立一次、之后稳定，叫法变了也不丢
     identity: str = ''             # 稳定身份标签
+    merged_into: str = ''          # 若本实体被并入别的实体，记幸存者 id
 
 
 class Resolver:
-    """Maps a surface name to a stable entity id; creates entities on first sight."""
+    """Maps a surface name to a stable entity id. Creates entities on first sight,
+    and MERGES when a later mention reveals two were the same person — via a shared
+    alias, a particle variant, or a category-suffix short form. Biased to
+    under-merge: only those high-precision signals merge; uncertain synonyms
+    (灰衣 vs 灰布衫) stay separate for the auditor."""
 
     def __init__(self, entities: dict | None = None):
         self.entities: dict[str, Entity] = {}
         self._by_name: dict[str, str] = {}
         self._by_norm: dict[str, str] = {}
+        self._canon: dict[str, str] = {}          # merged-away id -> survivor id
         self._seq = 0
         for raw in (entities or {}).values():
-            self._register(raw if isinstance(raw, Entity) else Entity(**raw))
+            ent = raw if isinstance(raw, Entity) else Entity(**raw)
+            self.entities[ent.id] = ent
+            m = re.fullmatch(r'e(\d+)', ent.id)
+            if m:
+                self._seq = max(self._seq, int(m.group(1)))
+        for ent in self.entities.values():        # rebuild merge map, then index
+            if ent.merged_into:
+                self._canon[ent.id] = ent.merged_into
+        for ent in self.entities.values():
+            target = self.canon_eid(ent.id)
+            for nm in [ent.canonical, *ent.aliases]:
+                self._index(nm, target)
 
-    def _register(self, ent: Entity) -> None:
-        self.entities[ent.id] = ent
-        m = re.fullmatch(r'e(\d+)', ent.id)
-        if m:
-            self._seq = max(self._seq, int(m.group(1)))
-        for nm in [ent.canonical, *ent.aliases]:
-            if not nm:
-                continue
-            self._by_name[nm] = ent.id
-            nk = _norm_key(nm)
-            if nk:
-                self._by_norm.setdefault(nk, ent.id)
+    def _index(self, nm: str, eid: str) -> None:
+        if not nm:
+            return
+        self._by_name[nm] = eid
+        nk = _norm_key(nm)
+        if nk:
+            self._by_norm.setdefault(nk, eid)
+
+    def canon_eid(self, eid: str) -> str:
+        seen: set = set()
+        while eid in self._canon and eid not in seen:
+            seen.add(eid)
+            eid = self._canon[eid]
+        return eid
+
+    def _seq_of(self, eid: str) -> int:
+        m = re.fullmatch(r'e(\d+)', eid)
+        return int(m.group(1)) if m else 0
+
+    def _merge(self, keep: str, drop: str) -> None:
+        if keep == drop or drop not in self.entities:
+            return
+        k, d = self.entities[keep], self.entities[drop]
+        for nm in [d.canonical, *d.aliases]:
+            if nm and nm != k.canonical and nm not in k.aliases:
+                k.aliases.append(nm)
+        if not k.persona and d.persona:
+            k.persona = d.persona
+        if not k.identity and d.identity:
+            k.identity = d.identity
+        d.merged_into = keep
+        self._canon[drop] = keep
+        for mapping in (self._by_name, self._by_norm):
+            for key, eid in list(mapping.items()):
+                if eid == drop:
+                    mapping[key] = keep
 
     def resolve(self, name: str, *, kind: str = 'person', aliases=None) -> str | None:
         name = sanitize_runtime_name(name) or str(name or '').strip()
@@ -81,32 +142,47 @@ class Resolver:
             return None
         if is_protagonist_name(name):
             if 'protagonist' not in self.entities:
-                self._register(Entity(id='protagonist', canonical=name, kind='protagonist'))
+                self.entities['protagonist'] = Entity(id='protagonist', canonical=name, kind='protagonist')
             return 'protagonist'
         # name + caller-supplied aliases are all surface forms of ONE entity.
         surfaces = [name] + [sanitize_runtime_name(a) or str(a or '').strip() for a in (aliases or [])]
         surfaces = [s for s in surfaces if s and not is_protagonist_name(s)]
-        # known entity: exact name/alias hit first (trusted), then particle-norm
-        eid = next((self._by_name[s] for s in surfaces if s in self._by_name), None)
-        if eid is None:
-            eid = next((self._by_norm[_norm_key(s)] for s in surfaces if _norm_key(s) in self._by_norm), None)
-        if eid is None:
+        # Collect every existing entity these surfaces point at (may reveal a split).
+        hits: list[str] = []
+        for s in surfaces:                                   # exact name/alias (trusted)
+            if s in self._by_name:
+                hits.append(self.canon_eid(self._by_name[s]))
+        if not hits:                                         # particle variant
+            for s in surfaces:
+                nk = _norm_key(s)
+                if nk in self._by_norm:
+                    hits.append(self.canon_eid(self._by_norm[nk]))
+        for s in surfaces:                                   # category-suffix short form
+            for eid, ent in self.entities.items():
+                if ent.merged_into or ent.kind == 'protagonist':
+                    continue
+                if any(_simplify_compatible(s, t) for t in [ent.canonical, *ent.aliases]):
+                    hits.append(self.canon_eid(eid))
+                    break
+        hits = [h for h in dict.fromkeys(hits) if h in self.entities]
+        if hits:
+            keep = min(hits, key=self._seq_of)               # oldest = most stable canonical
+            for drop in hits:
+                self._merge(keep, drop)
+        else:
             self._seq += 1
-            eid = f'e{self._seq:03d}'
-            self._register(Entity(id=eid, canonical=name, kind=kind, aliases=[]))
-        ent = self.entities[eid]
-        for s in surfaces:                       # unify name + aliases onto one id
+            keep = f'e{self._seq:03d}'
+            self.entities[keep] = Entity(id=keep, canonical=name, kind=kind, aliases=[])
+        ent = self.entities[keep]
+        for s in surfaces:                                   # attach all surfaces to survivor
             if s != ent.canonical and s not in ent.aliases:
                 ent.aliases.append(s)
-            self._by_name[s] = eid
-            nk = _norm_key(s)
-            if nk:
-                self._by_norm.setdefault(nk, eid)
-        return eid
+            self._index(s, keep)
+        return keep
 
     def set_persona(self, eid: str, persona: str, *, identity: str = '') -> None:
         """确立一次、之后稳定——锁住 NPC 性格，不被后续轮次的漂移覆盖。"""
-        ent = self.entities.get(eid)
+        ent = self.entities.get(self.canon_eid(eid))
         if ent is None:
             return
         persona = str(persona or '').strip()
@@ -150,6 +226,12 @@ class FactLog:
             eid = self.resolver.resolve(a.get('name', ''), aliases=a.get('aliases'))
             if eid:
                 self.resolver.set_persona(eid, a.get('personality', ''), identity=a.get('identity', ''))
+        # 0b. scene_entities carry the freshest aliases — the keeper records "短工"
+        #     as an alias of "桥上探头男人" here before it reaches the actor table.
+        #     Feeding them lets a late alias unify a previously split entity.
+        for e in (state.get('scene_entities') or []):
+            if isinstance(e, dict) and e.get('primary_label'):
+                self.resolver.resolve(e.get('primary_label', ''), aliases=e.get('aliases'))
         # 1. presence + this turn's beat
         loc = str(state.get('location', '') or '').strip()
         main_event = str(state.get('main_event', '') or '').strip()
@@ -213,7 +295,7 @@ class FactLog:
 
     # -- read ---------------------------------------------------------------
     def project(self) -> dict:
-        return project(self.facts, self.resolver.entities)
+        return project(self.facts, self.resolver.entities, self.resolver.canon_eid)
 
     # -- persistence --------------------------------------------------------
     def save(self, memory_dir) -> None:
@@ -240,11 +322,14 @@ class FactLog:
         return cls(facts=facts, entities=ents)
 
 
-def project(facts: list[dict], entities: dict) -> dict:
+def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
     """Pure fold. `important_npcs`, per-entity `last_event`, persona and the
     knowledge boundary are all derived, never stored — so nothing downstream can
     clobber them. `knowledge_boundary` is a whitelist: an entity absent from it
-    knows none of the protagonist's hidden facts (the safe default)."""
+    knows none of the protagonist's hidden facts (the safe default). `canon_eid`
+    folds merged-away entity ids onto their survivor, so the append-only log never
+    needs rewriting when two entities later turn out to be one person."""
+    cz = canon_eid or (lambda e: e)
     empty = {'onstage_npcs': [], 'important_npcs': [], 'entity_last_event': {},
              'entity_persona': {}, 'knowledge_boundary': {}}
     if not facts:
@@ -259,34 +344,45 @@ def project(facts: list[dict], entities: dict) -> dict:
         t = f['turn']
         pred = f['predicate']
         if pred == 'present':
-            s = f['subject']
+            s = cz(f['subject'])
             present_turns.setdefault(s, set()).add(t)
             seen_turns.setdefault(s, set()).add(t)
             if s not in last_loc or t >= last_loc[s][0]:
                 last_loc[s] = (t, f.get('value') or '')
         elif pred == 'observation' and f.get('beat'):
             for eid in f.get('entities', []):
+                eid = cz(eid)
                 seen_turns.setdefault(eid, set()).add(t)
                 cur = last_event.get(eid)
                 if cur is None or t > cur[0]:
                     last_event[eid] = (t, f.get('text') or '')
         elif pred == 'knows':
-            vals = boundary.setdefault(f['subject'], [])
+            s = cz(f['subject'])
+            vals = boundary.setdefault(s, [])
             v = f.get('value') or ''
             if v and v not in vals:
                 vals.append(v)
 
+    def _ent(eid):
+        return entities.get(eid)
+
     def canon(eid):
-        e = entities.get(eid)
+        e = _ent(eid)
         if e is None:
             return eid
         return e.canonical if isinstance(e, Entity) else e.get('canonical', eid)
 
     def persona_of(eid):
-        e = entities.get(eid)
+        e = _ent(eid)
         if e is None:
             return ''
         return e.persona if isinstance(e, Entity) else e.get('persona', '')
+
+    def merged(eid):
+        e = _ent(eid)
+        if e is None:
+            return False
+        return bool(e.merged_into if isinstance(e, Entity) else e.get('merged_into', ''))
 
     # Importance candidates = anyone seen (present or mentioned), ranked by how
     # many turns they were actually on-stage, then by recency.
@@ -308,6 +404,7 @@ def project(facts: list[dict], entities: dict) -> dict:
         'onstage_npcs': [canon(e) for e in ranked if latest in present_turns.get(e, set())],
         'important_npcs': important,
         'entity_last_event': {canon(e): v[1] for e, v in last_event.items()},
-        'entity_persona': {canon(eid): persona_of(eid) for eid in entities if persona_of(eid)},
+        'entity_persona': {canon(eid): persona_of(eid) for eid in entities
+                           if persona_of(eid) and not merged(eid)},
         'knowledge_boundary': {canon(e): vals for e, vals in boundary.items()},
     }
