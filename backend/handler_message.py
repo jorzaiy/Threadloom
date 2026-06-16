@@ -34,6 +34,7 @@ try:
     from .memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
     from .session_auditor import run_session_audit
     from .fact_log import FactLog
+    from .persona_distiller import distill_persona
 except ImportError:
     from arbiter_runtime import run_arbiter
     from arbiter_state import merge_arbiter_state
@@ -61,6 +62,7 @@ except ImportError:
     from memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
     from session_auditor import run_session_audit
     from fact_log import FactLog
+    from persona_distiller import distill_persona
 
 
 TRACE_PROMPT_LIMIT = 4000
@@ -789,6 +791,35 @@ def _load_factlog_view(session_id: str) -> dict | None:
     except Exception as err:  # narrator must never break on a fact-log issue
         logger.warning('FACTLOG_VIEW_FAILED session=%s err=%s', session_id, err)
         return None
+
+
+def _consolidate_factlog_personas(session_id: str) -> None:
+    """On consolidation turns, distill a stable personality (one LLM call each) for
+    emergent NPCs that have screen time but no persona yet — each NPC at most once
+    (persona is locked after). Off the hot path, flag-gated, fully guarded. Persona
+    here is disposition only; attitude toward the protagonist stays dynamic elsewhere."""
+    if os.environ.get('THREADLOOM_FACTLOG_NARRATOR', '1') == '0':
+        return
+    try:
+        memory_dir = session_paths(session_id)['memory_dir']
+        log = FactLog.load(memory_dir)
+        candidates = log.personaless_active(min_turns=3)
+        if not candidates:
+            return
+        changed = False
+        for eid in candidates:
+            ent = log.resolver.entities.get(eid)
+            if ent is None:
+                continue
+            persona = distill_persona(ent.canonical, log.entity_observations(eid))
+            if persona:
+                log.resolver.set_persona(eid, persona)
+                changed = True
+        if changed:
+            log.save(memory_dir)
+            logger.info('FACTLOG_PERSONA_DISTILLED session=%s candidates=%s', session_id, len(candidates))
+    except Exception as err:  # persona distillation must never block the turn
+        logger.warning('FACTLOG_PERSONA_DISTILL_FAILED session=%s err=%s', session_id, err)
 
 
 def _shadow_commit_fact_log(session_id: str, turn_id: str, turn_number: int, prev_state: dict, state: dict) -> None:
@@ -1655,6 +1686,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
 
     session_audit_summary = None
     if is_consolidation_turn:
+        _consolidate_factlog_personas(session_id)
         # Periodic heuristic self-check (no LLM): refreshes diagnostics/audit_*.json
         # and surfaces style / persona / NPC-consistency warnings to the debug panel.
         # Diagnostic-only and wrapped so it can never block the committed turn.

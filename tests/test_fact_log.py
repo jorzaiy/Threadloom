@@ -244,5 +244,78 @@ class MergeAndShortFormTests(unittest.TestCase):
         self.assertEqual(r2.resolver.resolve('短工'), r2.resolver.resolve('桥上探头男人'))
 
 
+class CanonicalPromotionTests(unittest.TestCase):
+    """Canonical upgrades to a proper name once revealed (沈昭 over 灰衣青年修士),
+    one-way and conservative."""
+
+    def test_promotes_to_proper_name_when_revealed(self):
+        r = Resolver()
+        r.resolve('灰衣青年修士')
+        eid = r.resolve('沈昭', aliases=['灰衣青年修士'])      # real name revealed, merges in
+        ent = r.entities[r.canon_eid(eid)]
+        self.assertEqual(ent.canonical, '沈昭')
+        self.assertIn('灰衣青年修士', ent.aliases)
+
+    def test_descriptive_alias_does_not_promote(self):
+        r = Resolver()
+        r.resolve('桥上探头男人')
+        eid = r.resolve('桥上探头男人', aliases=['短工'])       # 短工 is a job, not a name
+        self.assertEqual(r.entities[r.canon_eid(eid)].canonical, '桥上探头男人')
+
+    def test_proper_name_canonical_is_stable(self):
+        r = Resolver()
+        first = r.resolve('沈昭')
+        r.resolve('沈昭', aliases=['灰衣青年'])
+        self.assertEqual(r.entities[r.canon_eid(first)].canonical, '沈昭')   # not downgraded
+
+
+class PersonaDistillTests(unittest.TestCase):
+    """Persona distillation material + the (LLM-mocked) distiller, incl. its guards."""
+
+    def _played(self, name='沈昭'):
+        log = FactLog()
+        for t in (1, 2, 3):
+            log.commit_turn({'location': 'x', 'main_event': f'{name}做了事{t}', 'onstage_npcs': [name]}, t)
+        return log
+
+    def test_personaless_active_lists_screen_time_npc(self):
+        log = self._played()
+        labels = [log.resolver.entities[e].canonical for e in log.personaless_active(min_turns=3)]
+        self.assertIn('沈昭', labels)
+
+    def test_personaless_active_skips_once_persona_set(self):
+        log = self._played()
+        log.resolver.set_persona(log.personaless_active()[0], '沉默寡言')
+        self.assertEqual(log.personaless_active(), [])
+
+    def test_entity_observations_returns_beats(self):
+        log = self._played()
+        eid = log.personaless_active()[0]
+        obs = log.entity_observations(eid)
+        self.assertTrue(any('沈昭做了事' in o for o in obs))
+
+    def test_distill_persona_cleans_reply(self):
+        from backend import persona_distiller as pd
+        orig = pd.call_role_llm
+        pd.call_role_llm = lambda role, system, user: ('  沉默寡言，遇事谨慎\n', {})
+        try:
+            self.assertEqual(pd.distill_persona('沈昭', ['事件A', '事件B', '事件C']), '沉默寡言，遇事谨慎')
+        finally:
+            pd.call_role_llm = orig
+
+    def test_distill_persona_guards(self):
+        from backend import persona_distiller as pd
+        self.assertEqual(pd.distill_persona('沈昭', ['只有一条']), '')   # too few observations
+        orig = pd.call_role_llm
+
+        def boom(*a, **k):
+            raise RuntimeError('no model')
+        pd.call_role_llm = boom
+        try:
+            self.assertEqual(pd.distill_persona('沈昭', ['a', 'b', 'c']), '')   # llm error -> ''
+        finally:
+            pd.call_role_llm = orig
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -61,6 +61,34 @@ def _simplify_compatible(a: str, b: str) -> bool:
     return _is_short_for(a, b) or _is_short_for(b, a)
 
 
+# Descriptive hint chars (colour / build / position / garment / age …). A label
+# containing any is treated as descriptive, not a proper name — keeps it conservative.
+_DESCRIPTIVE_HINT = (
+    '灰', '红', '青', '黑', '白', '黄', '蓝', '绿', '紫', '胖', '瘦', '高', '矮',
+    '老', '桥', '门', '街', '巷', '带', '穿', '戴', '披', '长', '短',
+)
+
+# Service / occupation role words — descriptive, never a personal name.
+_SERVICE_ROLE = (
+    '老板', '老板娘', '掌柜', '掌柜的', '店主', '店家', '伙计', '小二', '账房', '管事',
+    '摊主', '摊贩', '短工', '长工', '车夫', '船夫', '脚夫',
+)
+
+
+def _looks_like_proper_name(s: str) -> bool:
+    """A short label that reads like a personal name, not a description: 2-4 chars,
+    no role-category suffix, no service-role word, no descriptive hint char.
+    沈昭 → yes; 短工 / 摊主 / 灰衣青年修士 → no."""
+    s = (s or '').strip()
+    if not (2 <= len(s) <= 4):
+        return False
+    if any(s.endswith(suf) for suf in _CATEGORY_SUFFIX):
+        return False
+    if any(s.endswith(role) for role in _SERVICE_ROLE):
+        return False
+    return not any(ch in s for ch in _DESCRIPTIVE_HINT)
+
+
 @dataclass
 class Entity:
     id: str
@@ -178,6 +206,16 @@ class Resolver:
             if s != ent.canonical and s not in ent.aliases:
                 ent.aliases.append(s)
             self._index(s, keep)
+        # Promote canonical to a proper name once one appears (沈昭 over 灰衣青年修士).
+        # One-way: if canonical already reads like a proper name, keep it (no thrashing).
+        if not _looks_like_proper_name(ent.canonical):
+            proper = next((s for s in surfaces if _looks_like_proper_name(s)), '')
+            if proper:
+                if ent.canonical and ent.canonical not in ent.aliases:
+                    ent.aliases.append(ent.canonical)
+                ent.canonical = proper
+                if proper in ent.aliases:
+                    ent.aliases.remove(proper)
         return keep
 
     def set_persona(self, eid: str, persona: str, *, identity: str = '') -> None:
@@ -296,6 +334,34 @@ class FactLog:
     # -- read ---------------------------------------------------------------
     def project(self) -> dict:
         return project(self.facts, self.resolver.entities, self.resolver.canon_eid)
+
+    def entity_observations(self, eid: str, limit: int = 12) -> list[str]:
+        """Beat-observation texts this entity took part in — material for distilling
+        a persona from how it actually behaved in-story."""
+        cid = self.resolver.canon_eid(eid)
+        out: list[str] = []
+        for f in self.facts:
+            if f.get('predicate') == 'observation' and f.get('beat'):
+                if any(self.resolver.canon_eid(e) == cid for e in f.get('entities', [])):
+                    text = f.get('text')
+                    if text:
+                        out.append(text)
+        return out[-limit:]
+
+    def personaless_active(self, min_turns: int = 3) -> list[str]:
+        """Surviving NPCs with screen time (present on >= min_turns) but no persona
+        yet — candidates for one-time persona distillation."""
+        present: dict[str, set] = {}
+        for f in self.facts:
+            if f.get('predicate') == 'present':
+                present.setdefault(self.resolver.canon_eid(f['subject']), set()).add(f.get('turn'))
+        out = []
+        for eid, ent in self.resolver.entities.items():
+            if ent.merged_into or ent.kind == 'protagonist' or ent.persona:
+                continue
+            if len(present.get(eid, ())) >= min_turns:
+                out.append(eid)
+        return out
 
     # -- persistence --------------------------------------------------------
     def save(self, memory_dir) -> None:
