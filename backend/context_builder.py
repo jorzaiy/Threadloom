@@ -1005,13 +1005,28 @@ def _slim_character_core(data: dict) -> dict:
     return keep
 
 
+def _runtime_rules_path_for_narrator(cfg: dict, default_path: str) -> str:
+    """Grok-family narrators use a leaner, positively-framed rules variant when one
+    sits beside the default (runtime-rules-grok.md). Other models are unaffected;
+    if the variant is missing, fall back to the default."""
+    try:
+        model = str((((cfg or {}).get('models', {}) or {}).get('narrator', {}) or {}).get('model', '') or '').lower()
+        if 'grok' in model and default_path.endswith('runtime-rules.md'):
+            variant = default_path[:-len('runtime-rules.md')] + 'runtime-rules-grok.md'
+            if resolve_source(variant).exists():
+                return variant
+    except Exception:
+        pass
+    return default_path
+
+
 def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     cfg = load_runtime_config()
     sources = cfg.get('sources', {})
     memory_cfg = cfg.get('memory', {}) if isinstance(cfg.get('memory', {}), dict) else {}
     refresh_policy = cfg.get('refresh_policy', {}) if isinstance(cfg.get('refresh_policy', {}), dict) else {}
 
-    runtime_rules = read_text(resolve_source(sources['runtime_rules']))
+    runtime_rules = read_text(resolve_source(_runtime_rules_path_for_narrator(cfg, sources['runtime_rules'])))
     state_json = load_state(session_id)
     canon_text = load_canon(session_id)
     summary_text = load_summary(session_id)
