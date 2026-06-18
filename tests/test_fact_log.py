@@ -340,5 +340,34 @@ class PersonaDistillJsonTests(unittest.TestCase):
             pd.call_role_llm = orig
 
 
+class RelationLineTests(unittest.TestCase):
+    """Relationship is a DYNAMIC projection over `relation` facts: appended only on
+    label change, current = latest, with a sourced history line (P2)."""
+
+    def _state(self, label, evidence):
+        return {'location': 'x', 'main_event': 'e', 'onstage_npcs': ['沈昭'],
+                'actors': {'a': {'kind': 'npc', 'name': '沈昭',
+                                 'relationship_to_protagonist': {'label': label, 'evidence': evidence}}}}
+
+    def test_appends_on_change_projects_latest_with_history(self):
+        log = FactLog()
+        log.commit_turn(self._state('戒备', '初次接触'), 1)
+        log.commit_turn(self._state('戒备', '仍在试探'), 2)     # unchanged label -> no new fact
+        log.commit_turn(self._state('信任', '主角救了他'), 3)   # changed -> new fact
+        rels = [f['value'] for f in log.facts if f['predicate'] == 'relation']
+        self.assertEqual(rels, ['戒备', '信任'])
+        v = log.project()
+        self.assertEqual(v['entity_relationship']['沈昭'], '信任')            # current = latest
+        hist = v['entity_relationship_history']['沈昭']
+        self.assertEqual([h['label'] for h in hist], ['戒备', '信任'])         # sourced line
+        self.assertEqual(hist[-1]['evidence'], '主角救了他')
+
+    def test_no_relation_fact_without_relationship_field(self):
+        log = FactLog()
+        log.commit_turn({'location': 'x', 'main_event': 'e', 'onstage_npcs': ['路人'],
+                         'actors': {'a': {'kind': 'npc', 'name': '路人'}}}, 1)
+        self.assertEqual([f for f in log.facts if f['predicate'] == 'relation'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -578,6 +578,8 @@ def _format_factlog_cast(view: dict | None, limit: int = 8) -> str:
     persona_map = view.get('entity_persona') if isinstance(view.get('entity_persona'), dict) else {}
     alias_map = view.get('entity_aliases') if isinstance(view.get('entity_aliases'), dict) else {}
     boundary_map = view.get('knowledge_boundary') if isinstance(view.get('knowledge_boundary'), dict) else {}
+    rel_map = view.get('entity_relationship') if isinstance(view.get('entity_relationship'), dict) else {}
+    rel_hist = view.get('entity_relationship_history') if isinstance(view.get('entity_relationship_history'), dict) else {}
     rows = []
     for npc in important[:limit]:
         if not isinstance(npc, dict):
@@ -597,6 +599,11 @@ def _format_factlog_cast(view: dict | None, limit: int = 8) -> str:
             parts.append("已知=" + '；'.join(str(x) for x in learned[:8]))
         else:
             parts.append("已知=（无：对主角隐藏身份与私密信息一无所知）")
+        rel = str((rel_map.get(name) or '')).strip()
+        if rel:
+            hist = rel_hist.get(name)
+            ev = hist[-1].get('evidence', '') if isinstance(hist, list) and hist and isinstance(hist[-1], dict) else ''
+            parts.append(f"对主角={rel}" + (f"（{ev}）" if ev else ''))
         rows.append(f"- {head}：{'；'.join(parts)}")
     if not rows:
         return ''
@@ -605,7 +612,8 @@ def _format_factlog_cast(view: dict | None, limit: int = 8) -> str:
         '- 本块由记忆系统按 canonical 实体给出，是 NPC 身份、性格与知情边界的权威来源；与下方【人物注册表】【知情边界】冲突时，以本块为准。\n'
         '- 同一人物的不同称呼已归并（括号内为别称），不要当成不同的人，也不要用别称另起一个新角色。\n'
         '- 知情边界是白名单：只有“已知”列出的才是该 NPC 知道的；未列出的（尤其主角隐藏身份/私密信息）一律视为该 NPC 不知道，不得在其对白或行动中承接。\n'
-        '- 性格为长期稳定设定，按它演绎；不要让人物无故性情大变。'
+        '- 性格为长期稳定设定，按它演绎；不要让人物无故性情大变。\n'
+        '- “对主角”是当前关系态、会随剧情演变（不是固定设定）；据它与近期互动演绎，关系变化要有铺垫、不要突变。'
     )
     return header + '\n' + '\n'.join(rows)
 

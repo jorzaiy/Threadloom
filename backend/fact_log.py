@@ -252,6 +252,14 @@ class FactLog:
         return self._seq
 
     # -- writes -------------------------------------------------------------
+    def _latest_relation_label(self, eid: str) -> str:
+        cid = self.resolver.canon_eid(eid)
+        label = ''
+        for f in self.facts:
+            if f.get('predicate') == 'relation' and self.resolver.canon_eid(f.get('subject')) == cid:
+                label = f.get('value') or label
+        return label
+
     def commit_turn(self, state: dict, turn: int) -> list[dict]:
         """Derive this turn's facts from its primitives. Also registers known
         actors (canonical id + alias unification), fixes their persona once (then
@@ -264,6 +272,16 @@ class FactLog:
             eid = self.resolver.resolve(a.get('name', ''), aliases=a.get('aliases'))
             if eid:
                 self.resolver.set_persona(eid, a.get('personality', ''), identity=a.get('identity', ''))
+                # relationship is DYNAMIC: append a `relation` fact only when the
+                # label changes, so the relationship line keeps its history (when /
+                # why) without being locked like persona.
+                rel = a.get('relationship_to_protagonist')
+                if isinstance(rel, dict):
+                    label = str(rel.get('label', '') or '').strip()
+                    if label and label != self._latest_relation_label(eid):
+                        new.append(_fact(self._next(), turn, 'relation', subject=eid,
+                                         value=label, text=str(rel.get('evidence', '') or '').strip(),
+                                         span={'turn_id': f'turn-{turn:04d}'}))
         # 0b. scene_entities carry the freshest aliases — the keeper records "短工"
         #     as an alias of "桥上探头男人" here before it reaches the actor table.
         #     Feeding them lets a late alias unify a previously split entity.
@@ -397,7 +415,8 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
     needs rewriting when two entities later turn out to be one person."""
     cz = canon_eid or (lambda e: e)
     empty = {'onstage_npcs': [], 'important_npcs': [], 'entity_last_event': {},
-             'entity_persona': {}, 'entity_aliases': {}, 'knowledge_boundary': {}}
+             'entity_persona': {}, 'entity_aliases': {}, 'knowledge_boundary': {},
+             'entity_relationship': {}, 'entity_relationship_history': {}}
     if not facts:
         return empty
     latest = max(f['turn'] for f in facts)
@@ -406,6 +425,8 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
     last_loc: dict[str, tuple] = {}
     last_event: dict[str, tuple] = {}
     boundary: dict[str, list] = {}        # entity -> things it has learned (whitelist)
+    rel_now: dict[str, tuple] = {}        # entity -> (turn, label, evidence): current relationship
+    rel_history: dict[str, list] = {}     # entity -> [(turn, label, evidence)]: relationship line
     for f in facts:
         t = f['turn']
         pred = f['predicate']
@@ -428,6 +449,12 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
             v = f.get('value') or ''
             if v and v not in vals:
                 vals.append(v)
+        elif pred == 'relation':
+            s = cz(f['subject'])
+            entry = (t, f.get('value') or '', f.get('text') or '')
+            rel_history.setdefault(s, []).append(entry)
+            if s not in rel_now or t >= rel_now[s][0]:
+                rel_now[s] = entry
 
     def _ent(eid):
         return entities.get(eid)
@@ -487,4 +514,7 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
         'entity_aliases': {canon(eid): aliases_of(eid) for eid in entities
                            if not merged(eid) and kind_of(eid) != 'protagonist'},
         'knowledge_boundary': {canon(e): vals for e, vals in boundary.items()},
+        'entity_relationship': {canon(e): v[1] for e, v in rel_now.items()},
+        'entity_relationship_history': {canon(e): [{'turn': t, 'label': lb, 'evidence': ev} for (t, lb, ev) in h]
+                                        for e, h in rel_history.items()},
     }

@@ -22,6 +22,9 @@ VIEW = {
     'entity_persona': {'灰衣青年修士': '谨慎试探，护着石板'},
     'entity_aliases': {'桥上探头男人': ['短工', '桥上那人'], '灰衣青年修士': ['灰衣青年']},
     'knowledge_boundary': {'桥上探头男人': ['主角在捞东西']},
+    'entity_relationship': {'灰衣青年修士': '信任'},
+    'entity_relationship_history': {'灰衣青年修士': [{'turn': 5, 'label': '戒备', 'evidence': '初见戒备'},
+                                                  {'turn': 9, 'label': '信任', 'evidence': '主角救了他'}]},
 }
 
 
@@ -32,6 +35,10 @@ class FactlogCastTests(unittest.TestCase):
         self.assertIn('桥上探头男人（别称：短工 / 桥上那人）', text)   # split names shown as one
         self.assertIn('谨慎试探', text)                              # locked persona
         self.assertIn('主角在捞东西', text)                          # whitelisted knowledge
+
+    def test_cast_shows_dynamic_relationship(self):
+        text = _format_factlog_cast(VIEW)
+        self.assertIn('对主角=信任（主角救了他）', text)
 
     def test_unknown_npc_marked_knows_nothing(self):
         text = _format_factlog_cast(VIEW)
