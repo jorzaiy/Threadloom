@@ -12,7 +12,7 @@
 - `paths.py`：三层路径管理（user / character / session 分层路径解析），提供 `active_user_id` / `active_character_id` context var 与 request-local override 机制
 - `atomic_io.py`：原子文件读写原语（写临时文件 → fsync → `os.replace`），供 `runtime_store.py` / `keeper_archive.py` 等写入层统一使用
 - `bootstrap_session.py`：新 session bootstrap
-- `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed；summary chunk 只在当前 turn 有足够直接锚点时回流
+- `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed；summary chunk 只在当前 turn 有足够直接锚点时回流；narrator 为 grok 系列时把 runtime_rules 切到 `runtime-rules-grok.md`（`_runtime_rules_path_for_narrator`，按 narrator 模型名判断）
 - `selector.py`：NPC 候选召回决策层；根据 onstage / relevant_npcs、active_threads、recent_history 与 important_npcs 信号判断是否注入 NPC profile 候选，并按话题相关度排序
 - `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及事件时间轴、recent window 前段 event outline + 近端完整正文；`_format_factlog_cast()` 渲染 fact-log 投影的【人物档案·权威】块（归并名+锁定 persona+知情边界白名单，插在旧块前、冲突以它为准；开关 `THREADLOOM_FACTLOG_NARRATOR` 默认开、空则回退）
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
@@ -44,7 +44,8 @@
 - `continuity_hints.py`：连续性提示加载封装；从 `runtime_store` 读取 continuity_hints，供上下文装配层使用
 - `event_ledger.py`：事件账本；产出阶段事件摘要并保存 `time_anchor/location_anchor`，不再负责人物短期状态写回。统一记忆事务模式下使用 heuristic ledger，不复用 keeper signals 作为事件摘要来源
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
-- `fact_log.py`：记忆 V2 核心（**影子模式**，未接管真相）；单一 append-only fact 日志 + 一处确定性实体 `Resolver`（并语法助词 + 消费 keeper aliases，偏欠并）+ `commit_turn / seed_from_state / project`。`project()` 纯折叠出 `onstage_npcs / important_npcs / 每实体 last_event`（`last_event` 为查询而非存储字段，结构上消除 `last_main_event` 覆盖）、`entity_persona`（实体上稳定性格：确立即锁、叫法变了不丢）、`knowledge_boundary`（`knows` fact 白名单，实体不在其中=不知道隐藏事实）。设计见 `doc/MEMORY-V2-DESIGN.md`
+- `fact_log.py`：记忆 V2 核心（**影子模式**，未接管真相）；单一 append-only fact 日志 + 一处确定性实体 `Resolver`（并语法助词 + 消费 keeper aliases，偏欠并）+ `commit_turn / seed_from_state / project`。`project()` 纯折叠出 `onstage_npcs / important_npcs / 每实体 last_event`（`last_event` 为查询而非存储字段，结构上消除 `last_main_event` 覆盖）、`entity_persona`（实体上稳定性格：确立即锁、叫法变了不丢）、`knowledge_boundary`（`knows` fact 白名单，实体不在其中=不知道隐藏事实）；resolver 还把 canonical **升级到专名**（沈昭 over 灰衣青年修士，保守判定）。persona 由 consolidation 时 `persona_distiller` 提炼并锁定。设计见 `doc/MEMORY-V2-DESIGN.md`
+- `persona_distiller.py`：从 NPC 言行用**一次** LLM 提炼稳定性格（只写"是个怎样的人"、排除对主角态度），剥 JSON 回显 + 校验拒绝；由 `handler_message._consolidate_factlog_personas` 在 consolidation turn 调用、每 NPC 一次、锁定
 - `opening.py`：opening 菜单与开局状态机；菜单/direct-start 仍可保存阶段 checkpoint，但 opening choice 进入首个 narrator 回合时可跳过 checkpoint，由 `handler_message.py` 在该 turn 结束时统一提交最终 state
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
 - `character_assets.py`：角色卡 source 目录下的导入产物与封面资产读取
@@ -377,6 +378,8 @@ pytest 侧由仓库根 `conftest.py` 在收集前把仓库根与 `backend/` 同�
 - 地基扩展（实体层 persona + 知情边界）：`Entity` 加稳定 `persona`（确立一次即锁定、叫法变了不丢 → 防"NPC 玩着变一个人"）+ 知情边界 `knowledge_boundary`（`knows` fact 白名单，实体不在其中=不知道主角隐藏事实 → 防知情边界退步，且这是证否约束、不靠检索）；`Resolver` 现消费 keeper 给的 aliases 把同一人的变体归一。
 - 归并增强（commit `113ddbe`）：resolver 现还并 **前缀类别简称**（灰衣青年→灰衣青年修士）+ **晚到别名触发对已分裂实体的合并**（短工→桥上探头男人，并消费 `scene_entities` 别名）；读时经 `canon_eid` 折叠、不改 append-only 日志。仍欠并防过并：同义词（灰衣/灰布衫）、双字基名（张三/张三丰）不自动并。
 - 步骤 2（narrator 接管，commit `8cd77ad`）：`narrator_input` 新增 **【人物档案·权威】块**，由 fact-log 投影提供 归并名/锁定 persona/知情边界白名单，插在旧【知情边界】/【人物注册表】前并声明冲突以它为准；`handler_message._load_factlog_view` 注入；开关 `THREADLOOM_FACTLOG_NARRATOR`（默认开）+ 回退安全。**首次改变 narrator 输出**。
+- canonical 升级 + persona 固化（commit `6ca80b5`、修复 `84c9ba5`）：resolver 把 canonical 升级到专名（沈昭 over 灰衣青年修士）；consolidation turn 用 `persona_distiller` 对"有戏份无 persona"的 NPC 各跑一次 LLM 提炼稳定性格并锁定（只写性格、排除对主角态度）。修复 `84c9ba5`：keeper 档模型把 persona 包成 JSON/回显 prompt 被原样锁死，现 `_clean_persona_text` 剥 JSON + 校验。
+- narrator 模型适配（commit `229bba8` / `f6776a8` / `26545f4`）：新增 `prompts/runtime-rules-grok.md`（去 jailbreak + 鼓励铺陈 + 反套路），`context_builder` 按 narrator 模型名含 `grok` 切换；默认与 grok 规则都加**反脑补**条款（不许把未出现的既定事实写成定论，环境铺陈豁免），与 output 端 grounding guard 双道。
 
 ### State Keeper 三层架构与调度策略
 

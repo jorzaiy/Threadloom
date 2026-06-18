@@ -433,6 +433,8 @@ server {
 - 调试面板当前展示本轮注入和写回诊断，而不是完整记忆表。重点包括：`Prompt Blocks`、世界书 / NPC 候选注入概览、`Event Memory`、selector `event_hits / summary_chunk_hits / inject_summary`、最新 event summary、`state_keeper_diagnostics`、arbiter 结果和 completion / finish reason。
 - 记忆 V2 fact-log 影子诊断（`memory-v2` 分支）：每轮在 `<session>/diagnostics/factlog_shadow.jsonl` 追加一行，比对 V2 投影与线上 `state.json`。重点字段：`onstage_match`（应稳定 `true`）、`important_only_live`（老系统有、投影漏掉的人物——决定步骤 2 能否替换的关键风险信号）、`proj_distinct_events` vs `live_distinct_events`（V2 的 last_event 不应塌方到 1）。影子层只读不写真相、出错只打 warning，不影响回合；详见 `doc/MEMORY-V2-DESIGN.md`。
 - 记忆 V2 步骤 2（narrator 接管，`memory-v2` 分支）：narrator prompt 现含【人物档案·权威】块（fact-log 投影：归并实体名 + 锁定 persona + 知情边界白名单），插在旧块前、冲突以它为准。环境变量 `THREADLOOM_FACTLOG_NARRATOR`（默认开）控制；设 `THREADLOOM_FACTLOG_NARRATOR=0` 重启可回退到旧渲染做对比。出错自动回退、不影响回合。
+- 记忆 V2 步骤 2 后续：canonical 在真名揭示后会升级（主名跟着换）；persona 在 consolidation turn 由 `persona_distiller` 自动提炼并锁定（只写稳定性格、不含对主角态度，每 NPC 一次）。
+- narrator 模型适配：narrator 模型名含 `grok` 时自动用 `prompts/runtime-rules-grok.md`（去 jailbreak + 鼓励铺陈 + 反套路），其他模型用默认 `runtime-rules.md`；**两版都含反脑补条款**（治 deepseek 等编造既定事实/前情，当下环境铺陈不受限）。换 narrator 模型只改 `model-runtime.json` 的 `narrator.model`，规则自动跟随、无需其他操作。
 - 调试时判断世界书实际注入体量，应优先看 `selected_summary_chars / source_hit_chars / index_hit_chars / foundation_chars / effective_total_chars`，不要只看旧 `total_chars`。
 - 轻量物件状态层已接入：
   - `tracked_objects`
