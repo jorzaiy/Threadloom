@@ -66,7 +66,8 @@ class ProjectionTests(unittest.TestCase):
 
     def test_present_now_and_inactivity(self):
         log = FactLog()
-        log.commit_turn(_turn('北门', '盘问。', ['张麻子']), 261)
+        log.commit_turn(_turn('北门', '盘问。', ['张麻子']), 260)
+        log.commit_turn(_turn('北门', '继续盘问。', ['张麻子']), 261)   # two turns -> not ephemeral
         log.commit_turn(_turn('东巷', '触手拦路。', ['灵貂']), 276)
         by = {n['primary_label']: n for n in log.project()['important_npcs']}
         self.assertTrue(by['灵貂']['present_now'])
@@ -375,6 +376,29 @@ class RelationLineTests(unittest.TestCase):
         v = log.project()
         self.assertEqual(v['entity_relationship']['沈昭'], '初步信任')
         self.assertEqual([f['value'] for f in log.facts if f['predicate'] == 'relation'], ['戒备', '初步信任'])
+
+
+class EphemeralTests(unittest.TestCase):
+    """One-time passers-by stay out of the long-term roster (important / cast),
+    but recurring or currently-on-stage NPCs are kept."""
+
+    def test_one_time_passerby_excluded(self):
+        log = FactLog()
+        log.commit_turn({'location': '街', 'main_event': '路人甲问路', 'onstage_npcs': ['路人甲']}, 1)
+        log.commit_turn({'location': '街', 'main_event': '掌柜搭话', 'onstage_npcs': ['掌柜']}, 2)
+        log.commit_turn({'location': '街', 'main_event': '掌柜继续', 'onstage_npcs': ['掌柜']}, 3)
+        labels = [n['primary_label'] for n in log.project()['important_npcs']]
+        self.assertNotIn('路人甲', labels)     # one-time passer-by dropped from roster
+        self.assertIn('掌柜', labels)
+
+    def test_recurring_or_onstage_kept(self):
+        log = FactLog()
+        log.commit_turn({'location': 'x', 'main_event': 'e', 'onstage_npcs': ['沈昭']}, 1)
+        log.commit_turn({'location': 'x', 'main_event': 'e', 'onstage_npcs': ['沈昭']}, 2)   # recurring
+        log.commit_turn({'location': 'x', 'main_event': 'e', 'onstage_npcs': ['新人']}, 3)   # on-stage now
+        labels = [n['primary_label'] for n in log.project()['important_npcs']]
+        self.assertIn('沈昭', labels)
+        self.assertIn('新人', labels)          # present this turn → not ephemeral yet
 
 
 if __name__ == '__main__':

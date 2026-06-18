@@ -505,11 +505,21 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
 
     # Importance candidates = anyone seen (present or mentioned), ranked by how
     # many turns they were actually on-stage, then by recency.
+    def is_ephemeral(eid):
+        # One-time passer-by: on-stage exactly once and already gone a couple of
+        # turns. Kept in the entity table, but doesn't take a long-term-roster slot
+        # (important / authoritative cast) — so name-spam doesn't accrete. present==1
+        # (not 0): a seeded / only-mentioned NPC has no `present` fact and is exempt.
+        pt = present_turns.get(eid, set())
+        return len(pt) == 1 and (latest - max(seen_turns[eid])) >= 2
+
     ranked = sorted(seen_turns,
                     key=lambda e: (len(present_turns.get(e, ())), max(seen_turns[e])),
                     reverse=True)
     important = []
     for eid in ranked:
+        if is_ephemeral(eid):
+            continue
         ev = last_event.get(eid)
         present = present_turns.get(eid, set())
         important.append({
