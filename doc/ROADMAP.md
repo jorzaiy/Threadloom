@@ -69,6 +69,10 @@ fact-log 是 keeper 的下游，**keeper 标得准不准是所有方向的天花
 
 → 专门投入"让 keeper 更准地标 **实体 / 别名 / 关系事件 / NPC 目标**"，比下游任何单点优化都更普惠。
 
+**进度**：
+- ✅ 临时 NPC 治理（fact-log 确定性侧，commit `8d34b69`）：恰好在场一次、离场≥2 轮的路人不进长期账本（important/权威块），实体仍留表；present==1 only，seed/仅被提及的 absent NPC 豁免。
+- 待做（prompt 契约，改 keeper fill-prompt、一次一条 + 影子对比）：knowledge 内容质量（只记真知情、不掺环境观察）、别名标注（同一人多称呼标进 aliases）、relation label 规范（去箭头已做、防阶段回退）。
+
 ## 贯穿原则
 
 - **别做成状态机**：persona 锁太死、关系太机械、目标太刚性 = NPC 在填表。结构是锚，血肉让模型演。
