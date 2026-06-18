@@ -317,5 +317,28 @@ class PersonaDistillTests(unittest.TestCase):
             pd.call_role_llm = orig
 
 
+class PersonaDistillJsonTests(unittest.TestCase):
+    """distill_persona must peel JSON-wrapped replies and reject prompt echoes
+    (the c15550 bug: keeper-tier model returned {"content":...} / {"task_description":...})."""
+
+    def test_extracts_content_from_json_message(self):
+        from backend import persona_distiller as pd
+        orig = pd.call_role_llm
+        pd.call_role_llm = lambda r, s, u: ('{"role":"assistant","content":"沉稳老练，行事果断，善于观察"}', {})
+        try:
+            self.assertEqual(pd.distill_persona('周掌柜', ['事件A', '事件B', '事件C']), '沉稳老练，行事果断，善于观察')
+        finally:
+            pd.call_role_llm = orig
+
+    def test_rejects_prompt_echo_json(self):
+        from backend import persona_distiller as pd
+        orig = pd.call_role_llm
+        pd.call_role_llm = lambda r, s, u: ('{"task_description":"提炼NPC稳定的性格气质，只输出一句中文"}', {})
+        try:
+            self.assertEqual(pd.distill_persona('掌柜', ['事件A', '事件B', '事件C']), '')
+        finally:
+            pd.call_role_llm = orig
+
+
 if __name__ == '__main__':
     unittest.main()
