@@ -368,6 +368,14 @@ class RelationLineTests(unittest.TestCase):
                          'actors': {'a': {'kind': 'npc', 'name': '路人'}}}, 1)
         self.assertEqual([f for f in log.facts if f['predicate'] == 'relation'], [])
 
+    def test_relation_label_arrow_normalized(self):
+        log = FactLog()
+        log.commit_turn(self._state('戒备', '初见'), 1)
+        log.commit_turn(self._state('戒备→初步信任', '缓和'), 2)    # arrow label -> keep tail
+        v = log.project()
+        self.assertEqual(v['entity_relationship']['沈昭'], '初步信任')
+        self.assertEqual([f['value'] for f in log.facts if f['predicate'] == 'relation'], ['戒备', '初步信任'])
+
 
 if __name__ == '__main__':
     unittest.main()

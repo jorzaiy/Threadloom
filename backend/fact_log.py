@@ -89,6 +89,20 @@ def _looks_like_proper_name(s: str) -> bool:
     return not any(ch in s for ch in _DESCRIPTIVE_HINT)
 
 
+_RELATION_ARROWS = ('→', '->', '⇒', '➜', '=>')
+
+
+def _normalize_relation_label(label: str) -> str:
+    """keeper sometimes writes a transition like 'A→B' into the label; keep only the
+    final state B. Only explicit arrow marks are split — never plain Chinese chars,
+    to avoid mangling a real label."""
+    text = str(label or '').strip()
+    for arrow in _RELATION_ARROWS:
+        if arrow in text:
+            text = text.split(arrow)[-1].strip()
+    return text
+
+
 @dataclass
 class Entity:
     id: str
@@ -277,7 +291,7 @@ class FactLog:
                 # why) without being locked like persona.
                 rel = a.get('relationship_to_protagonist')
                 if isinstance(rel, dict):
-                    label = str(rel.get('label', '') or '').strip()
+                    label = _normalize_relation_label(rel.get('label', ''))
                     if label and label != self._latest_relation_label(eid):
                         new.append(_fact(self._next(), turn, 'relation', subject=eid,
                                          value=label, text=str(rel.get('evidence', '') or '').strip(),
