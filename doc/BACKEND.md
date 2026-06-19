@@ -381,6 +381,7 @@ pytest 侧由仓库根 `conftest.py` 在收集前把仓库根与 `backend/` 同�
 - canonical 升级 + persona 固化（commit `6ca80b5`、修复 `84c9ba5`）：resolver 把 canonical 升级到专名（沈昭 over 灰衣青年修士）；consolidation turn 用 `persona_distiller` 对"有戏份无 persona"的 NPC 各跑一次 LLM 提炼稳定性格并锁定（只写性格、排除对主角态度）。修复 `84c9ba5`：keeper 档模型把 persona 包成 JSON/回显 prompt 被原样锁死，现 `_clean_persona_text` 剥 JSON + 校验。
 - narrator 模型适配（commit `229bba8` / `f6776a8` / `26545f4`）：新增 `prompts/runtime-rules-grok.md`（去 jailbreak + 鼓励铺陈 + 反套路），`context_builder` 按 narrator 模型名含 `grok` 切换；默认与 grok 规则都加**反脑补**条款（不许把未出现的既定事实写成定论，环境铺陈豁免），与 output 端 grounding guard 双道。
 - P2 关系事件线 + keeper 契约 #1（commit `91f59c8` / `b959714` / `8d34b69`）：`relation` fact（label 变才追加、带 evidence+span+去箭头）→ `project()` 投影当前关系（动态）+ 关系线 → 权威块展示"对主角=…（依据）"。临时 NPC 治理：`project()` 把"恰好在场一次、离场≥2 轮"的路人挡在 important/权威块外（命名泛滥不堆进账本），实体仍留表；present==1 only，seed/仅被提及的 absent NPC 豁免。
+- keeper 契约 #2/#3（commit `80cf610` + 本次）：#2 `knowledge_scope` fill-prompt 只记真·知情（主角身份/意图/秘密、剧情、关系）、不掺环境/场景/动作观察（防知情边界被污染）；#3 keeper 在 scene_entity 标同一人本轮的别称 → fact-log 据此归并（治"短工"只在正文出现）。均为 prompt 契约，fact-log 消费侧有测试，效果需真实游玩验证。
 
 ### State Keeper 三层架构与调度策略
 
