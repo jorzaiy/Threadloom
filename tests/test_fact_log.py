@@ -401,5 +401,20 @@ class EphemeralTests(unittest.TestCase):
         self.assertIn('新人', labels)          # present this turn → not ephemeral yet
 
 
+class SceneEntityAliasMergeTests(unittest.TestCase):
+    """keeper-contract #3: when keeper tags a surface alias on a scene_entity, the
+    fact-log unifies a previously-split entity (the 短工 case)."""
+
+    def test_scene_entity_alias_unifies_split(self):
+        log = FactLog()
+        log.commit_turn({'location': '桥', 'main_event': '桥上有人探头', 'onstage_npcs': ['桥上探头男人'],
+                         'knowledge_scope': {'npc_local': {'短工': {'learned': ['主角在捞东西']}}}}, 1)
+        # 短工 split off as its own entity; next turn keeper tags it as a scene_entity alias
+        log.commit_turn({'location': '桥', 'main_event': '短工下来帮忙', 'onstage_npcs': ['桥上探头男人'],
+                         'scene_entities': [{'primary_label': '桥上探头男人', 'aliases': ['短工']}]}, 2)
+        r = log.resolver
+        self.assertEqual(r.canon_eid(r.resolve('短工')), r.canon_eid(r.resolve('桥上探头男人')))
+
+
 if __name__ == '__main__':
     unittest.main()

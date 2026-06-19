@@ -87,6 +87,7 @@ time, location, main_event, onstage_npcs, immediate_goal 是当前场景核心�
 - time/location/main_event/onstage_npcs/immediate_goal/scene_entities：只根据本轮叙事正文修正当前场景。
   - onstage_npcs 只写本轮正文中实际在场、有动作或对话的人物，最多5个；不要写上一场景人物。
   - scene_entities 可写当前场面里的描述性人物，如“灰眼男人”“掌柜”，不要把环境物件当人物。
+  - 同一人物本轮被换称呼指代时（如先“桥上探头的人”后“短工”，或描述称呼→职业/真名），把所有指向同一人的称呼放进该 scene_entity 的 `aliases` 数组，让下游能认出是同一人；不要为同一人另起新条目。
   - immediate_goal 必须是本轮结束时主角下一拍要处理的事；如果旧目标已被打断，必须改写。
 - scene_objective（对象）：当前事件/场景段的稳定目标，用于防止叙事主轴散乱。只在当前事件目标缺失、明显开启新事件、或明确结束当前事件时输出。
   格式：
