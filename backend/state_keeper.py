@@ -1480,6 +1480,10 @@ def _name_has_current_text_evidence(name: str, text: str) -> bool:
     if not haystack:
         return False
     departure_markers = ('走了', '离开', '离去', '已走', '已经走', '不在', '消失', '散了', '空了', '没回来')
+    remote_or_memory_markers = (
+        '回想', '想起', '脑子里', '心里', '那句话', '楼下', '窗外', '远处', '隔壁',
+        '后厨飘出', '茶肆后厨飘出', '念叨给自己听',
+    )
     for surface in _onstage_name_surfaces(name):
         if not surface:
             continue
@@ -1488,8 +1492,16 @@ def _name_has_current_text_evidence(name: str, text: str) -> bool:
             idx = haystack.find(surface, start)
             if idx < 0:
                 break
-            window = haystack[max(0, idx - 8): idx + len(surface) + 16]
-            if not any(marker in window for marker in departure_markers):
+            window = haystack[max(0, idx - 18): idx + len(surface) + 28]
+            if any(marker in window for marker in departure_markers):
+                start = idx + len(surface)
+                continue
+            if any(marker in window for marker in remote_or_memory_markers):
+                start = idx + len(surface)
+                continue
+            if re.search(rf'{re.escape(surface)}(?:在|正|还|也|忽然|突然|已经|仍|把|将|拿|抬|转|站|坐|蹲|走|退|往|看|问|说|道|喊|答|笑|听|伸|皱|攥|勒|望|盯|凑|开口|低声|沉默|停|愣|挠|舔|叹|摇|点)', window):
+                return True
+            if re.search(rf'(?:对|向|看向|望向|盯着|拉住|扶住|推了推|递给|靠近|走向){re.escape(surface)}', window):
                 return True
             start = idx + len(surface)
     return False

@@ -223,6 +223,33 @@ class TestFragmentOnstageEvidenceMerge(unittest.TestCase):
         self.assertEqual(merged['onstage_npcs'], ['石根'])
         self.assertEqual(merged.get('scene_entities', []), [])
 
+    def test_remote_or_remembered_mention_does_not_restore_fragment_npc(self):
+        state = {
+            'location': '悦来客栈二楼客房',
+            'main_event': '陆小环回到客房整理禁林线索。',
+            'onstage_npcs': [],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_06', 'primary_label': '店小二', 'aliases': ['店小二'], 'role_label': '提及人物', 'onstage': False},
+            ],
+        }
+        fragment = {
+            'onstage_npcs': ['店小二'],
+            '_current_turn_onstage_npcs': ['店小二'],
+            'scene_entities': [
+                {'entity_id': 'scene_npc_06', 'primary_label': '店小二', 'aliases': ['店小二'], 'role_label': '对话对象', 'onstage': True},
+            ],
+        }
+        narrator_reply = (
+            '陆小环坐在客房里，脑子里转着店小二那句话。'
+            '楼下巷子里，茶肆后厨飘出一缕青烟，是店小二把灶膛里的余火彻底灭了，'
+            '嘴里还念叨着什么，这回大概是念叨给自己听的。'
+        )
+
+        merged = _merge_fragment_onstage_with_text_evidence(state, fragment, narrator_reply)
+
+        self.assertEqual(merged['onstage_npcs'], [])
+        self.assertFalse(merged['scene_entities'][0]['onstage'])
+
 
 class TestCallStateKeeperIntegration(unittest.TestCase):
     """End-to-end-ish tests with LLM call mocked."""
