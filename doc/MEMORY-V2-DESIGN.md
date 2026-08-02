@@ -142,4 +142,9 @@ V2 落地后**删掉**：clobber loop、`important_npc_tracker.py`、`continuity
 - **narrator 模型适配** — 见 `prompts/runtime-rules*.md`、`doc/OPERATIONS.md`：grok 用去 jailbreak、鼓励铺陈、反套路的 `runtime-rules-grok.md`（`context_builder` 按 narrator 模型名切换）；默认与 grok 规则都加了**反脑补**条款（不许把未出现的既定事实写成定论，环境铺陈豁免），与 output 端 grounding guard 双道。
 - **P2 关系事件线（roadmap）· commit `91f59c8` / `b959714`** — `relation` fact（关系 label 变才追加、带 evidence + span + 去箭头）；`project()` 投影 `entity_relationship`（当前=最新、**动态不锁**）+ `entity_relationship_history`（带 turn/why 的关系线）；权威块展示"对主角=<关系>（依据）"。b93051 验证：沈昭 戒备→初步信任→初识→相知。
 
-**下一步**：① 接管在场/重要 NPC 名单（目前仍走线上 state）；② 时机成熟后删除旧 reconciliation 阶段（clobber loop、`important_npc_tracker`、`continuity_resolver`）；③ 两个已知脆点待 LLM 实体判定再收——归并依赖 keeper 标结构化别名（只在正文出现的别名并不上，如重建后的"短工"），且重建用当前 turn-trace 会受 regenerate 改写影响。观察/开关见 `doc/OPERATIONS.md`。
+**下一步 / 双轨写回进度**（详见 `doc/WORKPLAN-FACTLOG-DUAL-TRACK.md`）：
+
+- ✅ **步骤 2 名单写回路径**（默认关）：`THREADLOOM_FACTLOG_WRITE_IMPORTANT=1` 时，`save_state` 前 `commit_turn` + `merge_projected_important_npcs` 成为 `important_npcs` 唯一权威写入，跳过 tracker/continuity；schema 合并（投影管 last_event/成员，prev 保留 locked/aliases 等）。regenerate/delete 接 `truncate_after`。  
+- ✅ **投影名单治理**：ephemeral 路人过滤 + **inactive ≥20 淡出**（persona 锁定例外）；实体/facts 不删。  
+- ✅ 真实 session 基线（e23032/b93051/c88796 等）：P1 clobber 与名单膨胀改善明显；欠并（掌柜/周掌柜）、策略差仍在 → **未默认开**。  
+- 待做：手测（**新档或 session 副本即可**，不绑某条旧剧情）→ 默认开 → `WRITE_ONSTAGE` → 删旧 reconciliation；脆点仍在——归并依赖 keeper 别名、重建受 regenerate 改写影响。观察/开关见 `doc/OPERATIONS.md`。

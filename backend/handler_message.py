@@ -33,7 +33,7 @@ try:
     from .event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
     from .memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
     from .session_auditor import run_session_audit
-    from .fact_log import FactLog
+    from .fact_log import FactLog, merge_projected_important_npcs
     from .persona_distiller import distill_persona
 except ImportError:
     from arbiter_runtime import run_arbiter
@@ -61,7 +61,7 @@ except ImportError:
     from event_ledger import build_event_ledger_with_llm, build_event_summary_item, extract_time_location_anchor
     from memory_maintenance import canonicalize_state_memory, resolve_stale_state_threads
     from session_auditor import run_session_audit
-    from fact_log import FactLog
+    from fact_log import FactLog, merge_projected_important_npcs
     from persona_distiller import distill_persona
 
 
@@ -775,6 +775,11 @@ def _save_turn_trace_safe(session_id: str, turn_id: str, trace: dict) -> None:
         logger.warning('Failed to save turn trace for session=%s turn=%s: %s', session_id, turn_id, exc)
 
 
+def _factlog_write_important_enabled() -> bool:
+    """Write-side dual-track cutover for important_npcs. Default off: shadow-only."""
+    return os.environ.get('THREADLOOM_FACTLOG_WRITE_IMPORTANT', '0') == '1'
+
+
 def _load_factlog_view(session_id: str) -> dict | None:
     """Load the fact-log projection (merged cast / locked persona / knowledge
     boundary) for the narrator prompt. Flag-gated + guarded: returns None when
@@ -791,6 +796,15 @@ def _load_factlog_view(session_id: str) -> dict | None:
     except Exception as err:  # narrator must never break on a fact-log issue
         logger.warning('FACTLOG_VIEW_FAILED session=%s err=%s', session_id, err)
         return None
+
+
+def _apply_important_npc_trackers(state: dict, session_id: str, context: dict) -> dict:
+    """Legacy important roster writers. Skipped when fact-log owns important_npcs."""
+    if _factlog_write_important_enabled():
+        return state
+    state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
+    state = resolve_important_npc_continuity(state)
+    return state
 
 
 def _consolidate_factlog_personas(session_id: str) -> None:
@@ -822,47 +836,104 @@ def _consolidate_factlog_personas(session_id: str) -> None:
         logger.warning('FACTLOG_PERSONA_DISTILL_FAILED session=%s err=%s', session_id, err)
 
 
-def _shadow_commit_fact_log(session_id: str, turn_id: str, turn_number: int, prev_state: dict, state: dict) -> None:
-    """Shadow-only V2 fact-log write + diff vs the authoritative state (no behavior
-    change). Appends this turn's facts, projects a view, and logs how it compares
-    to state.json into diagnostics/factlog_shadow.jsonl. On a brand-new fact log
-    for a session that already has history, seeds once from the prior state
-    (approach A lazy migration). Fully guarded — must never affect the turn.
+def _append_factlog_shadow_record(
+    paths: dict,
+    turn_id: str,
+    turn_number: int,
+    log: FactLog,
+    view: dict,
+    state: dict,
+    *,
+    wrote_important: bool = False,
+) -> None:
+    proj_on = set(view.get('onstage_npcs') or [])
+    live_on = {n for n in (state.get('onstage_npcs', []) or []) if isinstance(n, str)}
+    proj_imp = {n.get('primary_label', '') for n in (view.get('important_npcs') or []) if isinstance(n, dict)}
+    live_imp = {x.get('primary_label', '') for x in (state.get('important_npcs', []) or []) if isinstance(x, dict)}
+    record = {
+        'turn_id': turn_id,
+        'turn': int(turn_number),
+        'facts': len(log.facts),
+        'entities': len(log.resolver.entities),
+        'onstage_match': proj_on == live_on,
+        'onstage_only_proj': sorted(proj_on - live_on),
+        'onstage_only_live': sorted(live_on - proj_on),
+        'important_overlap': len(proj_imp & live_imp),
+        'important_only_proj': sorted(x for x in (proj_imp - live_imp) if x),
+        'important_only_live': sorted(x for x in (live_imp - proj_imp) if x),
+        'proj_distinct_events': len(set((view.get('entity_last_event') or {}).values())),
+        'live_distinct_events': len({str(x.get('last_main_event', '')) for x in (state.get('important_npcs', []) or []) if isinstance(x, dict)}),
+        'wrote_important': bool(wrote_important),
+    }
+    diag_dir = paths['session_dir'] / 'diagnostics'
+    diag_dir.mkdir(parents=True, exist_ok=True)
+    with open(diag_dir / 'factlog_shadow.jsonl', 'a', encoding='utf-8') as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+
+def _commit_fact_log_turn(
+    session_id: str,
+    turn_id: str,
+    turn_number: int,
+    prev_state: dict,
+    state: dict,
+    *,
+    write_important: bool = False,
+) -> dict:
+    """Commit this turn into the fact-log and optionally own important_npcs.
+
+    Always appends diagnostics. When write_important is True, merges the
+    projected roster into state (schema-preserving) before the caller save_state.
+    Fully guarded — must never break a turn; write failures keep the prior roster.
     """
+    if not isinstance(state, dict):
+        return state
     try:
         paths = session_paths(session_id)
         memory_dir = paths['memory_dir']
         log = FactLog.load(memory_dir)
         if not log.facts and isinstance(prev_state, dict) and prev_state.get('important_npcs'):
             log.seed_from_state(prev_state, as_of_turn=max(1, int(turn_number) - 1))
-        log.commit_turn(state if isinstance(state, dict) else {}, int(turn_number))
+        log.commit_turn(state, int(turn_number))
         log.save(memory_dir)
-
         view = log.project()
-        proj_on = set(view['onstage_npcs'])
-        live_on = {n for n in (state.get('onstage_npcs', []) or []) if isinstance(n, str)}
-        proj_imp = {n['primary_label'] for n in view['important_npcs']}
-        live_imp = {x.get('primary_label', '') for x in (state.get('important_npcs', []) or []) if isinstance(x, dict)}
-        record = {
-            'turn_id': turn_id,
-            'turn': int(turn_number),
-            'facts': len(log.facts),
-            'entities': len(log.resolver.entities),
-            'onstage_match': proj_on == live_on,
-            'onstage_only_proj': sorted(proj_on - live_on),
-            'onstage_only_live': sorted(live_on - proj_on),
-            'important_overlap': len(proj_imp & live_imp),
-            'important_only_proj': sorted(proj_imp - live_imp),
-            'important_only_live': sorted(live_imp - proj_imp),
-            'proj_distinct_events': len(set(view['entity_last_event'].values())),
-            'live_distinct_events': len({str(x.get('last_main_event', '')) for x in (state.get('important_npcs', []) or []) if isinstance(x, dict)}),
-        }
-        diag_dir = paths['session_dir'] / 'diagnostics'
-        diag_dir.mkdir(parents=True, exist_ok=True)
-        with open(diag_dir / 'factlog_shadow.jsonl', 'a', encoding='utf-8') as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + '\n')
-    except Exception as err:  # shadow must never break a turn
-        logger.warning('FACTLOG_SHADOW_FAILED turn=%s err=%s', turn_id, err)
+
+        next_state = state
+        wrote = False
+        if write_important:
+            try:
+                merged = merge_projected_important_npcs(
+                    state.get('important_npcs'),
+                    view.get('important_npcs'),
+                    entity_aliases=view.get('entity_aliases'),
+                )
+                next_state = dict(state)
+                next_state['important_npcs'] = merged
+                wrote = True
+            except Exception as err:
+                logger.warning(
+                    'FACTLOG_WRITE_IMPORTANT_FAILED turn=%s err=%s; keeping prior important_npcs',
+                    turn_id, err,
+                )
+                next_state = state
+                wrote = False
+
+        # Diff vs pre-merge state so shadow still shows proj vs live divergence
+        # when write_important is on (useful until default-on).
+        _append_factlog_shadow_record(
+            paths, turn_id, turn_number, log, view, state, wrote_important=wrote,
+        )
+        return next_state
+    except Exception as err:
+        logger.warning('FACTLOG_COMMIT_FAILED turn=%s err=%s', turn_id, err)
+        return state
+
+
+def _shadow_commit_fact_log(session_id: str, turn_id: str, turn_number: int, prev_state: dict, state: dict) -> None:
+    """Shadow-only V2 fact-log write (flag WRITE_IMPORTANT off path)."""
+    _commit_fact_log_turn(
+        session_id, turn_id, turn_number, prev_state, state, write_important=False,
+    )
 
 
 def update_stub_state(state: dict, text: str, context: dict) -> dict:
@@ -1028,8 +1099,7 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
     state = merge_arbiter_state(state, arbiter)
     state = apply_thread_tracker(state, user_text=opening_prompt, narrator_reply=reply, arbiter=arbiter)
     state['continuity_hints'] = normalized_hint_entries(session_id)
-    state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
-    state = resolve_important_npc_continuity(state)
+    state = _apply_important_npc_trackers(state, session_id, context)
     # The opening choice is resolved this turn, but call_state_keeper rebuilt state
     # from the disk baseline (initialize_opening_choice_state used persist=False, so
     # the in-memory opening flags were never written), dropping opening_resolved /
@@ -1037,7 +1107,20 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
     # next turn falls back into the opening menu ("当前还在选择开局").
     state['opening_resolved'] = True
     state['opening_started'] = True
+    write_important = _factlog_write_important_enabled()
+    opening_prev = {}
+    if isinstance(turn_trace, dict):
+        pre_turn = turn_trace.get('pre_turn', {})
+        if isinstance(pre_turn, dict) and isinstance(pre_turn.get('state'), dict):
+            opening_prev = pre_turn['state']
+    opening_turn_num = max(1, int(meta.get('last_turn_id', 0) or 0) + 1)
+    if write_important:
+        state = _commit_fact_log_turn(
+            session_id, turn_id, opening_turn_num, opening_prev, state, write_important=True,
+        )
     save_state(session_id, state)
+    if not write_important:
+        _shadow_commit_fact_log(session_id, turn_id, opening_turn_num, opening_prev, state)
     _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
 
     response = {
@@ -1591,8 +1674,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     state = merge_arbiter_state(state, arbiter)
     state = apply_thread_tracker(state, user_text=text, narrator_reply=reply, arbiter=arbiter)
     state['continuity_hints'] = normalized_hint_entries(session_id)
-    state = update_important_npcs(state, load_history(session_id), context.get('continuity_candidates', []))
-    state = resolve_important_npc_continuity(state)
+    state = _apply_important_npc_trackers(state, session_id, context)
     recent_pairs = _recent_history_pairs(load_history(session_id), limit=3)
 
     state = _add_lightweight_knowledge_delta(state, reply)
@@ -1613,9 +1695,19 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     # and actor registry have all merged their bindings. update_actor_registry
     # contains its own LLM-failure fallback so it does not raise out, which lets
     # us collapse the prior intermediate save into this final write.
+    # When WRITE_IMPORTANT is on, fact-log project merge is the last writer of
+    # important_npcs (after actor_registry / memory_maintenance may have touched it).
+    write_important = _factlog_write_important_enabled()
+    if write_important:
+        state = _commit_fact_log_turn(
+            session_id, turn_id, current_turn_num,
+            prev_state if isinstance(prev_state, dict) else {},
+            state, write_important=True,
+        )
     save_state(session_id, state)
     _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-    _shadow_commit_fact_log(session_id, turn_id, current_turn_num, prev_state, state)
+    if not write_important:
+        _shadow_commit_fact_log(session_id, turn_id, current_turn_num, prev_state, state)
     committed_response = {
         'session_id': session_id,
         'turn_id': turn_id,

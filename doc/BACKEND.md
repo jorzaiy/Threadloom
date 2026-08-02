@@ -7,7 +7,7 @@
 ## 当前文件
 
 - `server.py`：HTTP 服务入口；`do_GET/do_POST/do_DELETE` 通过 `_GET_ROUTES/_POST_ROUTES/_DELETE_ROUTES` 的 path→handler 分发表路由到 `_get_* / _post_* / _delete_*` handler；请求壳由 `_request_scope(method)` context manager 统一管理（解析用户/多用户上下文，`finally` 必定重置 token），session 路由前导统一走 `_resolve_scoped_session`
-- `handler_message.py`：`POST /api/message` 主链入口；权威 `save_state` 之后挂了 `_shadow_commit_fact_log`（记忆 V2 fact-log 影子旁路，只写诊断、不改行为）；narrator 前用 `_load_factlog_view` 把 fact-log 投影注入 prompt（步骤 2 接管，开关 `THREADLOOM_FACTLOG_NARRATOR`）
+- `handler_message.py`：`POST /api/message` 主链入口；fact-log：`THREADLOOM_FACTLOG_WRITE_IMPORTANT=1` 时在权威 `save_state` **之前** commit + 合并写回 `important_npcs`（跳过 tracker/continuity），默认关则 `save_state` 后 `_shadow_commit_fact_log` 仅诊断；narrator 前 `_load_factlog_view`（`THREADLOOM_FACTLOG_NARRATOR`）
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照；JSON 读取统一走 `_load_json(path, default, *, backup_corrupt=...)`，区分“文件缺失”（返回 default 深拷贝）与“解析损坏”（`logger.exception` + 把坏文件移到 `<name>.corrupt` 后返回 default），机器生成的 session 数据默认备份、用户手编文件只记录不挪动；`_history_cache` 与 history/event-summary/meta/分片的 read-modify-write 由模块级 `_STORE_LOCK`（RLock）串行化
 - `paths.py`：三层路径管理（user / character / session 分层路径解析），提供 `active_user_id` / `active_character_id` context var 与 request-local override 机制
 - `atomic_io.py`：原子文件读写原语（写临时文件 → fsync → `os.replace`），供 `runtime_store.py` / `keeper_archive.py` 等写入层统一使用
@@ -44,7 +44,7 @@
 - `continuity_hints.py`：连续性提示加载封装；从 `runtime_store` 读取 continuity_hints，供上下文装配层使用
 - `event_ledger.py`：事件账本；产出阶段事件摘要并保存 `time_anchor/location_anchor`，不再负责人物短期状态写回。统一记忆事务模式下使用 heuristic ledger，不复用 keeper signals 作为事件摘要来源
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
-- `fact_log.py`：记忆 V2 核心（**影子模式**，未接管真相）；单一 append-only fact 日志 + 一处确定性实体 `Resolver`（并语法助词 + 消费 keeper aliases，偏欠并）+ `commit_turn / seed_from_state / project`。`project()` 纯折叠出 `onstage_npcs / important_npcs / 每实体 last_event`（`last_event` 为查询而非存储字段，结构上消除 `last_main_event` 覆盖）、`entity_persona`（实体上稳定性格：确立即锁、叫法变了不丢）、`knowledge_boundary`（`knows` fact 白名单，实体不在其中=不知道隐藏事实）；resolver 还把 canonical **升级到专名**（沈昭 over 灰衣青年修士，保守判定）。persona 由 consolidation 时 `persona_distiller` 提炼并锁定。设计见 `doc/MEMORY-V2-DESIGN.md`
+- `fact_log.py`：记忆 V2 核心（默认影子；`WRITE_IMPORTANT` 可接管 `important_npcs` 写回）；append-only facts + `Resolver` + `commit_turn / seed_from_state / project / merge_projected_important_npcs / truncate_after`。`project()` 出 onstage/important/last_event（查询）、persona、knowledge_boundary、relation；important 过滤 = ephemeral + **inactive≥20 淡出**（persona 锁定例外）。设计见 `doc/MEMORY-V2-DESIGN.md`，双轨进度见 `doc/WORKPLAN-FACTLOG-DUAL-TRACK.md`
 - `persona_distiller.py`：从 NPC 言行用**一次** LLM 提炼稳定性格（只写"是个怎样的人"、排除对主角态度），剥 JSON 回显 + 校验拒绝；由 `handler_message._consolidate_factlog_personas` 在 consolidation turn 调用、每 NPC 一次、锁定
 - `opening.py`：opening 菜单与开局状态机；菜单/direct-start 仍可保存阶段 checkpoint，但 opening choice 进入首个 narrator 回合时可跳过 checkpoint，由 `handler_message.py` 在该 turn 结束时统一提交最终 state
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
@@ -371,13 +371,14 @@ pytest 侧由仓库根 `conftest.py` 在收集前把仓库根与 `backend/` 同�
 
 ## 近期变更
 
-### 记忆 V2 fact-log（影子）+ last_main_event 覆盖修复
+### 记忆 V2 fact-log（影子 → 可选写回）+ last_main_event 覆盖修复
 
 - 修复 `state_bridge.py` / `important_npc_tracker.py`：离场重要 NPC 的 `last_main_event` 被每轮全局 `main_event` 无条件覆盖（典型表现：20 个 important NPC 只剩 1 个不同值，且污染 `continuity_resolver` 的 last_event==当前事件召回信号），现与 `last_location` 一样按 onstage 门控；carried 分支与 keeper-registry 兜底的覆盖也一并去掉。
 - 新增 `backend/fact_log.py` + `handler_message._shadow_commit_fact_log`：单一 append-only fact 日志的影子层，每轮在权威 `save_state` 后旁路写 fact，并把投影 vs 线上 state 的 diff 写入 `<session>/diagnostics/factlog_shadow.jsonl`，全程 try/except 包住，**零行为变更**。详见 `doc/MEMORY-V2-DESIGN.md`、观察口径见 `doc/OPERATIONS.md`。
 - 地基扩展（实体层 persona + 知情边界）：`Entity` 加稳定 `persona`（确立一次即锁定、叫法变了不丢 → 防"NPC 玩着变一个人"）+ 知情边界 `knowledge_boundary`（`knows` fact 白名单，实体不在其中=不知道主角隐藏事实 → 防知情边界退步，且这是证否约束、不靠检索）；`Resolver` 现消费 keeper 给的 aliases 把同一人的变体归一。
 - 归并增强（commit `113ddbe`）：resolver 现还并 **前缀类别简称**（灰衣青年→灰衣青年修士）+ **晚到别名触发对已分裂实体的合并**（短工→桥上探头男人，并消费 `scene_entities` 别名）；读时经 `canon_eid` 折叠、不改 append-only 日志。仍欠并防过并：同义词（灰衣/灰布衫）、双字基名（张三/张三丰）不自动并。
 - 步骤 2（narrator 接管，commit `8cd77ad`）：`narrator_input` 新增 **【人物档案·权威】块**，由 fact-log 投影提供 归并名/锁定 persona/知情边界白名单，插在旧【知情边界】/【人物注册表】前并声明冲突以它为准；`handler_message._load_factlog_view` 注入；开关 `THREADLOOM_FACTLOG_NARRATOR`（默认开）+ 回退安全。**首次改变 narrator 输出**。
+- 步骤 2 名单写回（默认关，见 `WORKPLAN-FACTLOG-DUAL-TRACK.md`）：`THREADLOOM_FACTLOG_WRITE_IMPORTANT=1` 时 save 前 merge 写回 `important_npcs`、停 tracker；`project()` 另有 inactive≥20 淡出；regenerate 接 `truncate_after`。未默认开前现网仍以影子为主。
 - canonical 升级 + persona 固化（commit `6ca80b5`、修复 `84c9ba5`）：resolver 把 canonical 升级到专名（沈昭 over 灰衣青年修士）；consolidation turn 用 `persona_distiller` 对"有戏份无 persona"的 NPC 各跑一次 LLM 提炼稳定性格并锁定（只写性格、排除对主角态度）。修复 `84c9ba5`：keeper 档模型把 persona 包成 JSON/回显 prompt 被原样锁死，现 `_clean_persona_text` 剥 JSON + 校验。
 - narrator 模型适配（commit `229bba8` / `f6776a8` / `26545f4`）：新增 `prompts/runtime-rules-grok.md`（去 jailbreak + 鼓励铺陈 + 反套路），`context_builder` 按 narrator 模型名含 `grok` 切换；默认与 grok 规则都加**反脑补**条款（不许把未出现的既定事实写成定论，环境铺陈豁免），与 output 端 grounding guard 双道。
 - P2 关系事件线 + keeper 契约 #1（commit `91f59c8` / `b959714` / `8d34b69`）：`relation` fact（label 变才追加、带 evidence+span+去箭头）→ `project()` 投影当前关系（动态）+ 关系线 → 权威块展示"对主角=…（依据）"。临时 NPC 治理：`project()` 把"恰好在场一次、离场≥2 轮"的路人挡在 important/权威块外（命名泛滥不堆进账本），实体仍留表；present==1 only，seed/仅被提及的 absent NPC 豁免。

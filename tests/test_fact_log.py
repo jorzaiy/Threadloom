@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'backend'))
 
-from backend.fact_log import FactLog, Resolver  # noqa: E402
+from backend.fact_log import FactLog, Resolver, merge_projected_important_npcs  # noqa: E402
 
 E23032 = ROOT / 'runtime-data/default-user/characters/九幽大陆/sessions/九幽大陆-20260520-e23032'
 
@@ -193,6 +193,20 @@ class PersonaAndKnowledgeTests(unittest.TestCase):
         log2 = FactLog()
         log2.commit_turn(unknown, 1)
         self.assertNotIn('李四', log2.project()['knowledge_boundary'])
+
+    def test_repeated_cumulative_knowledge_is_not_recommitted_each_turn(self):
+        s1 = {'location': 'x', 'main_event': 'e1', 'onstage_npcs': ['柳絮'],
+              'knowledge_scope': {'npc_local': {'柳絮': {'learned': ['陆小环自称担心她']}}}}
+        s2 = {'location': 'x', 'main_event': 'e2', 'onstage_npcs': ['柳絮'],
+              'knowledge_scope': {'npc_local': {'柳絮': {'learned': ['陆小环自称担心她']}}}}
+        log = FactLog()
+        log.commit_turn(s1, 1)
+        log.commit_turn(s2, 2)
+
+        knows = [f for f in log.facts if f.get('predicate') == 'knows']
+        self.assertEqual(len(knows), 1)
+        self.assertEqual(knows[0]['turn'], 1)
+        self.assertEqual(log.project()['knowledge_boundary']['柳絮'], ['陆小环自称担心她'])
 
 
 class MergeAndShortFormTests(unittest.TestCase):
@@ -400,6 +414,49 @@ class EphemeralTests(unittest.TestCase):
         self.assertIn('沈昭', labels)
         self.assertIn('新人', labels)          # present this turn → not ephemeral yet
 
+    def test_long_inactive_fades_from_roster(self):
+        """Recurring NPC gone ≥ IMPORTANT_INACTIVE_FADE_TURNS drops from important
+        (entity table / facts still keep them)."""
+        from backend.fact_log import IMPORTANT_INACTIVE_FADE_TURNS
+        log = FactLog()
+        log.commit_turn({'location': '北门', 'main_event': '盘问一', 'onstage_npcs': ['张麻子']}, 1)
+        log.commit_turn({'location': '北门', 'main_event': '盘问二', 'onstage_npcs': ['张麻子']}, 2)
+        # Jump far past the fade window with an unrelated onstage cast
+        later = 2 + IMPORTANT_INACTIVE_FADE_TURNS
+        log.commit_turn({'location': '东巷', 'main_event': '触手拦路', 'onstage_npcs': ['灵貂']}, later)
+        labels = [n['primary_label'] for n in log.project()['important_npcs']]
+        self.assertNotIn('张麻子', labels)
+        self.assertIn('灵貂', labels)
+        # facts still know 张麻子 (fade is projection-only)
+        self.assertIn('张麻子', log.project()['entity_last_event'])
+
+    def test_persona_locked_survives_inactive_fade(self):
+        from backend.fact_log import IMPORTANT_INACTIVE_FADE_TURNS
+        log = FactLog()
+        log.commit_turn({
+            'location': '桥', 'main_event': '初见', 'onstage_npcs': ['沈昭'],
+            'actors': {'a': {'kind': 'npc', 'name': '沈昭', 'personality': '谨慎试探'}},
+        }, 1)
+        log.commit_turn({
+            'location': '桥', 'main_event': '再谈', 'onstage_npcs': ['沈昭'],
+            'actors': {'a': {'kind': 'npc', 'name': '沈昭', 'personality': '谨慎试探'}},
+        }, 2)
+        later = 2 + IMPORTANT_INACTIVE_FADE_TURNS
+        log.commit_turn({'location': '客栈', 'main_event': '独行', 'onstage_npcs': []}, later)
+        labels = [n['primary_label'] for n in log.project()['important_npcs']]
+        self.assertIn('沈昭', labels)   # persona-locked cast survives fade
+
+    def test_just_under_fade_threshold_kept(self):
+        from backend.fact_log import IMPORTANT_INACTIVE_FADE_TURNS
+        log = FactLog()
+        log.commit_turn({'location': 'x', 'main_event': 'a', 'onstage_npcs': ['掌柜']}, 1)
+        log.commit_turn({'location': 'x', 'main_event': 'b', 'onstage_npcs': ['掌柜']}, 2)
+        # inactive = IMPORTANT_INACTIVE_FADE_TURNS - 1  → still listed
+        later = 2 + (IMPORTANT_INACTIVE_FADE_TURNS - 1)
+        log.commit_turn({'location': 'y', 'main_event': 'c', 'onstage_npcs': ['新人']}, later)
+        labels = [n['primary_label'] for n in log.project()['important_npcs']]
+        self.assertIn('掌柜', labels)
+
 
 class SceneEntityAliasMergeTests(unittest.TestCase):
     """keeper-contract #3: when keeper tags a surface alias on a scene_entity, the
@@ -414,6 +471,72 @@ class SceneEntityAliasMergeTests(unittest.TestCase):
                          'scene_entities': [{'primary_label': '桥上探头男人', 'aliases': ['短工']}]}, 2)
         r = log.resolver
         self.assertEqual(r.canon_eid(r.resolve('短工')), r.canon_eid(r.resolve('桥上探头男人')))
+
+
+class MergeProjectedImportantTests(unittest.TestCase):
+    """Schema-preserving merge for WRITE_IMPORTANT write-back."""
+
+    def test_projection_owns_last_event_and_membership(self):
+        prev = [{
+            'key': 'important:张麻子',
+            'primary_label': '张麻子',
+            'aliases': ['张叔'],
+            'role_label': '门卫',
+            'locked': True,
+            'importance_score': 7,
+            'last_main_event': '旧的整表 clobber 事件',
+            'present_now': True,
+            'inactive_turns': 0,
+        }]
+        projected = [
+            {'primary_label': '张麻子', 'present_now': False, 'last_main_event': '张麻子在北门盘问。',
+             'last_location': '北门', 'inactive_turns': 5},
+            {'primary_label': '灵貂', 'present_now': True, 'last_main_event': '触手拦路。',
+             'last_location': '东巷', 'inactive_turns': 0},
+        ]
+        merged = merge_projected_important_npcs(prev, projected, entity_aliases={'灵貂': ['小貂']})
+        by = {n['primary_label']: n for n in merged}
+        self.assertEqual(set(by), {'张麻子', '灵貂'})
+        # projection wins on dynamic anchors
+        self.assertEqual(by['张麻子']['last_main_event'], '张麻子在北门盘问。')
+        self.assertFalse(by['张麻子']['present_now'])
+        self.assertEqual(by['张麻子']['inactive_turns'], 5)
+        # prev thick fields preserved
+        self.assertEqual(by['张麻子']['role_label'], '门卫')
+        self.assertEqual(by['张麻子']['importance_score'], 7)
+        self.assertTrue(by['张麻子']['locked'])
+        self.assertIn('张叔', by['张麻子']['aliases'])
+        # new row gets defaults + entity aliases
+        self.assertEqual(by['灵貂']['key'], 'important:灵貂')
+        self.assertTrue(by['灵貂']['locked'])
+        self.assertIn('小貂', by['灵貂']['aliases'])
+        # distinct events — the P1 guarantee visible on the merged roster
+        self.assertEqual(len({n['last_main_event'] for n in merged}), 2)
+
+    def test_match_prev_via_alias_surface(self):
+        prev = [{
+            'key': 'important:灰衣青年',
+            'primary_label': '灰衣青年',
+            'aliases': ['沈昭'],
+            'role_label': '修士',
+            'locked': True,
+            'importance_score': 9,
+            'last_main_event': 'clobber',
+        }]
+        projected = [{
+            'primary_label': '沈昭', 'present_now': True,
+            'last_main_event': '沈昭点头。', 'last_location': '客栈', 'inactive_turns': 0,
+        }]
+        merged = merge_projected_important_npcs(
+            prev, projected, entity_aliases={'沈昭': ['灰衣青年', '灰衣青年修士']},
+        )
+        self.assertEqual(len(merged), 1)
+        row = merged[0]
+        self.assertEqual(row['primary_label'], '沈昭')
+        self.assertEqual(row['role_label'], '修士')
+        self.assertEqual(row['importance_score'], 9)
+        self.assertEqual(row['last_main_event'], '沈昭点头。')
+        self.assertIn('灰衣青年', row['aliases'])
 
 
 if __name__ == '__main__':

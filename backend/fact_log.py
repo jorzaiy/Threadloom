@@ -32,6 +32,11 @@ except ImportError:  # imported as top-level module (tests add backend/ to path)
 
 PREDICATES = ('present', 'holds', 'knows', 'relation', 'observation')
 
+# Long-term important roster: drop NPCs not seen for this many turns (still kept
+# in the entity table / facts — only the projected important list fades).
+# Exception: locked persona means "emerged cast" and survives the fade.
+IMPORTANT_INACTIVE_FADE_TURNS = 20
+
 # Conservative: strip only grammatical particles. NOT 子/儿 or synonyms — those
 # are auditor territory (see module docstring on under- vs over-merge).
 _PARTICLE = re.compile(r'[的地得]')
@@ -274,6 +279,17 @@ class FactLog:
                 label = f.get('value') or label
         return label
 
+    def _known_values(self) -> set[tuple[str, str]]:
+        values: set[tuple[str, str]] = set()
+        for f in self.facts:
+            if f.get('predicate') != 'knows':
+                continue
+            subject = f.get('subject')
+            value = str(f.get('value') or '').strip()
+            if subject and value:
+                values.add((self.resolver.canon_eid(subject), value))
+        return values
+
     def commit_turn(self, state: dict, turn: int) -> list[dict]:
         """Derive this turn's facts from its primitives. Also registers known
         actors (canonical id + alias unification), fixes their persona once (then
@@ -319,16 +335,20 @@ class FactLog:
         # 2. knowledge-boundary delta: what each NPC newly learned -> `knows` facts
         #    (a whitelist — absence means "does not know", the safe default)
         npc_local = (state.get('knowledge_scope') or {}).get('npc_local') or {}
+        known_values = self._known_values()
         if isinstance(npc_local, dict):
             for nm, payload in npc_local.items():
                 eid = self.resolver.resolve(nm)
                 if not eid or self.resolver.entities[eid].kind == 'protagonist':
                     continue
+                cid = self.resolver.canon_eid(eid)
                 learned = payload.get('learned') if isinstance(payload, dict) else payload
                 if isinstance(learned, list):
                     for item in learned:
                         text = str(item or '').strip()
-                        if text:
+                        key = (cid, text)
+                        if text and key not in known_values:
+                            known_values.add(key)
                             new.append(_fact(self._next(), turn, 'knows', subject=eid, value=text,
                                              span={'turn_id': f'turn-{turn:04d}'}))
         self.facts.extend(new)
@@ -513,12 +533,26 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
         pt = present_turns.get(eid, set())
         return len(pt) == 1 and (latest - max(seen_turns[eid])) >= 2
 
+    def is_inactive_faded(eid):
+        # Long absence: drop from important roster so early road NPCs don't accrete
+        # forever (e23032-class bloat). Entity + facts remain; only the projected
+        # list fades. Persona-locked NPCs are "emerged cast" and stay listed.
+        present = present_turns.get(eid, set())
+        if latest in present:
+            return False
+        inactive = latest - max(seen_turns[eid])
+        if inactive < IMPORTANT_INACTIVE_FADE_TURNS:
+            return False
+        if persona_of(eid):
+            return False
+        return True
+
     ranked = sorted(seen_turns,
                     key=lambda e: (len(present_turns.get(e, ())), max(seen_turns[e])),
                     reverse=True)
     important = []
     for eid in ranked:
-        if is_ephemeral(eid):
+        if is_ephemeral(eid) or is_inactive_faded(eid):
             continue
         ev = last_event.get(eid)
         present = present_turns.get(eid, set())
@@ -542,3 +576,114 @@ def project(facts: list[dict], entities: dict, canon_eid=None) -> dict:
         'entity_relationship_history': {canon(e): [{'turn': t, 'label': lb, 'evidence': ev} for (t, lb, ev) in h]
                                         for e, h in rel_history.items()},
     }
+
+
+def merge_projected_important_npcs(
+    prev_items: list | None,
+    projected_items: list | None,
+    entity_aliases: dict | None = None,
+) -> list[dict]:
+    """Build the authoritative important_npcs roster from a fact-log projection
+    without dropping the thick schema downstream consumers still need.
+
+    Projection owns membership and dynamic anchors:
+      primary_label, present_now, last_main_event, last_location, inactive_turns
+    Previous rows (matched by label/alias) and entity_aliases supply:
+      key, aliases, role_label, locked, importance_score, retained, …
+    """
+    prev = [item for item in (prev_items or []) if isinstance(item, dict)]
+    projected = [item for item in (projected_items or []) if isinstance(item, dict)]
+    aliases_by_label = entity_aliases if isinstance(entity_aliases, dict) else {}
+
+    # Index previous rows by primary label and every alias surface.
+    prev_by_surface: dict[str, dict] = {}
+    for item in prev:
+        label = str(item.get('primary_label', '') or '').strip()
+        if label and label not in prev_by_surface:
+            prev_by_surface[label] = item
+        for alias in item.get('aliases', []) or []:
+            surface = str(alias or '').strip()
+            if surface and surface not in prev_by_surface:
+                prev_by_surface[surface] = item
+
+    merged: list[dict] = []
+    seen_labels: set[str] = set()
+    for proj in projected:
+        label = str(proj.get('primary_label', '') or '').strip()
+        if not label or label in seen_labels:
+            continue
+        seen_labels.add(label)
+
+        prev_hit = prev_by_surface.get(label)
+        if prev_hit is None:
+            # Also match when prev's primary is listed as an alias of this canonical.
+            for surface, item in prev_by_surface.items():
+                if surface == label:
+                    prev_hit = item
+                    break
+                prev_primary = str(item.get('primary_label', '') or '').strip()
+                proj_alias_set = {
+                    str(a or '').strip()
+                    for a in (aliases_by_label.get(label) or [])
+                    if str(a or '').strip()
+                }
+                if prev_primary and prev_primary in proj_alias_set:
+                    prev_hit = item
+                    break
+                prev_aliases = {
+                    str(a or '').strip()
+                    for a in (item.get('aliases') or [])
+                    if str(a or '').strip()
+                }
+                if label in prev_aliases:
+                    prev_hit = item
+                    break
+
+        row: dict = dict(prev_hit) if isinstance(prev_hit, dict) else {}
+        # Projection-owned fields always win.
+        row['primary_label'] = label
+        row['present_now'] = bool(proj.get('present_now'))
+        row['last_main_event'] = str(proj.get('last_main_event', '') or '')
+        row['last_location'] = str(proj.get('last_location', '') or '')
+        row['inactive_turns'] = int(proj.get('inactive_turns', 0) or 0)
+
+        # Thick schema defaults / enrichment.
+        if not row.get('key'):
+            row['key'] = f'important:{label}'
+        else:
+            # Keep key stable if label upgraded (沈昭 vs 灰衣青年); only rewrite when empty-ish.
+            pass
+        ent_aliases = [
+            str(a or '').strip()
+            for a in (aliases_by_label.get(label) or [])
+            if str(a or '').strip() and str(a or '').strip() != label
+        ]
+        prev_aliases = [
+            str(a or '').strip()
+            for a in (row.get('aliases') or [])
+            if str(a or '').strip() and str(a or '').strip() != label
+        ]
+        # Prefer entity-table aliases; keep previous surfaces that aren't the new primary.
+        combined: list[str] = []
+        for alias in ent_aliases + prev_aliases:
+            if alias not in combined:
+                combined.append(alias)
+        row['aliases'] = combined
+        if 'role_label' not in row or not str(row.get('role_label') or '').strip():
+            row['role_label'] = '待确认'
+        if 'anchor_type' not in row:
+            row['anchor_type'] = 'continuous'
+        if 'worldbook_candidate' not in row:
+            row['worldbook_candidate'] = False
+        if 'reference_source' not in row:
+            row['reference_source'] = 'factlog_project'
+        if 'importance_score' not in row:
+            row['importance_score'] = 3
+        # Continuity / state_updater filter on locked — projected long-term roster is locked.
+        if 'locked' not in row:
+            row['locked'] = True
+        if 'retained' not in row:
+            row['retained'] = not bool(row.get('present_now'))
+        row['newly_locked'] = False if prev_hit is not None else True
+        merged.append(row)
+    return merged

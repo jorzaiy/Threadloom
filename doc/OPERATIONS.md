@@ -431,9 +431,14 @@ server {
 - NPC / object / clue registry 当前已改为批量刷新：默认累计到至少 3 个新的对话对后才触发一次 sidecar 更新，不再每轮都检查一次 gemma
 - entity candidate judge 当前已收成单一入口：保留 `state_updater.py` 中的判定，移除 `state_bridge.py` 中的重复 judge，减少每轮额外 gemma 调用
 - 调试面板当前展示本轮注入和写回诊断，而不是完整记忆表。重点包括：`Prompt Blocks`、世界书 / NPC 候选注入概览、`Event Memory`、selector `event_hits / summary_chunk_hits / inject_summary`、最新 event summary、`state_keeper_diagnostics`、arbiter 结果和 completion / finish reason。
-- 记忆 V2 fact-log 影子诊断（`memory-v2` 分支）：每轮在 `<session>/diagnostics/factlog_shadow.jsonl` 追加一行，比对 V2 投影与线上 `state.json`。重点字段：`onstage_match`（应稳定 `true`）、`important_only_live`（老系统有、投影漏掉的人物——决定步骤 2 能否替换的关键风险信号）、`proj_distinct_events` vs `live_distinct_events`（V2 的 last_event 不应塌方到 1）。影子层只读不写真相、出错只打 warning，不影响回合；详见 `doc/MEMORY-V2-DESIGN.md`。
-- 记忆 V2 步骤 2（narrator 接管，`memory-v2` 分支）：narrator prompt 现含【人物档案·权威】块（fact-log 投影：归并实体名 + 锁定 persona + 知情边界白名单），插在旧块前、冲突以它为准。环境变量 `THREADLOOM_FACTLOG_NARRATOR`（默认开）控制；设 `THREADLOOM_FACTLOG_NARRATOR=0` 重启可回退到旧渲染做对比。出错自动回退、不影响回合。
-- 记忆 V2 步骤 2 后续：canonical 在真名揭示后会升级（主名跟着换）；persona 在 consolidation turn 由 `persona_distiller` 自动提炼并锁定（只写稳定性格、不含对主角态度，每 NPC 一次）。
+- 记忆 V2 fact-log 影子诊断（`memory-v2` 分支）：每轮在 `<session>/diagnostics/factlog_shadow.jsonl` 追加一行，比对 V2 投影与线上 `state.json`。重点字段：`onstage_match`、`important_only_live` / `important_only_proj`、`proj_distinct_events` vs `live_distinct_events`、`wrote_important`。影子/写回失败只打 warning，不阻断回合。详见 `doc/MEMORY-V2-DESIGN.md`、`doc/WORKPLAN-FACTLOG-DUAL-TRACK.md`。
+- 记忆 V2 读侧（narrator）：【人物档案·权威】块由 fact-log 投影注入；`THREADLOOM_FACTLOG_NARRATOR`（默认开）。设 `=0` 重启可回退旧渲染。
+- 记忆 V2 写侧双轨（`important_npcs`，**默认关**）：
+  - `THREADLOOM_FACTLOG_WRITE_IMPORTANT=1` → `save_state` 前投影**合并**写回名单（管 last_event / 成员；保留 locked/aliases 等），跳过 tracker/continuity。
+  - 投影过滤：一次性 ephemeral + **inactive ≥20 轮淡出**（有锁定 persona 的 NPC 不淡出）；只影响名单投影，不删 facts。
+  - regenerate / delete-latest-turn：`truncate_after` fact-log，失败 restore 含 `facts.jsonl` / `entities.json`。
+  - **手测不必续玩旧长档**：新开短 session，或复制/rebuild 出副本再开 flag；测完改回 `0` 并重启。清单见工作计划「手测」节。
+- 记忆 V2 其它：canonical 可升到专名；persona 在 consolidation 由 `persona_distiller` 提炼锁定（稳定性格 only）。
 - narrator 模型适配：narrator 模型名含 `grok` 时自动用 `prompts/runtime-rules-grok.md`（去 jailbreak + 鼓励铺陈 + 反套路），其他模型用默认 `runtime-rules.md`；**两版都含反脑补条款**（治 deepseek 等编造既定事实/前情，当下环境铺陈不受限）。换 narrator 模型只改 `model-runtime.json` 的 `narrator.model`，规则自动跟随、无需其他操作。
 - 调试时判断世界书实际注入体量，应优先看 `selected_summary_chars / source_hit_chars / index_hit_chars / foundation_chars / effective_total_chars`，不要只看旧 `total_chars`。
 - 轻量物件状态层已接入：

@@ -2,17 +2,23 @@
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 
 try:
     from .atomic_io import atomic_write_text
+    from .fact_log import FactLog
     from .handler_message import handle_message
     from .runtime_store import load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, load_summary_chunks, load_turn_trace, save_event_summaries, save_history, save_meta, save_session_persona_layers, save_state, save_summary, save_summary_chunks, session_paths
     from .summary_updater import update_summary
 except ImportError:
     from atomic_io import atomic_write_text
+    from fact_log import FactLog
     from handler_message import handle_message
     from runtime_store import load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, load_summary_chunks, load_turn_trace, save_event_summaries, save_history, save_meta, save_session_persona_layers, save_state, save_summary, save_summary_chunks, session_paths
     from summary_updater import update_summary
+
+logger = logging.getLogger(__name__)
 
 
 def _latest_turn_id(meta: dict) -> str | None:
@@ -116,6 +122,75 @@ def _prune_keeper_archive(session_id: str, *, max_pair_index: int, history_messa
     atomic_write_text(keeper_archive, json.dumps(next_archive, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
+def _truncate_fact_log_before_turn(session_id: str, target_turn_id: str | None) -> None:
+    """Drop facts at/after the rolled-back turn so re-commit does not double-count.
+
+    truncate_after(N) keeps turn <= N. Regenerating turn-0005 means drop turn >= 5,
+    i.e. truncate_after(4). Fully guarded — missing fact-log is a no-op.
+    """
+    turn = _turn_number(target_turn_id)
+    if turn <= 0:
+        return
+    try:
+        paths = session_paths(session_id)
+        memory_dir = paths.get('memory_dir')
+        if not memory_dir:
+            return
+        memory_dir = Path(memory_dir)
+        log = FactLog.load(memory_dir)
+        if not log.facts:
+            return
+        log.truncate_after(turn - 1)
+        log.save(memory_dir)
+    except Exception as err:
+        logger.warning('FACTLOG_TRUNCATE_FAILED session=%s turn=%s err=%s', session_id, target_turn_id, err)
+
+
+def _factlog_snapshot(session_id: str) -> dict:
+    """Capture facts.jsonl + entities.json for regenerate failure restore."""
+    try:
+        paths = session_paths(session_id)
+        memory_dir = paths.get('memory_dir')
+        if not memory_dir:
+            return {'facts_existed': False, 'entities_existed': False, 'facts_text': '', 'entities_text': ''}
+        memory_dir = Path(memory_dir)
+        facts_path = memory_dir / 'facts.jsonl'
+        entities_path = memory_dir / 'entities.json'
+        return {
+            'facts_existed': facts_path.exists(),
+            'entities_existed': entities_path.exists(),
+            'facts_text': facts_path.read_text(encoding='utf-8') if facts_path.exists() else '',
+            'entities_text': entities_path.read_text(encoding='utf-8') if entities_path.exists() else '',
+        }
+    except Exception as err:
+        logger.warning('FACTLOG_SNAPSHOT_FAILED session=%s err=%s', session_id, err)
+        return {'facts_existed': False, 'entities_existed': False, 'facts_text': '', 'entities_text': ''}
+
+
+def _factlog_restore(session_id: str, snapshot: dict | None) -> None:
+    if not isinstance(snapshot, dict):
+        return
+    try:
+        paths = session_paths(session_id)
+        memory_dir = paths.get('memory_dir')
+        if not memory_dir:
+            return
+        memory_dir = Path(memory_dir)
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        facts_path = memory_dir / 'facts.jsonl'
+        entities_path = memory_dir / 'entities.json'
+        if snapshot.get('facts_existed'):
+            atomic_write_text(facts_path, str(snapshot.get('facts_text', '') or ''), encoding='utf-8')
+        elif facts_path.exists():
+            facts_path.unlink()
+        if snapshot.get('entities_existed'):
+            atomic_write_text(entities_path, str(snapshot.get('entities_text', '') or ''), encoding='utf-8')
+        elif entities_path.exists():
+            entities_path.unlink()
+    except Exception as err:
+        logger.warning('FACTLOG_RESTORE_FAILED session=%s err=%s', session_id, err)
+
+
 def _rollback_derived_artifacts(session_id: str, target_turn_id: str, turn_trace: dict, *, reset_derived_caches: bool = True, history_message_count: int = 0) -> None:
     pre_turn = turn_trace.get('pre_turn', {}) if isinstance(turn_trace.get('pre_turn', {}), dict) else {}
     prev_state = pre_turn.get('state') if isinstance(pre_turn.get('state'), dict) else None
@@ -135,6 +210,9 @@ def _rollback_derived_artifacts(session_id: str, target_turn_id: str, turn_trace
     event_payload['items'] = items
     save_event_summaries(session_id, event_payload)
 
+    # Keep fact-log aligned with state/history rollback (hard gate for WRITE_IMPORTANT).
+    _truncate_fact_log_before_turn(session_id, target_turn_id)
+
     if reset_derived_caches:
         save_summary_chunks(session_id, {'version': 1, 'chunks': []})
         keeper_archive = session_paths(session_id)['keeper_archive']
@@ -149,7 +227,7 @@ def _rollback_derived_artifacts(session_id: str, target_turn_id: str, turn_trace
 def _snapshot_artifacts(session_id: str, history: list, meta: dict) -> dict:
     paths = session_paths(session_id)
     keeper_archive = paths['keeper_archive']
-    return {
+    snap = {
         'history': list(history),
         'meta': dict(meta),
         'state': load_state(session_id),
@@ -160,6 +238,8 @@ def _snapshot_artifacts(session_id: str, history: list, meta: dict) -> dict:
         'keeper_archive_exists': keeper_archive.exists(),
         'keeper_archive_text': keeper_archive.read_text(encoding='utf-8') if keeper_archive.exists() else '',
     }
+    snap.update(_factlog_snapshot(session_id))
+    return snap
 
 
 def _restore_artifacts(session_id: str, snapshot: dict) -> None:
@@ -183,6 +263,7 @@ def _restore_artifacts(session_id: str, snapshot: dict) -> None:
         atomic_write_text(keeper_archive, str(snapshot.get('keeper_archive_text', '') or ''), encoding='utf-8')
     elif keeper_archive.exists():
         keeper_archive.unlink()
+    _factlog_restore(session_id, snapshot)
 
 
 def regenerate_last_partial(session_id: str, *, allow_complete: bool = False) -> dict:

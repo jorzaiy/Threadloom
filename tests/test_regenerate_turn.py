@@ -275,5 +275,54 @@ def test_delete_latest_turn_requires_trace_for_complete_turn(monkeypatch):
     monkeypatch.setattr(regenerate_turn, 'load_turn_trace', lambda _session_id, _turn_id: {})
 
     result = regenerate_turn.delete_latest_turn('session')
-
     assert result['error']['code'] == 'TURN_TRACE_MISSING'
+
+
+def test_rollback_truncates_fact_log(tmp_path, monkeypatch):
+    """P0 gate: regenerate/delete must drop facts at/after the rolled-back turn."""
+    from fact_log import FactLog
+
+    memory_dir = tmp_path / 'memory'
+    memory_dir.mkdir()
+    log = FactLog()
+    log.commit_turn({'location': '北门', 'main_event': '盘问', 'onstage_npcs': ['张麻子']}, 2)
+    log.commit_turn({'location': '东巷', 'main_event': '触手', 'onstage_npcs': ['灵貂']}, 3)
+    log.save(memory_dir)
+    assert len(FactLog.load(memory_dir).facts) >= 2
+
+    monkeypatch.setattr(
+        regenerate_turn,
+        'session_paths',
+        lambda _sid: {'memory_dir': memory_dir, 'keeper_archive': tmp_path / 'keeper.json'},
+    )
+    regenerate_turn._truncate_fact_log_before_turn('sess', 'turn-0003')
+    reloaded = FactLog.load(memory_dir)
+    turns = {f.get('turn') for f in reloaded.facts}
+    assert 3 not in turns
+    assert 2 in turns
+    view = reloaded.project()
+    assert '灵貂' not in view.get('entity_last_event', {})
+    assert '张麻子' in view.get('entity_last_event', {})
+
+
+def test_factlog_snapshot_restore_roundtrip(tmp_path, monkeypatch):
+    from fact_log import FactLog
+
+    memory_dir = tmp_path / 'memory'
+    memory_dir.mkdir()
+    log = FactLog()
+    log.commit_turn({'location': 'x', 'main_event': 'e', 'onstage_npcs': ['甲']}, 1)
+    log.save(memory_dir)
+    monkeypatch.setattr(
+        regenerate_turn,
+        'session_paths',
+        lambda _sid: {'memory_dir': memory_dir, 'keeper_archive': tmp_path / 'k.json'},
+    )
+    snap = regenerate_turn._factlog_snapshot('sess')
+    assert snap['facts_existed'] is True
+    # mutate then restore
+    empty = FactLog()
+    empty.save(memory_dir)
+    regenerate_turn._factlog_restore('sess', snap)
+    reloaded = FactLog.load(memory_dir)
+    assert any(f.get('turn') == 1 for f in reloaded.facts)
