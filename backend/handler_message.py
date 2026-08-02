@@ -201,6 +201,17 @@ SCENE_LOCATION_STOP_TOKENS = {
     '当前', '地点', '时间', '这里', '那里', '这边', '那边', '附近', '一带', '外面', '里面',
     '边上', '方向', '原地', '途中', '路上',
 }
+USER_SPEECH_CUES = ('说：', '问：', '喊：', '答：', '说:', '问:', '喊:', '答:', '“', '"')
+NPC_HEARD_UNSPOKEN_PATTERNS = (
+    r'听见[^。\n]{0,24}(?:问题|问话|话)',
+    r'听到[^。\n]{0,24}(?:问题|问话|话)',
+    r'回应[^。\n]{0,24}(?:问题|问话)',
+    r'回答[^。\n]{0,24}(?:问题|问话)',
+)
+NPC_PRIVATE_PROBE_MARKERS = (
+    '贴符', '废符', '符胚', '木属性', '灵光', '压迫感', '枯河道',
+    '感知到什么', '你昨晚', '你昨夜', '昨晚真去', '昨夜真去',
+)
 
 
 def _normal_text(text: str) -> str:
@@ -235,6 +246,25 @@ def _user_allows_scene_shift(current_user_text: str) -> bool:
     if not value.strip():
         return False
     return any(cue in value for cue in SCENE_SHIFT_USER_CUES)
+
+
+def _user_has_spoken_text(current_user_text: str) -> bool:
+    value = str(current_user_text or '')
+    if not value.strip():
+        return False
+    return any(cue in value for cue in USER_SPEECH_CUES)
+
+
+def _extract_user_spoken_text(current_user_text: str) -> str:
+    value = str(current_user_text or '')
+    if not value.strip():
+        return ''
+    parts = []
+    for match in re.finditer(r'[“"]([^”"\n]{1,160})[”"]', value):
+        parts.append(match.group(1))
+    for match in re.finditer(r'(?:说|问|喊|答)[:：]\s*([^。！？!?\n]{1,160})', value):
+        parts.append(match.group(1))
+    return '\n'.join(parts)
 
 
 def _reply_current_location(text: str) -> str:
@@ -293,6 +323,90 @@ def _unsupported_scene_shift_reason(reply: str, grounding_text: str, user_text: 
     if _user_allows_scene_shift(current_user_text):
         return ''
     return 'unsupported_scene_shift'
+
+
+def _unsupported_unspoken_user_question_reason(reply: str, user_text: str = '') -> str:
+    current_user_text = _extract_current_user_text(user_text)
+    if _user_has_spoken_text(current_user_text):
+        return ''
+    if not any(cue in current_user_text for cue in ('？', '?', '为什么', '是什么', '怎么', '呢')):
+        return ''
+    body = str(reply or '')
+    if any(re.search(pattern, body) for pattern in NPC_HEARD_UNSPOKEN_PATTERNS):
+        return 'npc_heard_unspoken_user_question'
+    return ''
+
+
+def _extract_onstage_guard_knowledge(system_prompt: str) -> dict[str, str]:
+    body = str(system_prompt or '')
+    match = re.search(r'(?s)【当前在场 NPC 知情核对】\n(.*?)(?:\n\n【|\Z)', body)
+    if not match:
+        return {}
+    out: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        item = line.strip()
+        if not item.startswith('- ') or '：已知=' not in item:
+            continue
+        name, rest = item[2:].split('：已知=', 1)
+        known = rest.split('；', 1)[0].strip()
+        if name.strip():
+            out[name.strip()] = known
+    return out
+
+
+def _marker_supported_for_npc(marker: str, known_text: str, spoken_user_text: str) -> bool:
+    if marker and marker in str(known_text or ''):
+        return True
+    if marker in {'你昨晚', '你昨夜', '昨晚真去', '昨夜真去'}:
+        return False
+    if marker and marker in str(spoken_user_text or ''):
+        return True
+    if marker == '感知到什么' and '感知' in str(spoken_user_text or ''):
+        return True
+    return False
+
+
+def _unsupported_npc_private_knowledge_reason(reply: str, system_prompt: str, user_text: str = '') -> str:
+    guard = _extract_onstage_guard_knowledge(system_prompt)
+    if not guard:
+        return ''
+    body = str(reply or '')
+    if not body.strip():
+        return ''
+    current_user_text = _extract_current_user_text(user_text)
+    spoken_user_text = _extract_user_spoken_text(current_user_text)
+    names = list(guard)
+    single_onstage = len(names) == 1
+
+    def leaking_marker(text: str, known: str) -> str:
+        for marker in NPC_PRIVATE_PROBE_MARKERS:
+            if marker in text and not _marker_supported_for_npc(marker, known, spoken_user_text):
+                return marker
+        return ''
+
+    for match in re.finditer(r'[“"]([^”"\n]{1,180})[”"]', body):
+        quote = match.group(1)
+        if not any(marker in quote for marker in NPC_PRIVATE_PROBE_MARKERS):
+            continue
+        prefix = body[max(0, match.start() - 90):match.start()]
+        candidates = [name for name in names if name in prefix]
+        if single_onstage and '陆小环' not in prefix:
+            candidates = candidates or names
+        for name in candidates:
+            marker = leaking_marker(quote, guard.get(name, ''))
+            if marker:
+                return 'npc_private_knowledge_leak'
+
+    for name, known in guard.items():
+        for sentence in re.split(r'(?<=[。！？!?])', body):
+            if name not in sentence:
+                continue
+            if not any(verb in sentence for verb in ('问', '说', '追问', '开口', '提起', '点破')):
+                continue
+            marker = leaking_marker(sentence, known)
+            if marker:
+                return 'npc_private_knowledge_leak'
+    return ''
 
 
 def _looks_like_conjectural_prior_query(text: str) -> bool:
@@ -399,6 +513,32 @@ def _narrator_scene_drift_retry_prompt(system_prompt: str, rejected_reply: str, 
     )
 
 
+def _narrator_unspoken_question_retry_prompt(system_prompt: str, rejected_reply: str, *, attempt_count: int) -> str:
+    excerpt = _trim_trace_text(str(rejected_reply or ''), 900)
+    severity = '第二次仍然' if attempt_count >= 2 else '上一次'
+    return (
+        system_prompt
+        + '\n\n【上次回复已被系统拒绝：把内心疑问当成对白】\n'
+        + f'{severity}让 NPC 听见或回答了用户/主角未说出口的叙述性问题。现在必须重写本轮，不要延续上次文本。\n'
+        + '如果用户输入没有明确“说/问/喊/答：”或引号对白，NPC 不能听见、引用或回答其中的疑问；只能承接主角可观察的动作、神态、灵力变化、环境后果，或写主角自己继续判断。\n'
+        + '可以让当前场景中的环境、物件、感知余波或已知线索回应这个内心疑问，但不能让离场 NPC 突然接话。\n'
+        + f'被拒绝片段摘录（不要承接其中误听）：\n{excerpt}\n'
+    )
+
+
+def _narrator_private_knowledge_retry_prompt(system_prompt: str, rejected_reply: str, *, attempt_count: int) -> str:
+    excerpt = _trim_trace_text(str(rejected_reply or ''), 900)
+    severity = '第二次仍然' if attempt_count >= 2 else '上一次'
+    return (
+        system_prompt
+        + '\n\n【上次回复已被系统拒绝：NPC 知道了私下信息】\n'
+        + f'{severity}让当前在场 NPC 主动提及、追问或点破了主角私下探查/贴符/感知/复盘得到的信息，但知情边界没有证明该 NPC 已获知。现在必须重写本轮，不要延续上次文本。\n'
+        + '旁白可以承接主角的私下经历；NPC 对白和主动行动只能基于亲眼所见、亲耳所闻、被明确告知或知情边界列明的信息。'
+        + '如果本轮主角没有把私下发现说出口，NPC 只能回应可见动作、汤、脸色、离开意图、旧有禁林常识或自己的状态，不能问“你昨晚贴符/感知到什么”。\n'
+        + f'被拒绝片段摘录（不要承接其中越界知情）：\n{excerpt}\n'
+    )
+
+
 def _call_narrator_with_retries(
     system_prompt: str,
     user_prompt: str,
@@ -445,6 +585,8 @@ def _call_narrator_with_retries(
             rejection_reason = (
                 narrator_reply_rejection_reason(reply)
                 or _unsupported_scene_shift_reason(reply, system_prompt, user_prompt)
+                or _unsupported_unspoken_user_question_reason(reply, user_prompt)
+                or _unsupported_npc_private_knowledge_reason(reply, system_prompt, user_prompt)
                 or _unsupported_prior_event_assertion_reason(reply, system_prompt, user_prompt)
             )
             heuristic_incomplete = bool(rejection_reason) or looks_incomplete_reply(reply)
@@ -470,6 +612,12 @@ def _call_narrator_with_retries(
                 elif rejection_reason == 'unsupported_scene_shift':
                     current_system_prompt = _narrator_scene_drift_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
                     attempt['corrective_retry_prompt'] = 'scene_drift'
+                elif rejection_reason == 'npc_heard_unspoken_user_question':
+                    current_system_prompt = _narrator_unspoken_question_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
+                    attempt['corrective_retry_prompt'] = 'unspoken_question'
+                elif rejection_reason == 'npc_private_knowledge_leak':
+                    current_system_prompt = _narrator_private_knowledge_retry_prompt(system_prompt, reply, attempt_count=attempt_count)
+                    attempt['corrective_retry_prompt'] = 'private_knowledge'
                 logger.warning(
                     'NARRATOR_INCOMPLETE_REJECTED attempt=%s role=%s model=%s finish_reason=%s heuristic=%s reason=%s reply_chars=%s reply_tail=%r',
                     attempt_count,

@@ -134,6 +134,39 @@ def _format_knowledge_records(records: list[dict], actors: dict, limit: int = 16
     return '\n'.join(lines)
 
 
+def _format_onstage_knowledge_guard(scene: dict) -> str:
+    if not isinstance(scene, dict):
+        return ''
+    raw_onstage = scene.get('onstage_npcs', [])
+    if isinstance(raw_onstage, str):
+        raw_onstage = [raw_onstage]
+    if not isinstance(raw_onstage, list):
+        return ''
+    onstage = [str(name).strip() for name in raw_onstage if str(name).strip()][:4]
+    if not onstage:
+        return ''
+    scope = scene.get('knowledge_scope', {}) if isinstance(scene.get('knowledge_scope', {}), dict) else {}
+    npc_local = scope.get('npc_local', {}) if isinstance(scope.get('npc_local', {}), dict) else {}
+    lines = []
+    for name in onstage:
+        learned = []
+        for holder, data in npc_local.items():
+            holder_name = str(holder or '').strip()
+            if not holder_name or not (holder_name == name or holder_name in name or name in holder_name):
+                continue
+            values = data.get('learned', []) if isinstance(data, dict) else data
+            if isinstance(values, list):
+                for item in values:
+                    text = str(item or '').strip()
+                    if text and text not in learned:
+                        learned.append(text)
+        known_text = '；'.join(learned[:5]) if learned else '无登记'
+        lines.append(
+            f'- {name}：已知={known_text}；若本轮主角没有说出口，不得主动提及主角私下探查、贴符、感知、复盘、路线、物件细节或内心推演。'
+        )
+    return '\n'.join(lines)
+
+
 def _safe_prompt_data(value: object, limit: int = 120) -> str:
     text = str(value or '').strip()
     if not text:
@@ -697,6 +730,14 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
         + (('\n' + ks_lines) if ks_lines else '')
         + (('\n' + kr_lines) if kr_lines else '')
     )
+
+    onstage_guard = _format_onstage_knowledge_guard(scene)
+    if onstage_guard:
+        blocks.append(
+            '【当前在场 NPC 知情核对】\n'
+            '本块只约束当前在场 NPC 的对白、追问和主动行动。旁白可以知道最近正文，但 NPC 不能因为旁白、主角独处复盘、用户叙述或状态目标而自动知道这些内容。\n'
+            + onstage_guard
+        )
 
     actor_text = _format_actor_registry(scene.get('actors', {}), scene.get('actor_context_index', {}), scene.get('actor_persona_hooks', {}))
     if actor_text != '暂无':

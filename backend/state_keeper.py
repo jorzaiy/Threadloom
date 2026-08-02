@@ -89,6 +89,7 @@ time, location, main_event, onstage_npcs, immediate_goal 是当前场景核心�
   - scene_entities 可写当前场面里的描述性人物，如“灰眼男人”“掌柜”，不要把环境物件当人物。
   - 同一人物本轮被换称呼指代时（如先“桥上探头的人”后“短工”，或描述称呼→职业/真名），把所有指向同一人的称呼放进该 scene_entity 的 `aliases` 数组，让下游能认出是同一人；不要为同一人另起新条目。
   - immediate_goal 必须是本轮结束时主角下一拍要处理的事；如果旧目标已被打断，必须改写。
+  - immediate_goal 不能替主角追加“告知/告诉/说明/汇报/透露某 NPC 私下探查发现”的意图；只有本轮玩家输入或叙事正文明确写出主角要当面说/已经当面说，才可记录这种沟通目标。
 - scene_objective（对象）：当前事件/场景段的稳定目标，用于防止叙事主轴散乱。只在当前事件目标缺失、明显开启新事件、或明确结束当前事件时输出。
   格式：
   ```
@@ -398,7 +399,7 @@ def _fill_user_prompt(baseline_state: dict, narrator_reply: str, user_text: str 
 """)
     if not has_active_objective:
         sections.append("""当前固定骨架状态缺少 active scene_objective。若本轮叙事正文存在清楚的事件主轴，请必须输出 scene_objective；只有正文确实没有事件主轴时才省略。""")
-    sections.append("""请只输出需要补充或纠正的 JSON 字段；若本轮正文已经改变当前场景、在场人物或下一拍目标，必须输出核心字段纠正候选骨架。输出必须以 { 开头、以 } 结尾，禁止解释、分析过程、Markdown 代码块。""")
+    sections.append("""请只输出需要补充或纠正的 JSON 字段；若本轮正文已经改变当前场景、在场人物或下一拍目标，必须输出核心字段纠正候选骨架。若候选骨架里的 immediate_goal 含“告知/说明/汇报某 NPC 私下探查发现”，但本轮玩家输入或叙事正文没有明确说要当面告知，必须改写为实际下一拍动作，不得沿用该告知目标。输出必须以 { 开头、以 } 结尾，禁止解释、分析过程、Markdown 代码块。""")
     return '\n'.join(sections)
 
 
@@ -1203,6 +1204,53 @@ def _keeper_core_text_usable(field: str, text: str) -> bool:
     if field == 'immediate_goal':
         return len(value) >= 6 and value not in {'继续。', '继续', '待处理'}
     return True
+
+
+PRIVATE_DISCLOSURE_GOAL_VERBS = (
+    '告知', '告诉', '说明', '汇报', '透露', '讲给', '说给',
+)
+PRIVATE_DISCLOSURE_GOAL_MARKERS = (
+    '发现', '探查', '感知', '推演', '复盘', '线索', '情报', '情况',
+    '禁林', '贴符', '废符', '灵识', '木属性', '压迫感', '枯河道',
+)
+SPEECH_DISCLOSURE_CUES = ('说：', '问：', '喊：', '答：', '说:', '问:', '喊:', '答:', '“', '"')
+
+
+def _goal_requires_private_disclosure(goal: str) -> bool:
+    value = str(goal or '').strip()
+    if not value:
+        return False
+    return (
+        any(verb in value for verb in PRIVATE_DISCLOSURE_GOAL_VERBS)
+        and any(marker in value for marker in PRIVATE_DISCLOSURE_GOAL_MARKERS)
+    )
+
+
+def _text_supports_private_disclosure_goal(text: str) -> bool:
+    value = str(text or '')
+    if not value:
+        return False
+    if any(verb in value for verb in PRIVATE_DISCLOSURE_GOAL_VERBS) and any(marker in value for marker in PRIVATE_DISCLOSURE_GOAL_MARKERS):
+        return True
+    if any(cue in value for cue in SPEECH_DISCLOSURE_CUES) and any(marker in value for marker in PRIVATE_DISCLOSURE_GOAL_MARKERS):
+        return True
+    return False
+
+
+def _narrator_supports_private_disclosure_goal(text: str) -> bool:
+    value = str(text or '')
+    if not value:
+        return False
+    if not any(marker in value for marker in PRIVATE_DISCLOSURE_GOAL_MARKERS):
+        return False
+    protagonist = r'(?:陆小环|主角|她)'
+    npc = r'[\u4e00-\u9fff]{2,8}'
+    patterns = (
+        rf'{protagonist}[^。\n]{{0,24}}(?:告知|告诉|说明|汇报|透露|说起|讲起)',
+        rf'{protagonist}[^。\n]{{0,40}}把[^。\n]{{0,32}}(?:告知|告诉|说明|汇报|透露|说给|讲给){npc}',
+        rf'{protagonist}[^。\n]{{0,24}}对{npc}(?:说|道|开口)',
+    )
+    return any(re.search(pattern, value) for pattern in patterns)
 
 
 def _merge_keeper_fill(baseline_state: dict, payload: dict) -> dict:
@@ -2124,6 +2172,9 @@ def _apply_field_acceptance(
     baseline_state: dict,
     prev_state: dict,
     payload: dict,
+    *,
+    user_text: str = '',
+    narrator_reply: str = '',
 ) -> tuple[dict, dict]:
     """Per-field roll-back over a keeper-merged state.
 
@@ -2153,7 +2204,19 @@ def _apply_field_acceptance(
             continue
         keeper_raw = str(payload.get(field, '') or '').strip()
         merged_value = str(result.get(field, '') or '').strip()
-        if keeper_raw and merged_value == keeper_raw:
+        if (
+            field == 'immediate_goal'
+            and keeper_raw
+            and merged_value == keeper_raw
+            and _goal_requires_private_disclosure(keeper_raw)
+            and not (
+                _text_supports_private_disclosure_goal(user_text)
+                or _narrator_supports_private_disclosure_goal(narrator_reply)
+            )
+        ):
+            result[field] = prev.get(field, '')
+            acceptance[field] = 'prev_retained:unsupported_private_disclosure_goal'
+        elif keeper_raw and merged_value == keeper_raw:
             acceptance[field] = 'kept'
         elif _has_low_signal(keeper_raw):
             acceptance[field] = 'prev_retained:low_signal_filtered'
@@ -2445,7 +2508,14 @@ def call_state_keeper(session_id: str, narrator_reply: str, state_fragment: Opti
             reply_text, usage, attempts = _call_state_keeper_llm(current_prompt)
             payload = _coerce_state_payload(_parse_fill_payload(reply_text), baseline_state=baseline_state)
             merged = _merge_keeper_fill(baseline_state, payload)
-            merged, field_acceptance = _apply_field_acceptance(merged, baseline_state, prev_state, payload)
+            merged, field_acceptance = _apply_field_acceptance(
+                merged,
+                baseline_state,
+                prev_state,
+                payload,
+                user_text=user_text,
+                narrator_reply=narrator_reply,
+            )
             validate_state_payload(merged, prev_state)
             new_state = merged
             last_err = None

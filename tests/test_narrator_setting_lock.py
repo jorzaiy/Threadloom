@@ -107,6 +107,30 @@ def test_narrator_prompt_includes_gated_player_profile_detail_boundary():
     assert '不要把玩家偏好、安全边界或私密资料写成世界内其他角色自动知道的事实' in system_prompt
 
 
+def test_narrator_prompt_includes_onstage_npc_knowledge_guard():
+    system_prompt, _user_prompt = build_narrator_input(
+        {
+            'runtime_rules': 'runtime',
+            'character_core': {'name': '九幽大陆'},
+            'scene_facts': {
+                'onstage_npcs': ['柳絮'],
+                'knowledge_scope': {
+                    'npc_local': {
+                        '柳絮': {'learned': ['陆小环自称担心她并顺便看她']},
+                    },
+                },
+            },
+            'recent_history': [],
+            'active_preset': {},
+        },
+        '把汤放下，回屋打坐',
+    )
+
+    assert '【当前在场 NPC 知情核对】' in system_prompt
+    assert '柳絮：已知=陆小环自称担心她并顺便看她' in system_prompt
+    assert '不得主动提及主角私下探查、贴符、感知、复盘' in system_prompt
+
+
 def test_narrator_prompt_splits_recent_outline_and_full_prose():
     recent_history = []
     event_summaries = []

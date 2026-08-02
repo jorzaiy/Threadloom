@@ -85,6 +85,42 @@ class TestApplyFieldAcceptance(unittest.TestCase):
         self.assertEqual(acceptance['main_event'], 'kept')
         self.assertEqual(acceptance['immediate_goal'], 'no_change')
 
+    def test_keeper_rejects_unsupported_private_disclosure_goal(self):
+        baseline = _baseline_for(_PREV_STATE)
+        merged = dict(baseline)
+        merged['immediate_goal'] = '给柳絮送山药排骨汤，并告知禁林探查的发现'
+        payload = {'immediate_goal': '给柳絮送山药排骨汤，并告知禁林探查的发现'}
+
+        result, acceptance = _apply_field_acceptance(
+            merged,
+            baseline,
+            _PREV_STATE,
+            payload,
+            user_text='把汤放在桌上，说：多少吃点。挥挥手，打算回自己屋里打坐。',
+            narrator_reply='柳絮接过汤，陆小环转身准备回屋打坐。',
+        )
+
+        self.assertEqual(result['immediate_goal'], _PREV_STATE['immediate_goal'])
+        self.assertEqual(acceptance['immediate_goal'], 'prev_retained:unsupported_private_disclosure_goal')
+
+    def test_keeper_keeps_private_disclosure_goal_when_explicitly_spoken(self):
+        baseline = _baseline_for(_PREV_STATE)
+        merged = dict(baseline)
+        merged['immediate_goal'] = '告知柳絮禁林探查的发现'
+        payload = {'immediate_goal': '告知柳絮禁林探查的发现'}
+
+        result, acceptance = _apply_field_acceptance(
+            merged,
+            baseline,
+            _PREV_STATE,
+            payload,
+            user_text='说：我把禁林探查的发现告诉你。',
+            narrator_reply='陆小环对柳絮说起禁林探查所得。',
+        )
+
+        self.assertEqual(result['immediate_goal'], '告知柳絮禁林探查的发现')
+        self.assertEqual(acceptance['immediate_goal'], 'kept')
+
     def test_low_signal_text_marked_prev_retained(self):
         # Simulate _merge_keeper_fill having filtered the unusable text already,
         # so merged still carries the baseline value but payload had 待确认.

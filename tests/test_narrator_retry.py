@@ -229,6 +229,100 @@ def test_narrator_retries_unsupported_scene_shift(monkeypatch):
     assert '上次回复已被系统拒绝：场景漂移' in prompts[1]
 
 
+def test_narrator_retries_when_npc_hears_unspoken_question(monkeypatch):
+    bad_reply = (
+        '庆历三十七年三月初九，申时初，悦来客栈茶肆后厨。\n\n'
+        '店小二听见陆小环的问题，手上动作停了。“不是他们乐意去，”他说。'
+    )
+    fixed_reply = (
+        '庆历三十七年三月初九，申时初，悦来客栈二楼客房。\n\n'
+        '陆小环坐在床榻上，把灵力丝线末端残留的涩意和修士传闻放在一起想。窗外禁林方向的云压得更低。'
+    )
+    replies = [
+        (bad_reply, {'finish_reason': 'stop', 'model': 'narrator'}),
+        (fixed_reply, {'finish_reason': 'stop', 'model': 'narrator'}),
+    ]
+    prompts = []
+
+    def fake_resolve_provider_model(role):
+        return _model_config(role)
+
+    def fake_call_model(_model_cfg, system_prompt, _user_prompt):
+        prompts.append(system_prompt)
+        return replies.pop(0)
+
+    monkeypatch.setattr(handler_message, 'resolve_provider_model', fake_resolve_provider_model)
+    monkeypatch.setattr(handler_message, 'call_model', fake_call_model)
+
+    system_prompt = '【最近6轮完整上下文】\n陆小环在悦来客栈二楼客房打坐，刚用灵力丝线探过禁林。'
+    user_prompt = (
+        '【当前用户输入】\n'
+        '这里的东西确实很复杂，但是是什么让其他修士乐此不疲的往这里跑呢，甚至连金丹都栽了？\n\n'
+        '【近端约束提醒】\n'
+        '只输出正文。'
+    )
+
+    reply, usage, trace = handler_message._call_narrator_with_retries(system_prompt, user_prompt)
+
+    assert reply == fixed_reply
+    assert usage['finish_reason'] == 'stop'
+    assert trace['attempts'][0]['ok'] is False
+    assert trace['attempts'][0]['rejection_reason'] == 'npc_heard_unspoken_user_question'
+    assert trace['attempts'][0]['corrective_retry_prompt'] == 'unspoken_question'
+    assert trace['attempts'][1]['ok'] is True
+    assert '把内心疑问当成对白' in prompts[1]
+
+
+def test_narrator_retries_when_npc_uses_private_probe_knowledge(monkeypatch):
+    bad_reply = (
+        '庆历三十七年三月初十，午时初刻，悦来客栈二楼柳絮房内。\n\n'
+        '柳絮端起汤碗。“你昨晚真去贴符了。”她问，“感知到什么没有？”'
+    )
+    fixed_reply = (
+        '庆历三十七年三月初十，午时初刻，悦来客栈二楼柳絮房内。\n\n'
+        '柳絮端起汤碗，先看见没放姜，才把目光挪回陆小环脸上。“少管我，先管你自己。”'
+    )
+    replies = [
+        (bad_reply, {'finish_reason': 'stop', 'model': 'narrator'}),
+        (fixed_reply, {'finish_reason': 'stop', 'model': 'narrator'}),
+    ]
+    prompts = []
+
+    def fake_resolve_provider_model(role):
+        return _model_config(role)
+
+    def fake_call_model(_model_cfg, system_prompt, _user_prompt):
+        prompts.append(system_prompt)
+        return replies.pop(0)
+
+    monkeypatch.setattr(handler_message, 'resolve_provider_model', fake_resolve_provider_model)
+    monkeypatch.setattr(handler_message, 'call_model', fake_call_model)
+
+    system_prompt = (
+        '【当前在场 NPC 知情核对】\n'
+        '本块只约束当前在场 NPC 的对白、追问和主动行动。\n'
+        '- 柳絮：已知=陆小环自称担心她并顺便看她；若本轮主角没有说出口，不得主动提及主角私下探查、贴符、感知、复盘、路线、物件细节或内心推演。\n\n'
+        '【最近6轮完整上下文】\n'
+        '陆小环独自回房复盘，发现废符被吞噬，木属性灵光残留。随后她端汤去柳絮房间。'
+    )
+    user_prompt = (
+        '【当前用户输入】\n'
+        '把汤放在桌上，说：多少吃点。挥挥手，打算回自己屋里专心打坐，感知一下禁林那边的情况\n\n'
+        '【近端约束提醒】\n'
+        '只输出正文。'
+    )
+
+    reply, usage, trace = handler_message._call_narrator_with_retries(system_prompt, user_prompt)
+
+    assert reply == fixed_reply
+    assert usage['finish_reason'] == 'stop'
+    assert trace['attempts'][0]['ok'] is False
+    assert trace['attempts'][0]['rejection_reason'] == 'npc_private_knowledge_leak'
+    assert trace['attempts'][0]['corrective_retry_prompt'] == 'private_knowledge'
+    assert trace['attempts'][1]['ok'] is True
+    assert 'NPC 知道了私下信息' in prompts[1]
+
+
 def test_narrator_grounding_guard_allows_supported_prior_chain():
     reply = '林岚和守灯人围着塔楼旧仪器，一起把港口灯塔点亮了。'
     grounding = '【历史原文证据包】\n林岚和守灯人围着塔楼旧仪器，一起把港口灯塔点亮了。'
