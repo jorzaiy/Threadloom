@@ -73,6 +73,8 @@ fact-log 是 keeper 的下游，**keeper 标得准不准是所有方向的天花
 - ✅ 临时 NPC 治理（fact-log 确定性侧，commit `8d34b69`）：恰好在场一次、离场≥2 轮的路人不进长期账本（important/权威块），实体仍留表；present==1 only，seed/仅被提及的 absent NPC 豁免。
 - ✅ knowledge 内容质量（keeper prompt 契约，commit `80cf610`）：knowledge_scope 只记真·知情（主角身份/意图/秘密、剧情、关系），不掺环境/场景/动作观察。
 - ✅ 别名标注（keeper prompt 契约 + fact-log 消费测试，本次）：同一人本轮换称呼时把别称标进 scene_entity `aliases`，fact-log 据此归并（治"短工"只在正文出现的情况）。
+- ✅ NPC 知情边界正文守卫（narrator 拒收 + keeper `immediate_goal` 私下告知校验，commit `ff3eb04`）：在场 NPC 不得回应主角没说出口的话、或泄露其私下探查（贴符/夜探/路线/内心推演）；命中触发定向 retry，keeper 侧拒收会逼主角当面坦白的目标。属正文层守卫，效果取决于模型、需真实游玩验证（narrator/keeper 消费侧已有测试）。
+- ✅ 远程/回忆提及不重置在场名单（keeper partial-accept，commit `5b65c54`）：`_name_has_current_text_evidence` 排除只在回忆/画外音里出现的名字，路人不再被重新拉回 onstage。
 - 待做：relation label 规范（去箭头已做，防阶段无理回退）。注：knowledge / 别名两条是 **prompt 契约**，效果取决于模型、需真实游玩验证（fact-log 消费侧已有测试覆盖）。
 
 ## 贯穿原则

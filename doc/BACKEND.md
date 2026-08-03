@@ -72,6 +72,8 @@
 - 世界书默认分三层消费：首个 narrator 回合注入原始 alwaysOn/foundation 世界书的大预算片段；后续每轮常驻短 `foundation` 护栏；情境条目由 selector / index 命中后回源到原始 `lorebook.json` 片段注入。世界书不是当前场景事实源
 - `state_keeper` 优先，在线失败时以 `state_fragment` 形成 `fragment-baseline` 兜底；`state_updater` 主要保留给离线工具链
 - `state_keeper` 写出来的 state 在合并后会再走一层 `_apply_field_acceptance` per-field 校验：`onstage_npcs` 在 location 未变时被清空，或 location 与 main_event 不一致地切换，单独回退该字段到 prev_state，整张 state 不再因为一格崩坏而走 `fragment-baseline`。被拒字段会触发一次 corrective retry，结果落在 `state_keeper_diagnostics.field_acceptance` 与 `provider_used: llm-fill-partial`
+- `_apply_field_acceptance` 另加了“远程/回忆提及不重置在场名单”：`_name_has_current_text_evidence` 排除只经 memory / off-scene 标记（回想 / 想起 / 心里 / 窗外 / 远处 / 隔壁 / 后厨飘出…）出现的名字，要求名字上有当下动作动词、或主角朝其互动，才算当前正文证据，避免正文里“被回忆到”的路人被重新拉回 onstage（commit `5b65c54`）
+- narrator 正文另有 NPC 知情边界守卫（commit `ff3eb04`）：在场 NPC 不得回应主角未说出口的问题、或泄露其私下探查（贴符/夜探/路线/内心推演）。`_unsupported_unspoken_user_question_reason` / `_unsupported_npc_private_knowledge_reason` 命中会触发定向 corrective retry（复用 scene-shift / prior-event 那套拒收+重试机制）；`build_narrator_input` 注入【当前在场 NPC 知情核对】块列出各在场 NPC 已登记知情；`state_keeper` 侧则拒收“逼主角当面告知私密”的 `immediate_goal`（除非正文/用户输入明说）
 - arbiter 已接入主链，不再只是文档占位
 - partial reply 有独立处理路径，不再继续污染事实层
 - partial reply 当前会在生成阶段被阻断：`finish_reason=length/error` 或半句式结尾会触发 narrator 重试，重试耗尽后返回空回复错误；旧 partial 历史在 `/api/history` 和 prompt recent window 中会连同对应 user 输入一起过滤

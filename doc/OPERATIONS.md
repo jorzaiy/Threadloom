@@ -402,6 +402,8 @@ server {
 - partial assistant 回复不会作为已提交正文显示；生成阶段会自动重试，重试耗尽后返回状态栏错误，`/api/history` 与后续 prompt recent window 会过滤旧 partial 轮次及其对应 user 输入
 - narrator 若明显停在半句中间，即使 provider 没返回 `finish_reason`，当前也会按 incomplete 处理，避免把坏输出继续写坏 state 或污染下一轮上下文
 - "无证据既往事件断言" 启发式（`_unsupported_prior_event_assertion_reason`）：前事件 assertion marker 不再包含单字 `过`（之前会被 `看过去/经过/过来` 误中），改为多字组合 `做过/去过/来过/见过/点亮过/说过` 等；猜测式用户查询的 3 句滑窗分支同样需要命中 assertion marker 才进入 token-共享判定，避免用户输入里出现的场景名词（如"灵貂/怀里"）让正常承接当下动作的开头被误判为伪造旧事
+- NPC 知情边界正文守卫（narrator 拒收 + 定向 retry，commit `ff3eb04`）：当前在场 NPC 不得对主角“没说出口的话 / 私下进行的探查”做出反应。两条启发式——`npc_heard_unspoken_user_question`（正文让 NPC 听见或回应用户本轮并未说出口的问题，`NPC_HEARD_UNSPOKEN_PATTERNS`）与 `npc_private_knowledge_leak`（NPC 主动提及主角私下贴符、夜探、路线、感知、内心推演等未曾出声的信息，`NPC_PRIVATE_PROBE_MARKERS`）——命中即拒收本轮 narrator 正文并追加一次定向 corrective retry（`attempt.corrective_retry_prompt = unspoken_question / private_knowledge`）。生成 prompt 前另有 `build_narrator_input` 的【当前在场 NPC 知情核对】块，按 `knowledge_scope.npc_local` 列出每个在场 NPC 的已知内容作为边界提示（旁白可知最近正文，但 NPC 不能因旁白/独处复盘/用户叙述/状态目标而自动知道）
+- keeper `immediate_goal` 私下告知校验（同 commit `ff3eb04`）：keeper 不得替主角追加“告知 / 汇报某 NPC 私下探查发现”的 `immediate_goal`，除非本轮玩家输入或叙事正文明确写出主角要当面说 / 已当面说；`_apply_field_acceptance` 据 `user_text` / `narrator_reply` 核对，不满足则回退该字段。防止 keeper 把一个“去坦白私密”的目标喂给下一轮 narrator，间接绕过上面的知情边界守卫
 - `regenerate-last` 会回滚最后一对 `user -> assistant(partial)` 再重试
 - `state_keeper` 优先，在线失败时先走 `state_fragment` 形成 `fragment-baseline`，`state_updater` 主要保留给离线 replay / rebuild
 - `state_keeper` 现在会拒收明显低信号或相对上一轮明显退化的 state
