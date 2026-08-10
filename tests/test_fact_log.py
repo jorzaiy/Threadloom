@@ -311,25 +311,25 @@ class PersonaDistillTests(unittest.TestCase):
 
     def test_distill_persona_cleans_reply(self):
         from backend import persona_distiller as pd
-        orig = pd.call_role_llm
-        pd.call_role_llm = lambda role, system, user: ('  沉默寡言，遇事谨慎\n', {})
+        orig = pd._call_persona_llm
+        pd._call_persona_llm = lambda role, system, user: ('  沉默寡言，遇事谨慎\n', {})
         try:
             self.assertEqual(pd.distill_persona('沈昭', ['事件A', '事件B', '事件C']), '沉默寡言，遇事谨慎')
         finally:
-            pd.call_role_llm = orig
+            pd._call_persona_llm = orig
 
     def test_distill_persona_guards(self):
         from backend import persona_distiller as pd
         self.assertEqual(pd.distill_persona('沈昭', ['只有一条']), '')   # too few observations
-        orig = pd.call_role_llm
+        orig = pd._call_persona_llm
 
         def boom(*a, **k):
             raise RuntimeError('no model')
-        pd.call_role_llm = boom
+        pd._call_persona_llm = boom
         try:
             self.assertEqual(pd.distill_persona('沈昭', ['a', 'b', 'c']), '')   # llm error -> ''
         finally:
-            pd.call_role_llm = orig
+            pd._call_persona_llm = orig
 
 
 class PersonaDistillJsonTests(unittest.TestCase):
@@ -338,21 +338,21 @@ class PersonaDistillJsonTests(unittest.TestCase):
 
     def test_extracts_content_from_json_message(self):
         from backend import persona_distiller as pd
-        orig = pd.call_role_llm
-        pd.call_role_llm = lambda r, s, u: ('{"role":"assistant","content":"沉稳老练，行事果断，善于观察"}', {})
+        orig = pd._call_persona_llm
+        pd._call_persona_llm = lambda r, s, u: ('{"role":"assistant","content":"沉稳老练，行事果断，善于观察"}', {})
         try:
             self.assertEqual(pd.distill_persona('周掌柜', ['事件A', '事件B', '事件C']), '沉稳老练，行事果断，善于观察')
         finally:
-            pd.call_role_llm = orig
+            pd._call_persona_llm = orig
 
     def test_rejects_prompt_echo_json(self):
         from backend import persona_distiller as pd
-        orig = pd.call_role_llm
-        pd.call_role_llm = lambda r, s, u: ('{"task_description":"提炼NPC稳定的性格气质，只输出一句中文"}', {})
+        orig = pd._call_persona_llm
+        pd._call_persona_llm = lambda r, s, u: ('{"task_description":"提炼NPC稳定的性格气质，只输出一句中文"}', {})
         try:
             self.assertEqual(pd.distill_persona('掌柜', ['事件A', '事件B', '事件C']), '')
         finally:
-            pd.call_role_llm = orig
+            pd._call_persona_llm = orig
 
 
 class RelationLineTests(unittest.TestCase):

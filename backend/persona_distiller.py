@@ -9,12 +9,20 @@ advances and are tracked dynamically elsewhere, never frozen here.
 """
 from __future__ import annotations
 
+import logging
+
 try:
-    from .llm_manager import call_role_llm
+    from .llm_manager import get_role_runtime
     from .local_model_client import parse_json_response
+    from .model_client import call_model
+    from .model_config import resolve_provider_model
 except ImportError:
-    from llm_manager import call_role_llm
+    from llm_manager import get_role_runtime
     from local_model_client import parse_json_response
+    from model_client import call_model
+    from model_config import resolve_provider_model
+
+logger = logging.getLogger(__name__)
 
 PERSONA_SYSTEM = """你从一个 NPC 在故事里的若干行为片段中，提炼这个角色【稳定的性格气质】。
 
@@ -50,6 +58,25 @@ _PERSONA_REJECT = ('提炼', '性格气质', '只输出', '示例', 'task_descri
                    'role', 'assistant', 'content', '{', '}', 'NPC')
 
 
+def _call_persona_llm(role: str, system_prompt: str, user_prompt: str) -> tuple[str, dict]:
+    """Call the keeper-tier role for a PLAIN-TEXT answer.
+
+    The role is shared with JSON-emitting agents and so carries
+    response_format=json_object; OpenAI-compatible providers reject that with a
+    400 when the prompt never says "json" — which this one deliberately doesn't.
+    Drop it here: a persona is one bare line, not a document.
+    """
+    runtime = get_role_runtime(role)
+    if runtime['provider'] != 'llm':
+        raise RuntimeError(f'role {role} is not configured for llm provider')
+    model_cfg = dict(resolve_provider_model(runtime['model_role']))
+    model_cfg.pop('response_format', None)
+    reply, usage = call_model(model_cfg, system_prompt, user_prompt)
+    usage['role'] = role
+    usage['model_role'] = runtime['model_role']
+    return reply, usage
+
+
 def distill_persona(name: str, observations: list[str], *, role: str = 'state_keeper_candidate') -> str:
     """Return a clean one-line stable personality, or '' if there isn't enough to go
     on, the call fails, or the model returns a prompt echo / unparsable junk
@@ -59,12 +86,18 @@ def distill_persona(name: str, observations: list[str], *, role: str = 'state_ke
         return ''
     prompt = f'NPC：{name}\n他在故事里的行为片段：\n' + '\n'.join(f'- {o}' for o in obs[:12])
     try:
-        reply, _usage = call_role_llm(role, PERSONA_SYSTEM, prompt)
-    except Exception:
+        reply, _usage = _call_persona_llm(role, PERSONA_SYSTEM, prompt)
+    except Exception as err:
+        # Never fatal — but never silent either: a persona that never distills
+        # leaves the NPC un-locked, and it then fades out of the important roster.
+        logger.warning('PERSONA_DISTILL_CALL_FAILED name=%s err=%s', name, err)
         return ''
     text = _clean_persona_text(reply)
     if not text or len(text) > 50:                          # empty or suspiciously long
+        logger.info('PERSONA_DISTILL_REJECTED name=%s reason=%s reply=%.60s',
+                    name, 'empty' if not text else 'too_long', text)
         return ''
     if any(tok in text for tok in _PERSONA_REJECT):         # prompt echo / leftover JSON
+        logger.info('PERSONA_DISTILL_REJECTED name=%s reason=echo reply=%.60s', name, text)
         return ''
     return text
