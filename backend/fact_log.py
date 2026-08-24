@@ -26,8 +26,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 try:
+    from .fact_retrieval import retrieve as retrieve_facts
     from .name_sanitizer import is_protagonist_name, sanitize_runtime_name
 except ImportError:  # imported as top-level module (tests add backend/ to path)
+    from fact_retrieval import retrieve as retrieve_facts
     from name_sanitizer import is_protagonist_name, sanitize_runtime_name
 
 PREDICATES = ('present', 'holds', 'knows', 'relation', 'observation')
@@ -386,6 +388,13 @@ class FactLog:
     # -- read ---------------------------------------------------------------
     def project(self) -> dict:
         return project(self.facts, self.resolver.entities, self.resolver.canon_eid)
+
+    def retrieve(self, query: str = '', **kwargs) -> list[dict]:
+        """Long-tail recall for one query (see `fact_retrieval.retrieve`). Entity
+        ids are folded through the resolver, so an old surface name still answers
+        after a merge."""
+        return retrieve_facts(self.facts, self.resolver.entities, query,
+                              canon_eid=self.resolver.canon_eid, **kwargs)
 
     def entity_observations(self, eid: str, limit: int = 12) -> list[str]:
         """Beat-observation texts this entity took part in — material for distilling
