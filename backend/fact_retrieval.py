@@ -27,11 +27,24 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
+from itertools import zip_longest
 
 RRF_K = 60                       # standard reciprocal-rank-fusion damping
-LANE_WEIGHTS = {'recency': 1.0, 'lexical': 1.0, 'entity': 1.0}
+# Deliberately unequal. The near window is *already* in context (context_builder
+# always carries the recent turns), so a recency hit is continuity support, not an
+# answer; the entity lane sits in between. Equal weights measurably lose: on a
+# replay of the live session they let "第39轮：午后，青石山老采石场旧道" (recency rank 1)
+# and one on-stage NPC's newest `knows` row (entity rank 1) tie with the lexical
+# rank-1 hit, and the turn-descending tie-break then buried the actual answer at
+# overall rank 3-7 (MRR 0.26 vs 0.87 for the bigram baseline it was replacing).
+LANE_WEIGHTS = {'recency': 0.35, 'lexical': 1.0, 'entity': 0.6}
 BM25_K1 = 1.5
-BM25_B = 0.75
+# Below the textbook 0.75: these documents are short heterogeneous sentences
+# (20-90 chars), not web pages, so full length normalisation over-penalised the
+# long beat observations that actually hold the answers. Measured on the live
+# session's five near-verbatim recall queries: MRR 0.74 (b=0.75) -> 0.84 (b=0.35),
+# with no change on the paraphrase set.
+BM25_B = 0.35
 
 # Per-lane candidate caps: a lane only votes with its head, so one very long lane
 # cannot dominate fusion just by being long.
@@ -44,6 +57,15 @@ ENTITY_FACTS_PER_SEED = 4
 # is on stage), so without this a chatty NPC's presence rows would crowd out the
 # knowledge / relationship lines that are the reason to pull the entity at all.
 _ENTITY_PREDICATE_PRIORITY = {'knows': 3, 'relation': 3, 'holds': 2, 'observation': 1, 'present': 0}
+_DURABLE_PREDICATES = ('knows', 'relation', 'holds')
+
+# `present` rows carry no content of their own — their whole text is the entity
+# label plus a location, both of which the entity lane already indexes. Letting
+# them into the BM25 index is actively harmful: they are an order of magnitude
+# shorter than a beat observation, and BM25's length normalisation then ranks a
+# content-free "阿砚 在裂口边缘树皮上" above the long observation that actually
+# answers the question.
+_LEXICAL_SKIP_PREDICATES = ('present',)
 
 _ASCII_RUN = re.compile(r'[a-z0-9]+')
 _CJK_RUN = re.compile(r'[一-鿿]+')
@@ -217,7 +239,9 @@ def retrieve(facts: list[dict], entities: dict, query: str = '', *,
     query_norm = _norm(query)
     lexical: list[int] = []
     if query_norm:
-        doc_tokens = {f.get('id'): _tokens(_index_text(f, label_of), dictionary) for f in facts}
+        indexable = [f for f in facts
+                     if str(f.get('predicate') or '') not in _LEXICAL_SKIP_PREDICATES]
+        doc_tokens = {f.get('id'): _tokens(_index_text(f, label_of), dictionary) for f in indexable}
         scored = _bm25(doc_tokens, _tokens(query, dictionary))
         lexical = _ranked([(fid, (score, int(by_id[fid].get('turn', 0) or 0)))
                            for fid, score in scored.items() if score > 0])[:LEXICAL_LANE_CAP]
@@ -242,10 +266,24 @@ def retrieve(facts: list[dict], entities: dict, query: str = '', *,
             facts_by_entity.setdefault(eid, []).append(f)
     entity_lane: list[int] = []
     for eid in seeds:
-        own = _ranked([(f.get('id'), (_ENTITY_PREDICATE_PRIORITY.get(str(f.get('predicate') or ''), 1),
-                                      int(f.get('turn', 0) or 0), f.get('id') or 0))
-                       for f in facts_by_entity.get(eid, [])])[:ENTITY_FACTS_PER_SEED]
-        entity_lane.extend(fid for fid in own if fid not in entity_lane)
+        own = facts_by_entity.get(eid, [])
+        # Interleave the two kinds instead of ranking durable facts strictly first:
+        # a chatty NPC with seven `knows` rows would otherwise eat the whole per-seed
+        # quota and its actual scene beats would never enter the lane.
+        durable = _ranked([(f.get('id'), (_ENTITY_PREDICATE_PRIORITY.get(str(f.get('predicate') or ''), 1),
+                                          int(f.get('turn', 0) or 0), f.get('id') or 0))
+                           for f in own if str(f.get('predicate') or '') in _DURABLE_PREDICATES])
+        events = _ranked([(f.get('id'), (int(f.get('turn', 0) or 0), f.get('id') or 0))
+                          for f in own if str(f.get('predicate') or '') == 'observation'])
+        picked: list[int] = []
+        for pair in zip_longest(durable, events):
+            for fid in pair:
+                if fid is not None and len(picked) < ENTITY_FACTS_PER_SEED:
+                    picked.append(fid)
+        if not picked:              # nothing but presence rows: keep one as an anchor
+            picked = _ranked([(f.get('id'), (int(f.get('turn', 0) or 0), f.get('id') or 0))
+                              for f in own])[:1]
+        entity_lane.extend(fid for fid in picked if fid not in entity_lane)
 
     # -- fuse (RRF over ranks) ------------------------------------------------
     fused: dict[int, float] = {}

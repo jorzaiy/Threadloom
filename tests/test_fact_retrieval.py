@@ -213,5 +213,45 @@ class CorrectionAndEdgeTests(unittest.TestCase):
         self.assertIn('断碑', lexical_only[0]['text'])
 
 
+class LaneBalanceTests(unittest.TestCase):
+    """The three defects a replay against the live session exposed. Each one let
+    near-window noise bury the actual answer (MRR 0.26 vs the bigram baseline's
+    0.87 before the fixes, 0.84 after), and none of them showed up in a fixture
+    small enough to eyeball — hence these are pinned."""
+
+    def _log(self):
+        log = FactLog()
+        log.commit_turn(_turn('客栈', '陆小环探出少年经脉有被强行抽离灵力的旧伤', ['阿砚']), 1)
+        # Eight chatty turns: short presence rows plus a `knows` row every turn, all
+        # newer than the answer.
+        for t in range(2, 10):
+            log.commit_turn(_turn('山道', f'两人冒雨赶路（第{t}轮）', ['阿砚'],
+                                  knowledge_scope={'npc_local': {'阿砚': {'learned': [f'第{t}轮路上听来的闲话']}}}), t)
+        return log
+
+    def test_lexical_answer_outranks_near_window_noise(self):
+        # Equal lane weights tie a recency rank-1 with a lexical rank-1, and the
+        # turn-descending tie-break then hands the head to whatever just happened.
+        hits = self._log().retrieve('少年的旧伤', limit=3)
+        self.assertIn('旧伤', hits[0]['text'], _texts(hits))
+
+    def test_presence_rows_stay_out_of_the_lexical_lane(self):
+        # They are ~10 tokens of pure label+location, so BM25 length normalisation
+        # ranked them above the prose that answers the query.
+        hits = self._log().retrieve('阿砚在山道上', limit=20)
+        lexical = [hit for hit in hits if 'lexical' in hit['lanes']]
+        self.assertTrue(lexical)
+        self.assertTrue(all(hit['predicate'] != 'present' for hit in lexical),
+                        [(h['predicate'], h['text']) for h in lexical])
+
+    def test_entity_lane_keeps_room_for_scene_beats(self):
+        # Strict durable-first ordering let eight `knows` rows eat the per-seed
+        # quota, so the entity's own beats never entered the lane.
+        lane = [hit for hit in self._log().retrieve('阿砚', limit=20) if 'entity' in hit['lanes']]
+        self.assertTrue(any(hit['predicate'] == 'knows' for hit in lane))
+        self.assertTrue(any(hit['predicate'] == 'observation' for hit in lane),
+                        [(h['predicate'], h['text']) for h in lane])
+
+
 if __name__ == '__main__':
     unittest.main()
