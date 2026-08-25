@@ -29,15 +29,21 @@ import re
 from collections import Counter
 from itertools import zip_longest
 
-RRF_K = 60                       # standard reciprocal-rank-fusion damping
-# Deliberately unequal. The near window is *already* in context (context_builder
-# always carries the recent turns), so a recency hit is continuity support, not an
-# answer; the entity lane sits in between. Equal weights measurably lose: on a
-# replay of the live session they let "第39轮：午后，青石山老采石场旧道" (recency rank 1)
-# and one on-stage NPC's newest `knows` row (entity rank 1) tie with the lexical
-# rank-1 hit, and the turn-descending tie-break then buried the actual answer at
-# overall rank 3-7 (MRR 0.26 vs 0.87 for the bigram baseline it was replacing).
-LANE_WEIGHTS = {'recency': 0.35, 'lexical': 1.0, 'entity': 0.6}
+# RRF damping. The literature's k=60 is calibrated for TREC-scale result lists; with
+# ~100 facts and lanes capped at 20, 1/(60+1) vs 1/(60+15) is nearly flat, so "voted
+# by two lanes at any rank" beats "top of the lexical lane" — the near-window facts
+# all pick up a weak lexical vote and crowd out the answer. Measured on the recall
+# bench, overall MRR by k: 60 → 0.48, 10 → 0.52, 5 → 0.55, 2 → 0.71 (and the ordering
+# holds on both halves of the bench separately, so it is not fitting noise).
+RRF_K = 2
+# Deliberately unequal, and re-tuned on the recall bench. The near window is
+# *already* in context (context_builder always carries the recent turns), so a
+# recency hit is continuity support, not an answer — at 0.35 it was still buying
+# head slots that the answer needed. Overall MRR at K=2: recency 0.35 / entity 0.6
+# → 0.71; recency 0.15 / entity 0.35 → 0.83. Dropping recency to 0 measures the
+# same within noise, so it keeps a small vote: it is what still answers a vague
+# input like "继续", where there is nothing lexical to match.
+LANE_WEIGHTS = {'recency': 0.15, 'lexical': 1.0, 'entity': 0.35}
 BM25_K1 = 1.5
 # Below the textbook 0.75: these documents are short heterogeneous sentences
 # (20-90 chars), not web pages, so full length normalisation over-penalised the
@@ -89,9 +95,11 @@ def _tokens(text: str, dictionary=()) -> list[str]:
     text = _norm(text)
     out: list[str] = []
     for run in _CJK_RUN.findall(text):
-        if len(run) == 1:
-            out.append(run)
-            continue
+        # Unigrams *and* bigrams: bigrams carry the phrase, unigrams catch the
+        # single-character overlaps a bigram window slices apart — 赏钱 vs 谢仙师赏,
+        # 护身 vs 护盾, 骨头 vs 鸟骨. Common characters are harmless here because
+        # IDF prices them at ~0; it is the rare ones that pay off.
+        out.extend(run)
         out.extend(run[i:i + 2] for i in range(len(run) - 1))
     out.extend(_ASCII_RUN.findall(text))
     for term in dictionary:
@@ -100,15 +108,31 @@ def _tokens(text: str, dictionary=()) -> list[str]:
     return out
 
 
-def _bm25(doc_tokens: dict[int, list[str]], query_tokens: list[str]) -> dict[int, float]:
+def _bm25(doc_tokens: dict[int, list[str]], query_tokens: list[str],
+          groups: dict | None = None) -> dict[int, float]:
     """Okapi BM25 with the always-positive IDF variant (log(1 + …)), so a term in
-    most documents contributes ~0 rather than a negative score."""
+    most documents contributes ~0 rather than a negative score.
+
+    Length is normalised **within a document group** (here: the fact's predicate),
+    not against one global average. Fact types differ in length by an order of
+    magnitude — a `knows` row is a dozen tokens, a beat observation sixty — so a
+    single avgdl hands every short type a systematic head-of-ranking advantage that
+    has nothing to do with relevance. Grouping makes a long observation compete
+    against other observations.
+    """
     n = len(doc_tokens)
     if not n or not query_tokens:
         return {}
     freqs = {fid: Counter(toks) for fid, toks in doc_tokens.items()}
     lengths = {fid: max(1, len(toks)) for fid, toks in doc_tokens.items()}
-    avgdl = sum(lengths.values()) / n
+    groups = groups or {}
+    group_of = {fid: groups.get(fid, '') for fid in doc_tokens}
+    totals: dict[str, list] = {}
+    for fid, length in lengths.items():
+        bucket = totals.setdefault(group_of[fid], [0, 0])
+        bucket[0] += length
+        bucket[1] += 1
+    avgdl = {key: (total / count if count else 1.0) for key, (total, count) in totals.items()}
     df: Counter = Counter()
     for f in freqs.values():
         df.update(f.keys())
@@ -122,7 +146,8 @@ def _bm25(doc_tokens: dict[int, list[str]], query_tokens: list[str]) -> dict[int
             tf = f.get(term, 0)
             if not tf:
                 continue
-            denom = tf + BM25_K1 * (1 - BM25_B + BM25_B * lengths[fid] / avgdl)
+            norm = lengths[fid] / max(1e-9, avgdl.get(group_of[fid], 1.0))
+            denom = tf + BM25_K1 * (1 - BM25_B + BM25_B * norm)
             scores[fid] = scores.get(fid, 0.0) + idf * tf * (BM25_K1 + 1) / denom
     return scores
 
@@ -242,7 +267,8 @@ def retrieve(facts: list[dict], entities: dict, query: str = '', *,
         indexable = [f for f in facts
                      if str(f.get('predicate') or '') not in _LEXICAL_SKIP_PREDICATES]
         doc_tokens = {f.get('id'): _tokens(_index_text(f, label_of), dictionary) for f in indexable}
-        scored = _bm25(doc_tokens, _tokens(query, dictionary))
+        doc_groups = {f.get('id'): str(f.get('predicate') or '') for f in indexable}
+        scored = _bm25(doc_tokens, _tokens(query, dictionary), doc_groups)
         lexical = _ranked([(fid, (score, int(by_id[fid].get('turn', 0) or 0)))
                            for fid, score in scored.items() if score > 0])[:LEXICAL_LANE_CAP]
 

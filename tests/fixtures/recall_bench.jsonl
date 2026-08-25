@@ -1,0 +1,21 @@
+{"session": "九幽大陆-20260803-c701f6", "kind": "verbatim", "query": "阿砚身上那道旧伤是怎么来的", "gold_turns": [9], "why": "旧伤/灵根 都在原文里，词法应当直接命中"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "verbatim", "query": "上次买的咸酥饼是谁家摊子的", "gold_turns": [10, 11, 12], "why": "咸酥饼原词；答案是张拐子家"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "verbatim", "query": "老槐树心那个孔洞里有什么东西", "gold_turns": [31, 35], "why": "孔洞/树心原词，跨 4 轮两条互补事实"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "verbatim", "query": "鸟骨断口上的金属碎屑", "gold_turns": [36], "why": "整句几乎逐字来自原文"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "verbatim", "query": "擦杯的那个少年是什么来历", "gold_turns": [1, 4], "why": "擦杯少年/来历原词，答案分布在两轮"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "verbatim", "query": "小二说的桂花糕在哪买", "gold_turns": [10, 11], "why": "桂花糕原词，答案是刘婆子点心铺"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "verbatim", "query": "老槐切口里那点暗绿色残光", "gold_turns": [31], "why": "暗绿色灵力残光原词"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "verbatim", "query": "阿砚的灵根是什么情况", "gold_turns": [9], "why": "灵根偏杂原词；与 t38 的水灵根 knows 事实容易混，考察是否召到源头"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "verbatim", "query": "我什么时候说过自己是散修", "gold_turns": [23], "why": "散修原词，主角自述身份的那一轮"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "那少年的经脉是不是被人动过手脚", "gold_turns": [9], "why": "经脉是共有词，动过手脚 vs 被外力强行抽离灵力"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "之前在镇上买的那袋点心是从哪个摊子拿的", "gold_turns": [10, 11, 12], "why": "点心/摊子是泛称，原文用桂花糕/酥饼摊"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "树洞里翻出来的那几样东西", "gold_turns": [31, 35], "why": "树洞 vs 树心孔洞，翻出来 vs 探入发现"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "那截骨头上嵌着的东西跟兵器是一回事吗", "gold_turns": [36], "why": "骨头/鸟骨、兵器/断剑：与原文零 token 重叠，纯词法必败"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "客栈里那个擦杯子的伙计瞒着什么", "gold_turns": [1, 4], "why": "伙计 vs 少年，瞒着 vs 刻意收敛修为/来历不明"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "阿砚知道我看穿他的灵根了吗", "gold_turns": [38], "why": "考察 knows 事实（知情边界）能否被召回，而不是只召观察句"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "刘婆子铺子里买的是什么", "gold_turns": [10, 11], "why": "实体名在 query 里，内容词靠猜——考察实体链接车道"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "我那张护身的符还在不在", "gold_turns": [22], "why": "护身/护盾 零重叠：纯词法必败的第二例"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "给小二那点赏钱他什么反应", "gold_turns": [5], "why": "赏钱 vs 铜钱/谢仙师赏"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "石板底下刻的东西指向哪里", "gold_turns": [36, 38], "why": "定位阵纹/四块石板指向崖顶，跨两轮"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "崖顶上有什么挡着", "gold_turns": [38], "why": "挡着 vs 荆条 + 灵力屏障"}
+{"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "那藤条上黏糊糊的东西", "gold_turns": [37], "why": "黏糊糊 vs 黏液，藤条是共有词"}
