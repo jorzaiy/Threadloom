@@ -7,14 +7,14 @@
 ## 当前文件
 
 - `server.py`：HTTP 服务入口；`do_GET/do_POST/do_DELETE` 通过 `_GET_ROUTES/_POST_ROUTES/_DELETE_ROUTES` 的 path→handler 分发表路由到 `_get_* / _post_* / _delete_*` handler；请求壳由 `_request_scope(method)` context manager 统一管理（解析用户/多用户上下文，`finally` 必定重置 token），session 路由前导统一走 `_resolve_scoped_session`
-- `handler_message.py`：`POST /api/message` 主链入口；fact-log：`THREADLOOM_FACTLOG_WRITE_IMPORTANT=1` 时在权威 `save_state` **之前** commit + 合并写回 `important_npcs`（跳过 tracker/continuity），默认关则 `save_state` 后 `_shadow_commit_fact_log` 仅诊断；narrator 前 `_load_factlog_view`（`THREADLOOM_FACTLOG_NARRATOR`）
+- `handler_message.py`：`POST /api/message` 主链入口；fact-log：`THREADLOOM_FACTLOG_WRITE_IMPORTANT=1` 时在权威 `save_state` **之前** commit + 合并写回 `important_npcs`（跳过 tracker/continuity），默认关则 `save_state` 后 `_shadow_commit_fact_log` 仅诊断；narrator 前 `_load_factlog_view`（`THREADLOOM_FACTLOG_NARRATOR`）+ `_factlog_recall`（长尾召回双轨：`THREADLOOM_RETRIEVE_SHADOW` 默认开只写 `retrieve_shadow.jsonl`、`THREADLOOM_RETRIEVE_V2` 默认关才注入）
 - `runtime_store.py`：session 目录、文件读写（原子写入）与状态快照；JSON 读取统一走 `_load_json(path, default, *, backup_corrupt=...)`，区分“文件缺失”（返回 default 深拷贝）与“解析损坏”（`logger.exception` + 把坏文件移到 `<name>.corrupt` 后返回 default），机器生成的 session 数据默认备份、用户手编文件只记录不挪动；`_history_cache` 与 history/event-summary/meta/分片的 read-modify-write 由模块级 `_STORE_LOCK`（RLock）串行化
 - `paths.py`：三层路径管理（user / character / session 分层路径解析），提供 `active_user_id` / `active_character_id` context var 与 request-local override 机制
 - `atomic_io.py`：原子文件读写原语（写临时文件 → fsync → `os.replace`），供 `runtime_store.py` / `keeper_archive.py` 等写入层统一使用
 - `bootstrap_session.py`：新 session bootstrap
 - `context_builder.py`：runtime 上下文装配；当前 narrator 输入是“强约束层 + 连续性层 + 候选知识层”的分层装配，并把 recent window 配置拆成完整正文窗口与前段提纲桥接；selector 命中的 NPC profile 若缺少 source markdown，会 fallback 到当前 session persona seed；summary chunk 只在当前 turn 有足够直接锚点时回流；narrator 为 grok 系列时把 runtime_rules 切到 `runtime-rules-grok.md`（`_runtime_rules_path_for_narrator`，按 narrator 模型名判断）
 - `selector.py`：NPC 候选召回决策层；根据 onstage / relevant_npcs、active_threads、recent_history 与 important_npcs 信号判断是否注入 NPC profile 候选，并按话题相关度排序
-- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及事件时间轴、recent window 前段 event outline + 近端完整正文；`_format_factlog_cast()` 渲染 fact-log 投影的【人物档案·权威】块（归并名+锁定 persona+知情边界白名单，插在旧块前、冲突以它为准；开关 `THREADLOOM_FACTLOG_NARRATOR` 默认开、空则回退）
+- `narrator_input.py`：narrator prompt 拼装；含 `_format_knowledge_scope()` 渲染结构化知情边界、`_format_actor_registry()` 渲染不可变角色注册表，以及事件时间轴、recent window 前段 event outline + 近端完整正文；`_format_factlog_cast()` 渲染 fact-log 投影的【人物档案·权威】块（归并名+锁定 persona+知情边界白名单，插在旧块前、冲突以它为准；开关 `THREADLOOM_FACTLOG_NARRATOR` 默认开、空则回退）；`_format_factlog_recall()` 渲染 `retrieve()` 召回的【往事回溯·检索】块（每行带来源轮次，声明"可引用不可改写、被召回≠NPC 知道"；开关 `THREADLOOM_RETRIEVE_V2` 默认关、无命中不出块）
 - `model_config.py` / `model_client.py`：模型配置与模型调用（含 429/503 自动重试）
 - `llm_manager.py`：统一 LLM 角色调用管理层；封装 `call_role_llm()`，按角色 key 查找模型配置并调用 `model_client`，供各 agent 统一使用
 - `safe_http.py`：SSRF 安全 HTTP 连接辅助；DNS 预解析 + IP pin，按 `_LOOPBACK_HOSTS` 白名单放行 loopback，拒绝私网/link-local 直连，防止 DNS rebinding 攻击
@@ -44,7 +44,8 @@
 - `continuity_hints.py`：连续性提示加载封装；从 `runtime_store` 读取 continuity_hints，供上下文装配层使用
 - `event_ledger.py`：事件账本；产出阶段事件摘要并保存 `time_anchor/location_anchor`，不再负责人物短期状态写回。统一记忆事务模式下使用 heuristic ledger，不复用 keeper signals 作为事件摘要来源
 - `important_npc_tracker.py` / `continuity_resolver.py`：重要人物与连续性稳定器；`relevant_npcs` 标准化只保留当前信号层明确命中的非 onstage 稳定人物，供 selector 继续召回
-- `fact_log.py`：记忆 V2 核心（默认影子；`WRITE_IMPORTANT` 可接管 `important_npcs` 写回）；append-only facts + `Resolver` + `commit_turn / seed_from_state / project / merge_projected_important_npcs / truncate_after`。`project()` 出 onstage/important/last_event（查询）、persona、knowledge_boundary、relation；important 过滤 = ephemeral + **inactive≥20 淡出**（persona 锁定例外）。设计见 `doc/MEMORY-V2-DESIGN.md`，双轨进度见 `doc/WORKPLAN-FACTLOG-DUAL-TRACK.md`
+- `fact_log.py`：记忆 V2 核心（默认影子；`WRITE_IMPORTANT` 可接管 `important_npcs` 写回）；append-only facts + `Resolver` + `commit_turn / seed_from_state / project / retrieve / merge_projected_important_npcs / truncate_after`。`project()` 出 onstage/important/last_event（查询）、persona、knowledge_boundary、relation；important 过滤 = ephemeral + **inactive≥20 淡出**（persona 锁定例外）。设计见 `doc/MEMORY-V2-DESIGN.md`，双轨进度见 `doc/WORKPLAN-FACTLOG-DUAL-TRACK.md`
+- `fact_retrieval.py`：V2 读侧第三个纯函数 `retrieve()`（设计文档里长期空着的那格）——长尾召回 = **三车道 RRF 融合**：近窗 recency / **BM25 词法**（k1=1.5、b=0.35；CJK char bigram + 实体别名整词 `@term`，无分词器依赖；`present` 行不入索引）/ **实体链接**（query 或当前在场的实体名/别名经 `canon_eid` 折叠取其自有事实，durable 与 beat 交替）。车道权重 lexical 1.0 / entity 0.6 / recency 0.35（近窗本来就在上下文里，故不该占头部）。融合的是 rank 不是分数 → 后加 embedding 车道无需重调前三条。每条 hit 带 `span` 回源，`supersedes` 的旧行不召回。纯函数、无 I/O、无缓存索引
 - `persona_distiller.py`：从 NPC 言行用**一次** LLM 提炼稳定性格（只写"是个怎样的人"、排除对主角态度），剥 JSON 回显 + 校验拒绝；由 `handler_message._consolidate_factlog_personas` 在 consolidation turn 调用、每 NPC 一次、锁定
 - `opening.py`：opening 菜单与开局状态机；菜单/direct-start 仍可保存阶段 checkpoint，但 opening choice 进入首个 narrator 回合时可跳过 checkpoint，由 `handler_message.py` 在该 turn 结束时统一提交最终 state
 - `card_importer.py` / `import_character_card.py`：角色卡导入与规范化产物生成
@@ -385,6 +386,11 @@ pytest 侧由仓库根 `conftest.py` 在收集前把仓库根与 `backend/` 同�
 - narrator 模型适配（commit `229bba8` / `f6776a8` / `26545f4`）：新增 `prompts/runtime-rules-grok.md`（去 jailbreak + 鼓励铺陈 + 反套路），`context_builder` 按 narrator 模型名含 `grok` 切换；默认与 grok 规则都加**反脑补**条款（不许把未出现的既定事实写成定论，环境铺陈豁免），与 output 端 grounding guard 双道。
 - P2 关系事件线 + keeper 契约 #1（commit `91f59c8` / `b959714` / `8d34b69`）：`relation` fact（label 变才追加、带 evidence+span+去箭头）→ `project()` 投影当前关系（动态）+ 关系线 → 权威块展示"对主角=…（依据）"。临时 NPC 治理：`project()` 把"恰好在场一次、离场≥2 轮"的路人挡在 important/权威块外（命名泛滥不堆进账本），实体仍留表；present==1 only，seed/仅被提及的 absent NPC 豁免。
 - keeper 契约 #2/#3（commit `80cf610` + 本次）：#2 `knowledge_scope` fill-prompt 只记真·知情（主角身份/意图/秘密、剧情、关系）、不掺环境/场景/动作观察（防知情边界被污染）；#3 keeper 在 scene_entity 标同一人本轮的别称 → fact-log 据此归并（治"短工"只在正文出现）。均为 prompt 契约，fact-log 消费侧有测试，效果需真实游玩验证。
+- **P1 长尾召回 `retrieve()`（commit `df2641c` / `2d09448` / `8c11415`）**：设计文档的第三个纯函数落地为 `backend/fact_retrieval.py`——BM25 词法 + 实体链接 + 近窗，三车道 **RRF** 融合，不引任何新依赖（网关无 embedding 模型、机器上也无 embedding 运行时，见下）。
+  - **实测才发现的三个坑**（拿 c701f6 真实档 93 facts/39 轮回放，对比它要替掉的 bigram 集合重叠基线）：① 车道等权 + 按 turn 打破平局 → 头部全被近窗废话占住，正确答案掉到第 3–7（MRR 0.26，比基线 0.87 还差）；② `present` 行入 BM25 索引 → 它只有"标签+地点"十来个 token，被长度归一化捧到长段观察之上（词法前 9 名全是它）；③ 实体车道 durable 严格优先 → 某 NPC 八条 `knows` 吃满配额、它自己的戏份一条都进不来。修完 MRR 0.26 → **0.84**（基线 0.87），三条各有回归测试钉住。
+  - **改写型 query 打平、且都召不回**：`骨头/鸟骨`、`兵器/断剑`、`护身/护盾` 之间零 token 重叠——基线看似排到第 6/18 名其实是"全部并列 0 分后按时间排序"的巧合，不是召回。这是 embedding 车道（唯一能补的一档）的实证依据，而不是继续磨词法。
+  - **双轨接入**：`THREADLOOM_RETRIEVE_SHADOW`（默认开、只写 `diagnostics/retrieve_shadow.jsonl`，让真实游玩自己攒证据）+ `THREADLOOM_RETRIEVE_V2`（默认关，才注入【往事回溯·检索】块）。口径见 `doc/OPERATIONS.md`。
+  - **embedding 现状（2026-08-25 实测）**：网关 `x.yuzh.de/v1` 只有 5 个 chat 模型，`/v1/embeddings` 对 bge-m3 / text-embedding-3-small / embedding-2 / qwen3-embedding 全部 `model not found`；机器上无 torch / sentence-transformers / onnxruntime / numpy / llama.cpp / 任何 `.gguf`；`.venv-jieba` 是空壳（`python3 -m venv` 缺 `python3.11-venv` 包，建不出 pip）。onnxruntime 本身**可装**：x86_64 + glibc 2.36 + Python 3.11 命中 `manylinux_2_28` 轮子（onnxruntime 23MB + numpy 17MB），CPU 有 AVX-512/VNNI（int8 加速）；约束是 3.7GB 内存里只剩 ~1.5GB 可用，且要先 `apt install python3.11-venv` 或用 `--break-system-packages`。
 
 ### State Keeper 三层架构与调度策略
 

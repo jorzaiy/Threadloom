@@ -10,7 +10,7 @@
 
 | 序 | 工作项 | 解决什么 |
 |---|---|---|
-| **P1** | 语义检索 | memory 真瓶颈：长尾召回 |
+| **P1 🚧** | 语义检索（词法这刀已落地） | memory 真瓶颈：长尾召回 |
 | **P2 ✅** | 关系事件线（已完成） | NPC 与主角关系成长（有历史、可回溯） |
 | **P3** | NPC 目标 / 议程 | 世界自主、NPC 像独立的人 |
 | 缓做 | persona 演化、离场世界推进 | 高价值但易失控，谨慎晚做 |
@@ -20,18 +20,19 @@
 
 ---
 
-## P1 · 语义检索
+## P1 · 语义检索 — 🚧 词法这一刀已落地（commit `df2641c` / `2d09448` / `8c11415`）
 
-**目标**：长尾前情/细节"用时取回"真正兑现（红队时已定位这是 memory 的真瓶颈，不是存储）。
+**已落地**：设计文档第三个纯函数 `retrieve()` 实装为 `backend/fact_retrieval.py`——**BM25 词法 + 实体链接 + 近窗，三车道 RRF 融合**，零新依赖。融合的是 rank 不是分数，所以之后加 embedding 车道**不用重调**前三条。双轨接入：`THREADLOOM_RETRIEVE_SHADOW`（默认开，只写 `diagnostics/retrieve_shadow.jsonl`）+ `THREADLOOM_RETRIEVE_V2`（默认关，才注入【往事回溯·检索】块）。
 
-**现状**：fact-log 的 `observation + span` 已就位，但长尾召回还靠 selector 的词法 bigram——同义换个说法就漏召。
+**实测（c701f6，93 facts / 39 轮）**：先是**比基线更差**（MRR 0.26 vs 0.87），三个坑——车道等权让近窗废话占头部、`present` 行入索引被长度归一化捧起来、实体车道被 `knows` 吃满配额；修完 **0.84**（基线 0.87），各有回归测试。
 
-**做法**：
-- 对 observation（及 keeper 摘要）建 embedding 索引（本地 embedding，是比生成便宜的一档，不破坏 no-LLM 定位）；
-- 检索 = 近窗 + 在场实体的 fact + 语义命中 observation，**每条带 span 回源**；
-- 接入 `context_builder`/`selector` 作为"长尾召回"来源，最终预算仍由 `context_builder` 决定。
+**关键结论：改写型 query 上纯词法到顶了**。`骨头/鸟骨`、`兵器/断剑`、`护身/护盾` 零 token 重叠，两种算法都召不回（基线看似第 6/18 名是"并列 0 分后按时间排"的巧合）。所以下一步价值全在 embedding 车道，而不是继续磨词法。
 
-**风险/验收**：依赖本地 embedding；检索仍可能漏召（但可恢复、可度量）。验收 = 回提旧人/旧线索的回合，召回率明显优于词法基线。
+**embedding 的现实约束（2026-08-25 实测）**：网关只有 5 个 chat 模型、`/v1/embeddings` 无可用模型；机器上无 torch/sentence-transformers/onnxruntime/numpy/llama.cpp/gguf。onnxruntime 可装（x86_64 + glibc 2.36 + py3.11 命中 manylinux_2_28 轮子，AVX-512/VNNI 齐全），代价是 requirements 从 5 行涨到 ~7 行 + ~110MB 模型 + 3.7GB 内存里只剩 ~1.5GB 可用；且得先 `apt install python3.11-venv`（`.venv-jieba` 是空壳就是因为这个）。
+
+**待做**：① 手标召回基准集（20-30 条，**必须含改写型 query**，否则量出来的是词法自己的强项）；② recall@k / MRR 跑分脚本 + "默认开"的门槛；③ embedding 车道 + 向量缓存（纯投影、可删可重建）；④ 顺带收割：用同一套向量喂 auditor 的归并候选（治 掌柜/周掌柜、面摊老板/摊主、灰衣/灰布衫）。
+
+**原始判断（保留）**：长尾前情"用时取回"是 memory 的真瓶颈，不是存储。检索 = 近窗 + 在场实体的 fact + 语义命中 observation，**每条带 span 回源**；预算仍由 `context_builder` 决定。
 
 ## P2 · 关系事件线 — ✅ 已完成（commit `91f59c8` / `b959714`）
 

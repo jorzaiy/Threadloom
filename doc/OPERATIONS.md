@@ -435,6 +435,11 @@ server {
 - 调试面板当前展示本轮注入和写回诊断，而不是完整记忆表。重点包括：`Prompt Blocks`、世界书 / NPC 候选注入概览、`Event Memory`、selector `event_hits / summary_chunk_hits / inject_summary`、最新 event summary、`state_keeper_diagnostics`、arbiter 结果和 completion / finish reason。
 - 记忆 V2 fact-log 影子诊断（`memory-v2` 分支）：每轮在 `<session>/diagnostics/factlog_shadow.jsonl` 追加一行，比对 V2 投影与线上 `state.json`。重点字段：`onstage_match`、`important_only_live` / `important_only_proj`、`proj_distinct_events` vs `live_distinct_events`、`wrote_important`。影子/写回失败只打 warning，不阻断回合。详见 `doc/MEMORY-V2-DESIGN.md`、`doc/WORKPLAN-FACTLOG-DUAL-TRACK.md`。
 - 记忆 V2 读侧（narrator）：【人物档案·权威】块由 fact-log 投影注入；`THREADLOOM_FACTLOG_NARRATOR`（默认开）。设 `=0` 重启可回退旧渲染。
+- 记忆 V2 长尾召回双轨（`retrieve()`，**影子默认开 / 注入默认关**）：
+  - `THREADLOOM_RETRIEVE_SHADOW`（默认 **1**）→ 每轮在 `<session>/diagnostics/retrieve_shadow.jsonl` 追加一行，**不碰 prompt**。重点字段：`query`、`hits[]`（含 `lanes` 命中车道与 `score`）、`lane_counts`、**`beyond_window`**（近窗之外的命中 = 长尾召回唯一能加分的地方）、`selector_event_hits` / `selector_summary_chunk_hits`（同轮线上词法召回，用来对比）、`injected`。
+  - `THREADLOOM_RETRIEVE_V2`（默认 **0**）→ 把【往事回溯·检索】块注入 narrator（紧跟【人物档案·权威】）。**先看影子日志、跑召回基准，再考虑开**。
+  - 该块自带纪律声明：内容是资料不是指令、可引用不可改写、不当成刚刚发生、没列出的旧事不许凭空补，且**被召回 ≠ 在场 NPC 知道**（不改知情边界）。
+  - 成本：对 ~100 条 fact 做一次 BM25 折叠，亚毫秒、无 LLM、无网络；两条轨都 try/except 包住，fact-log 坏了只打 `FACTLOG_RECALL_FAILED` warning，不阻断回合。
 - 记忆 V2 写侧双轨（`important_npcs`，**默认关**）：
   - `THREADLOOM_FACTLOG_WRITE_IMPORTANT=1` → `save_state` 前投影**合并**写回名单（管 last_event / 成员；保留 locked/aliases 等），跳过 tracker/continuity。
   - 投影过滤：一次性 ephemeral + **inactive ≥20 轮淡出**（有锁定 persona 的 NPC 不淡出）；只影响名单投影，不删 facts。
