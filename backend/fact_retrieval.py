@@ -18,6 +18,13 @@ Fusing *ranks* rather than raw scores means the lanes need no score calibration,
 and a fourth lane (embeddings) can be added later without retuning these three —
 which is exactly why the embedding decision doesn't block this.
 
+Measured against that baseline on 21 hand-labelled recall queries over a real
+session (`scripts/recall_bench.py`): MRR 0.825 vs 0.759, recall@8 1.00 vs 0.81, and
+nothing unreachable (baseline leaves 3 facts unretrievable at any rank). The whole
+margin is on paraphrased queries — when the player uses the same words the text
+does, set overlap is still slightly ahead, which is its best case and the reason
+that half of the bench exists.
+
 Pure functions, no I/O, no cached index: the index is rebuilt per call from the
 same `facts` list `project()` folds over (~100 facts in a live session, so the
 fold is sub-millisecond and a cache would only be a thing to invalidate wrongly).

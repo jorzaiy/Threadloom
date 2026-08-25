@@ -215,9 +215,10 @@ class CorrectionAndEdgeTests(unittest.TestCase):
 
 class LaneBalanceTests(unittest.TestCase):
     """The three defects a replay against the live session exposed. Each one let
-    near-window noise bury the actual answer (MRR 0.26 vs the bigram baseline's
-    0.87 before the fixes, 0.84 after), and none of them showed up in a fixture
-    small enough to eyeball — hence these are pinned."""
+    near-window noise bury the actual answer — with all three present, retrieval
+    scored *below* the bigram baseline it replaces (MRR 0.26 vs 0.87 on the first
+    five queries; the full 21-query bench now reads 0.825 vs 0.759). None of them
+    showed up in a fixture small enough to eyeball — hence these are pinned."""
 
     def _log(self):
         log = FactLog()
