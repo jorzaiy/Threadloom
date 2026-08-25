@@ -946,6 +946,100 @@ def _load_factlog_view(session_id: str) -> dict | None:
         return None
 
 
+RETRIEVE_HIT_LIMIT = 6
+RETRIEVE_HIT_CHARS = 900
+RETRIEVE_NEAR_WINDOW_TURNS = 3
+
+
+def _retrieve_shadow_enabled() -> bool:
+    """Shadow track: ON by default. It only writes diagnostics, and the whole point
+    of the dual track is to accumulate real-play evidence for / against the new
+    recall before it can touch a prompt."""
+    return os.environ.get('THREADLOOM_RETRIEVE_SHADOW', '1') == '1'
+
+
+def _retrieve_inject_enabled() -> bool:
+    """Injection track: OFF until the recall benchmark shows fact-log retrieve()
+    beats the lexical selector baseline on real sessions (doc/ROADMAP.md P1)."""
+    return os.environ.get('THREADLOOM_RETRIEVE_V2', '0') == '1'
+
+
+def _build_retrieve_shadow_record(
+    turn_id: str,
+    user_text: str,
+    hits: list,
+    context: dict,
+    *,
+    fact_count: int,
+    latest_turn: int,
+    injected: bool,
+) -> dict:
+    """One comparable line per turn: what retrieve() would recall vs what the live
+    lexical selector actually recalled. `beyond_window` is the number that matters —
+    hits older than the near window are the long tail the near window cannot supply,
+    i.e. the only place this can add value."""
+    audit = context.get('context_audit') if isinstance(context.get('context_audit'), dict) else {}
+    hits = [h for h in (hits or []) if isinstance(h, dict)]
+    lane_counts: dict[str, int] = {}
+    for hit in hits:
+        for lane in (hit.get('lanes') or {}):
+            lane_counts[lane] = lane_counts.get(lane, 0) + 1
+    window_start = latest_turn - max(0, RETRIEVE_NEAR_WINDOW_TURNS - 1)
+    return {
+        'turn_id': turn_id,
+        'query': str(user_text or '')[:200],
+        'facts': int(fact_count),
+        'latest_turn': int(latest_turn),
+        'hits': [{
+            'fact_id': hit.get('fact_id'),
+            'turn': hit.get('turn'),
+            'predicate': hit.get('predicate'),
+            'lanes': hit.get('lanes'),
+            'score': hit.get('score'),
+            'text': str(hit.get('text', '') or '')[:120],
+        } for hit in hits],
+        'lane_counts': lane_counts,
+        'beyond_window': [hit.get('fact_id') for hit in hits
+                          if int(hit.get('turn', 0) or 0) < window_start],
+        'selector_event_hits': [str(h.get('event_id', '') or '') for h in (audit.get('event_hits') or [])
+                                if isinstance(h, dict)],
+        'selector_summary_chunk_hits': [str(h.get('chunk_id', '') or '') for h in (audit.get('summary_chunk_hits') or [])
+                                        if isinstance(h, dict)],
+        'injected': bool(injected),
+    }
+
+
+def _factlog_recall(session_id: str, turn_id: str, user_text: str, context: dict) -> list | None:
+    """Long-tail recall for this turn's input. Computed whenever either track is on
+    (a BM25 fold over ~100 facts is sub-millisecond), shadow-logged for comparison,
+    and returned for prompt injection only when THREADLOOM_RETRIEVE_V2=1. Fully
+    guarded: recall must never break a turn."""
+    if not (_retrieve_shadow_enabled() or _retrieve_inject_enabled()):
+        return None
+    try:
+        paths = session_paths(session_id)
+        log = FactLog.load(paths['memory_dir'])
+        if not log.facts:
+            return None
+        hits = log.retrieve(user_text, limit=RETRIEVE_HIT_LIMIT, max_chars=RETRIEVE_HIT_CHARS)
+        injected = _retrieve_inject_enabled()
+        if _retrieve_shadow_enabled():
+            record = _build_retrieve_shadow_record(
+                turn_id, user_text, hits, context,
+                fact_count=len(log.facts),
+                latest_turn=max(int(f.get('turn', 0) or 0) for f in log.facts),
+                injected=injected,
+            )
+            diag_dir = paths['session_dir'] / 'diagnostics'
+            diag_dir.mkdir(parents=True, exist_ok=True)
+            with open(diag_dir / 'retrieve_shadow.jsonl', 'a', encoding='utf-8') as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + '\n')
+        return hits if injected else None
+    except Exception as err:  # recall is an optimisation; a turn must survive its failure
+        logger.warning('FACTLOG_RECALL_FAILED session=%s err=%s', session_id, err)
+        return None
+
+
 def _apply_important_npc_trackers(state: dict, session_id: str, context: dict) -> dict:
     """Legacy important roster writers. Skipped when fact-log owns important_npcs."""
     if _factlog_write_important_enabled():
@@ -1556,6 +1650,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     context = dict(context)
     context['state_fragment'] = state_fragment
     context['factlog'] = _load_factlog_view(session_id)
+    context['factlog_recall'] = _factlog_recall(session_id, turn_id, text, context)
     system_prompt, user_prompt = build_narrator_input(context, text, arbiter_result=arbiter_result)
     prompt_stats = prompt_block_stats(system_prompt)
     turn_trace['runtime']['narrator'] = {
