@@ -51,7 +51,7 @@
 
 **embedding 还值不值得做**：值，但杠杆比原先估计的小。真正无共享字面的同义（兵器/断剑、虫子/根骨蛹、伙计/小二 那类）仍靠不住，且"实体+属性"的头部精度可能受益。现实约束（2026-08-25 实测）：网关只有 5 个 chat 模型、`/v1/embeddings` 无可用模型；机器上无 torch/sentence-transformers/onnxruntime/numpy/llama.cpp/gguf。onnxruntime **可装**（x86_64 + glibc 2.36 + py3.11 命中 manylinux_2_28 轮子，AVX-512/VNNI 齐全），代价是 requirements 从 5 行涨到 ~7 行 + ~110MB 模型 + 3.7GB 内存只剩 ~1.5GB 可用；且得先 `apt install python3.11-venv`（`.venv-jieba` 是空壳就因为这个）。
 
-**待做**：① 真实游玩几轮，看 `retrieve_shadow.jsonl` 的 `beyond_window`（近窗之外的召回）质量，再决定是否把 `THREADLOOM_RETRIEVE_V2` 默认开（**注意：至今没有任何一份 shadow 日志落盘过**，因为线上跑的 memory-v2 还没合这条分支）；② ~~基准集扩到 2 个以上 session~~ ✅ 已扩到 3 档 57 条，并给 `--gate` 加了"任一档 recall@8 不得回归"；③ embedding 车道 + 向量缓存（纯投影、可删可重建）；④ 顺带收割：同一套向量喂 auditor 的归并候选（治 掌柜/周掌柜、面摊老板/摊主、灰衣/灰布衫——e23032 那档 38 个实体里就有 灰衣年轻人/灰布衫年轻人、挎篮子的妇人/挎篮妇人、车夫老汉/车夫/老汉 三组没并）。
+**待做**：① 真实游玩几轮，看 `retrieve_shadow.jsonl` 的 `beyond_window`（近窗之外的召回）质量，再决定是否把 `THREADLOOM_RETRIEVE_V2` 默认开（**这条分支已合入 memory-v2（`3710a9d`），但影子日志要等 daemon 重启才开始积累**——在此之前一份都没落盘，所以"看影子再决定"目前仍是空转的）；② ~~基准集扩到 2 个以上 session~~ ✅ 已扩到 3 档 57 条，并给 `--gate` 加了"任一档 recall@8 不得回归"；③ embedding 车道 + 向量缓存（纯投影、可删可重建）；④ 顺带收割：同一套向量喂 auditor 的归并候选（治 掌柜/周掌柜、面摊老板/摊主、灰衣/灰布衫——e23032 那档 38 个实体里就有 灰衣年轻人/灰布衫年轻人、挎篮子的妇人/挎篮妇人、车夫老汉/车夫/老汉 三组没并）。
 
 **原始判断（保留）**：长尾前情"用时取回"是 memory 的真瓶颈，不是存储。检索 = 近窗 + 在场实体的 fact + 语义命中，**每条带 span 回源**；预算仍由 `context_builder` 决定。
 
