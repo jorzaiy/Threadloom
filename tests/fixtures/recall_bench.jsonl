@@ -19,3 +19,39 @@
 {"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "石板底下刻的东西指向哪里", "gold_turns": [36, 38], "why": "定位阵纹/四块石板指向崖顶，跨两轮"}
 {"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "崖顶上有什么挡着", "gold_turns": [38], "why": "挡着 vs 荆条 + 灵力屏障"}
 {"session": "九幽大陆-20260803-c701f6", "kind": "paraphrase", "query": "那藤条上黏糊糊的东西", "gold_turns": [37], "why": "黏糊糊 vs 黏液，藤条是共有词"}
+{"session": "九幽大陆-20260619-c88796", "kind": "verbatim", "query": "卖纸钱的老周为什么停摊了", "gold_turns": [3], "why": "老周/停摊原词，答案埋在老妇人那段城北异状里"}
+{"session": "九幽大陆-20260619-c88796", "kind": "verbatim", "query": "黑衣散修左手的爪痕", "gold_turns": [7], "why": "爪痕发黑几乎逐字"}
+{"session": "九幽大陆-20260619-c88796", "kind": "verbatim", "query": "回春符和灵盾符是哪轮画的", "gold_turns": [13], "why": "三种符名原词，只出现一次"}
+{"session": "九幽大陆-20260619-c88796", "kind": "verbatim", "query": "山药排骨汤是在哪买的", "gold_turns": [23], "why": "汤铺原词；答案在一条很长的返程观察里，考察长度归一化"}
+{"session": "九幽大陆-20260619-c88796", "kind": "verbatim", "query": "女修要一块中品灵石换什么", "gold_turns": [15], "why": "中品灵石原词，交易那轮"}
+{"session": "九幽大陆-20260619-c88796", "kind": "verbatim", "query": "柳絮提到的天枢阵", "gold_turns": [24], "why": "天枢阵原词，全局只出现一次"}
+{"session": "九幽大陆-20260619-c88796", "kind": "verbatim", "query": "用灵力丝线往北探到了什么", "gold_turns": [10], "why": "灵力丝线原词，答案是地气/树根/铁锈味"}
+{"session": "九幽大陆-20260619-c88796", "kind": "verbatim", "query": "柳絮为什么让我别带剑", "gold_turns": [20], "why": "别带剑原词"}
+{"session": "九幽大陆-20260619-c88796", "kind": "verbatim", "query": "柳絮讲的禁林经历和警告", "gold_turns": [19], "why": "实体名在 query 里且原词命中，考察实体车道不压掉词法头部"}
+{"session": "九幽大陆-20260619-c88796", "kind": "paraphrase", "query": "跑堂的伙计偷偷嘟囔被我逮住那次", "gold_turns": [5], "why": "伙计/嘟囔/逮住 vs 店小二/自言自语/潜入质问，近零重叠"}
+{"session": "九幽大陆-20260619-c88796", "kind": "paraphrase", "query": "穿黑衣裳那修士手上有什么印记", "gold_turns": [7], "why": "印记 vs 爪痕"}
+{"session": "九幽大陆-20260619-c88796", "kind": "paraphrase", "query": "城北那片林子外头哪些铺子不做买卖了", "gold_turns": [3], "why": "铺子不做买卖 vs 棺材铺关闭/老周停摊"}
+{"session": "九幽大陆-20260619-c88796", "kind": "paraphrase", "query": "我贴上去的符纸怎么被吃掉了灵气", "gold_turns": [23], "why": "吃掉 vs 吞噬、符纸 vs 废符"}
+{"session": "九幽大陆-20260619-c88796", "kind": "paraphrase", "query": "拿一块石头换消息的那个女子", "gold_turns": [15], "why": "石头 vs 中品灵石、女子 vs 女修"}
+{"session": "九幽大陆-20260619-c88796", "kind": "paraphrase", "query": "住的地方能望见那片林子的树梢", "gold_turns": [4], "why": "住的地方 vs 客栈、树梢 vs 树冠"}
+{"session": "九幽大陆-20260619-c88796", "kind": "paraphrase", "query": "最近有几伙人进过那片林子", "gold_turns": [8], "why": "几伙人 vs 多拨修士"}
+{"session": "九幽大陆-20260619-c88796", "kind": "paraphrase", "query": "推演的时候哪里说不通", "gold_turns": [12], "why": "说不通 vs 时间顺序上的矛盾"}
+{"session": "九幽大陆-20260619-c88796", "kind": "paraphrase", "query": "给柳絮端过去的那碗吃食", "gold_turns": [23, 24], "why": "碗吃食 vs 山药排骨汤，送汤跨两轮"}
+{"session": "九幽大陆-20260520-e23032", "kind": "verbatim", "query": "根骨蛹是什么东西", "gold_turns": [300], "why": "根骨蛹原词，全局只出现一次"}
+{"session": "九幽大陆-20260520-e23032", "kind": "verbatim", "query": "七枚中品灵石是怎么算的", "gold_turns": [297], "why": "七枚中品灵石原词（定金加余款上限）"}
+{"session": "九幽大陆-20260520-e23032", "kind": "verbatim", "query": "活物搁在灰玉片上纹路怎么样", "gold_turns": [290], "why": "灰玉片/纹路亮灭近逐字"}
+{"session": "九幽大陆-20260520-e23032", "kind": "verbatim", "query": "钱师傅追问我从哪挖的", "gold_turns": [290], "why": "从哪挖的原词"}
+{"session": "九幽大陆-20260520-e23032", "kind": "verbatim", "query": "万宝楼的人事归谁管", "gold_turns": [300], "why": "人事原词，答案是赵管事；t300 有四条事实"}
+{"session": "九幽大陆-20260520-e23032", "kind": "verbatim", "query": "面摊摊主说谁打探过我", "gold_turns": [305], "why": "面摊摊主/打探原词，答案是灰布衫年轻后生"}
+{"session": "九幽大陆-20260520-e23032", "kind": "verbatim", "query": "石根去杂务屋找谁办入职", "gold_turns": [301], "why": "杂务屋原词，答案是姓孙的"}
+{"session": "九幽大陆-20260520-e23032", "kind": "verbatim", "query": "蒸笼铺买的牛肉包子", "gold_turns": [281], "why": "蒸笼铺/牛肉包子原词"}
+{"session": "九幽大陆-20260520-e23032", "kind": "verbatim", "query": "灵貂抱着玩具睡觉", "gold_turns": [278], "why": "逐字；但 20 条同文种子观察也含灵貂，考察重复干扰下的头部精度"}
+{"session": "九幽大陆-20260520-e23032", "kind": "paraphrase", "query": "那条虫子的正经名字叫什么", "gold_turns": [300], "why": "虫子 vs 活物/根骨蛹，零重叠"}
+{"session": "九幽大陆-20260520-e23032", "kind": "paraphrase", "query": "楼里最多肯出多少", "gold_turns": [297], "why": "最多肯出多少 vs 七枚中品灵石是上限"}
+{"session": "九幽大陆-20260520-e23032", "kind": "paraphrase", "query": "我要多少才肯把东西留下", "gold_turns": [299], "why": "一百枚中品灵石那轮；与 t297 的上限是两回事，考察不要混"}
+{"session": "九幽大陆-20260520-e23032", "kind": "paraphrase", "query": "那东西是残的还是整的", "gold_turns": [292], "why": "残/整 vs 碎片且不完整，零重叠"}
+{"session": "九幽大陆-20260520-e23032", "kind": "paraphrase", "query": "谁负责招人", "gold_turns": [300], "why": "招人 vs 人事，答案是赵管事"}
+{"session": "九幽大陆-20260520-e23032", "kind": "paraphrase", "query": "东市有人在打听我", "gold_turns": [305], "why": "打听 vs 打探"}
+{"session": "九幽大陆-20260520-e23032", "kind": "paraphrase", "query": "早上吃了什么", "gold_turns": [281], "why": "早上 vs 早饭；只认吃到的那轮（牛肉包子），t280 只是安排"}
+{"session": "九幽大陆-20260520-e23032", "kind": "paraphrase", "query": "小家伙抱着那个圆东西睡了", "gold_turns": [278], "why": "小家伙 vs 灵貂、圆东西 vs 圆球；同时压 20 条重复种子观察"}
+{"session": "九幽大陆-20260520-e23032", "kind": "paraphrase", "query": "老师傅不肯直接帮我卖，让我去见谁", "gold_turns": [292], "why": "老师傅 vs 钱师傅，见更懂的人即当家"}

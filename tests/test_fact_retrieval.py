@@ -15,7 +15,9 @@ returns something":
   facts are 40 turns old — neither recency nor wording would surface those;
 - **budget + traceability**: hits are capped by count and chars, and every recalled
   line carries its `span` back to the turn that produced it;
-- **corrections**: a superseding fact retires the line it replaces.
+- **corrections**: a superseding fact retires the line it replaces;
+- **labels are not prose**: a character lifted out of an entity name is not evidence
+  about what a fact says (`LabelTokenTests`).
 """
 import sys
 import unittest
@@ -217,7 +219,7 @@ class LaneBalanceTests(unittest.TestCase):
     """The three defects a replay against the live session exposed. Each one let
     near-window noise bury the actual answer — with all three present, retrieval
     scored *below* the bigram baseline it replaces (MRR 0.26 vs 0.87 on the first
-    five queries; the full 21-query bench now reads 0.825 vs 0.759). None of them
+    five queries; the full 57-query bench now reads 0.838 vs 0.700). None of them
     showed up in a fixture small enough to eyeball — hence these are pinned."""
 
     def _log(self):
@@ -252,6 +254,40 @@ class LaneBalanceTests(unittest.TestCase):
         self.assertTrue(any(hit['predicate'] == 'knows' for hit in lane))
         self.assertTrue(any(hit['predicate'] == 'observation' for hit in lane),
                         [(h['predicate'], h['text']) for h in lane])
+
+
+class LabelTokenTests(unittest.TestCase):
+    """An entity label is metadata, not prose.
+
+    A second benchmark save (38 entities, vs 5 on the save the lanes were tuned on)
+    exposed this: the labels appended to a fact's index text were tokenised like
+    prose, so one rare *character* out of a name became a maximal-IDF term describing
+    content it has nothing to do with. On that save the 条 of 扛长条物件少年 (df 1/137)
+    put that NPC's facts at the top of the lexical lane for 那条虫子的正经名字叫什么 —
+    where 条 is a bare measure word."""
+
+    def _log(self):
+        log = FactLog()
+        # The one fact tagged with a label containing 条. Its prose shares nothing
+        # with the queries below.
+        log.commit_turn(_turn('渡口', '几个人从船上卸货，一直忙到天黑', ['扛长条物件少年']), 1)
+        for t in range(2, 7):
+            log.commit_turn(_turn('山道', f'主角独自赶路（第{t}轮）', []), t)
+        return log
+
+    def test_measure_word_does_not_match_a_character_inside_a_name(self):
+        hits = self._log().retrieve('那条虫子的正经名字叫什么', limit=8)
+        lexical = [hit for hit in hits if 'lexical' in hit['lanes']]
+        self.assertFalse(lexical, f'a name character scored the lexical lane: '
+                                  f'{[(h["text"], h["lanes"]) for h in lexical]}')
+
+    def test_the_name_itself_still_matches_lexically(self):
+        # The fix removes stray characters, not the name: whole-surface and bigram
+        # matches are what let "刘婆子铺子里买的是什么" find that shop's facts.
+        hits = self._log().retrieve('扛长条物件的少年卸完货了吗', limit=8)
+        lexical = [hit for hit in hits if 'lexical' in hit['lanes']]
+        self.assertTrue(lexical, _texts(hits))
+        self.assertEqual(lexical[0]['turn'], 1, [(h['turn'], h['text']) for h in lexical])
 
 
 if __name__ == '__main__':

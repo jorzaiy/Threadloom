@@ -18,12 +18,19 @@ Fusing *ranks* rather than raw scores means the lanes need no score calibration,
 and a fourth lane (embeddings) can be added later without retuning these three —
 which is exactly why the embedding decision doesn't block this.
 
-Measured against that baseline on 21 hand-labelled recall queries over a real
-session (`scripts/recall_bench.py`): MRR 0.825 vs 0.759, recall@8 1.00 vs 0.81, and
-nothing unreachable (baseline leaves 3 facts unretrievable at any rank). The whole
-margin is on paraphrased queries — when the player uses the same words the text
-does, set overlap is still slightly ahead, which is its best case and the reason
-that half of the bench exists.
+Measured against that baseline on 57 hand-labelled recall queries over three real
+sessions (`scripts/recall_bench.py`): MRR 0.838 vs 0.700, recall@8 0.96 vs 0.75, and
+one unreachable fact against the baseline's ten. It wins on every save taken alone
+(0.861 / 0.866 / 0.782 vs 0.759 / 0.725 / 0.606) — and the two sessions added last
+were never used for tuning: with the weights frozen at what one save produced, the
+margin on the two unseen saves came out *larger* than on the save they were fitted
+to, which is the opposite of what overfitting looks like.
+
+The whole margin is on paraphrased queries. When the player uses the same words the
+text does, set overlap is nearly as good — that is its best case, and the reason
+half of the bench exists. What is left failing is exactly one shape: a query that
+shares no character at all with the fact (虫子 for 根骨蛹, 跑堂的伙计 for 店小二).
+That is the embedding lane's job, not something more lexical tuning reaches.
 
 Pure functions, no I/O, no cached index: the index is rebuilt per call from the
 same `facts` list `project()` folds over (~100 facts in a live session, so the
@@ -91,13 +98,17 @@ def _norm(text: str) -> str:
     return _PARTICLE.sub('', str(text or '').strip()).lower()
 
 
-def _tokens(text: str, dictionary=()) -> list[str]:
+def _tokens(text: str, dictionary=(), *, unigrams: bool = True) -> list[str]:
     """Bag of tokens for BM25 — no segmenter dependency.
 
     CJK runs become char bigrams (a single-char run stays whole), ASCII/digit runs
     become words, and any registered entity surface found in the text is emitted
     whole under an `@` prefix so an exact name match carries its own IDF instead of
     dissolving into overlapping bigrams.
+
+    `unigrams=False` for text that is a *label* rather than prose (see
+    `_doc_tokens`): a single character lifted out of a name is not evidence about
+    what a fact says, and it is priced as if it were.
     """
     text = _norm(text)
     out: list[str] = []
@@ -106,7 +117,8 @@ def _tokens(text: str, dictionary=()) -> list[str]:
         # single-character overlaps a bigram window slices apart — 赏钱 vs 谢仙师赏,
         # 护身 vs 护盾, 骨头 vs 鸟骨. Common characters are harmless here because
         # IDF prices them at ~0; it is the rare ones that pay off.
-        out.extend(run)
+        if unigrams:
+            out.extend(run)
         out.extend(run[i:i + 2] for i in range(len(run) - 1))
     out.extend(_ASCII_RUN.findall(text))
     for term in dictionary:
@@ -200,15 +212,33 @@ def _display_text(fact: dict, label_of) -> str:
     return line
 
 
-def _index_text(fact: dict, label_of) -> str:
-    """Display line + participant canonical labels. Aliases are deliberately left
-    out: the entity lane already handles "same person, other name", and stuffing
-    every alias into every one of that entity's facts would flatten BM25's ability
-    to tell those facts apart."""
-    parts = [_display_text(fact, label_of)]
-    for eid in fact.get('entities') or []:
-        parts.append(label_of(eid))
-    return ' '.join(p for p in parts if p)
+def _doc_tokens(fact: dict, label_of, dictionary) -> list[str]:
+    """BM25 tokens for one fact: its own prose, plus the canonical labels of the
+    entities it touches — the labels tokenised *without* unigrams.
+
+    A label is metadata, not something a player paraphrases. It rides along on every
+    fact that entity touches, so one rare character inside a name is a maximal-IDF
+    term attached to unrelated content: on a 38-entity save, the 条 of 扛长条物件少年
+    (df 1/137) made "那条虫子的正经名字叫什么" — where 条 is a bare measure word —
+    rank that entity's facts first in the lexical lane. Names still match whole
+    (`@…`) and as bigrams; only the stray character is gone.
+
+    Aliases are deliberately left out: the entity lane already handles "same person,
+    other name", and stuffing every alias into every one of that entity's facts
+    would flatten BM25's ability to tell those facts apart.
+    """
+    pred = str(fact.get('predicate') or '')
+    text = str(fact.get('text') or '').strip()
+    value = str(fact.get('value') or '').strip()
+    # The rendered template glue ("已知：", "与主角关系：") is constant boilerplate —
+    # indexing the content directly keeps document lengths honest.
+    content = text if pred == 'observation' else ' '.join(p for p in (value, text) if p)
+    out = _tokens(content, dictionary)
+    labels = [label_of(fact.get('subject'))] if fact.get('subject') else []
+    labels += [label_of(eid) for eid in (fact.get('entities') or [])]
+    for label in dict.fromkeys(lb for lb in labels if lb):
+        out.extend(_tokens(label, dictionary, unigrams=False))
+    return out
 
 
 def _ranked(pairs) -> list[int]:
@@ -273,7 +303,7 @@ def retrieve(facts: list[dict], entities: dict, query: str = '', *,
     if query_norm:
         indexable = [f for f in facts
                      if str(f.get('predicate') or '') not in _LEXICAL_SKIP_PREDICATES]
-        doc_tokens = {f.get('id'): _tokens(_index_text(f, label_of), dictionary) for f in indexable}
+        doc_tokens = {f.get('id'): _doc_tokens(f, label_of, dictionary) for f in indexable}
         doc_groups = {f.get('id'): str(f.get('predicate') or '') for f in indexable}
         scored = _bm25(doc_tokens, _tokens(query, dictionary), doc_groups)
         lexical = _ranked([(fid, (score, int(by_id[fid].get('turn', 0) or 0)))

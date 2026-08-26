@@ -9,12 +9,18 @@ turns whose facts *should* come back) against two rankers:
                 core of selector.py, which is what long-tail recall used before
     retrieve()  BM25 + entity link + near window, fused by RRF
 
-Two deliberate properties of the label set:
+Three deliberate properties of the label set:
 
 - it is split into **verbatim** and **paraphrase**. Queries written by lifting rare
   words out of the gold text measure the baseline's best case; the actual complaint
   ("同义换个说法就漏召") only shows up on paraphrases, so a single blended number
   hides the thing worth knowing.
+- it spans **several saves**, and every save is also scored on its own. Lane weights
+  fitted to one session can be a loss on the next, and a pooled average is exactly
+  where that would hide. The saves differ in shape on purpose: 93 facts / 5 entities,
+  283 facts of which 218 are `knows` rows, 137 facts / 38 entities with a block of
+  20 identical seed observations — old saves carry that kind of duplicate mass, and
+  production retrieval runs on them.
 - baseline ranks are computed over the facts it can actually score. Where overlap is
   zero the baseline still "returns" the gold fact eventually — that is its recency
   tie-break landing on it by accident, not recall, so `--strict-baseline` (default)
@@ -27,8 +33,10 @@ Usage:
 `--data-root` (or `$THREADLOOM_DATA_ROOT`) at the checkout that actually holds them.
 
 `--gate` exits non-zero unless retrieve() beats the baseline on overall MRR without
-regressing recall@8 — the promotion condition for THREADLOOM_RETRIEVE_V2 (see
-doc/ROADMAP.md P1).
+regressing recall@8, overall or on any single save — the promotion condition for
+THREADLOOM_RETRIEVE_V2 (see doc/ROADMAP.md P1). A per-save MRR dip is printed but
+does not gate: on ~20 queries it moves with a couple of them, while recall@8 is the
+capability floor ("can this be found at all") and should never drop.
 """
 import argparse
 import json
@@ -138,6 +146,7 @@ def main() -> int:
             continue
         gold = set(row['gold_turns'])
         results.append({
+            'session': session_id,
             'kind': row.get('kind', 'unlabelled'),
             'query': row['query'],
             'base': baseline_ranks(log, row['query'], gold, strict=not args.lenient_baseline),
@@ -158,12 +167,28 @@ def main() -> int:
         print(fmt('retrieve() RRF', summarise([r['new'] for r in subset])))
     overall_base = summarise([r['base'] for r in results])
     overall_new = summarise([r['new'] for r in results])
+
+    # Per save, not just pooled: the whole reason the label set spans several
+    # sessions is that a tuning win on one save can be a loss on the next, and a
+    # pooled average is exactly where that hides.
+    per_session = []
+    for session_id in dict.fromkeys(r['session'] for r in results):
+        subset = [r for r in results if r['session'] == session_id]
+        per_session.append((session_id, len(subset),
+                            summarise([r['base'] for r in subset]),
+                            summarise([r['new'] for r in subset])))
+    print(f'\n### per session ({len(per_session)})')
+    for session_id, n, base, new in per_session:
+        print(f'  {session_id}  ({n} queries)')
+        print(fmt('  baseline (bigram)', base))
+        print(fmt('  retrieve() RRF', new))
+
     print('\n### overall')
     print(fmt('baseline (bigram)', overall_base))
     print(fmt('retrieve() RRF', overall_new))
 
     print('\n### per query (rank of first gold fact; · = miss)')
-    for r in sorted(results, key=lambda r: r['kind']):
+    for r in sorted(results, key=lambda r: (r['session'], r['kind'])):
         base = r['base'] if r['base'] else '·'
         new = r['new'] if r['new'] else '·'
         flag = '  <-- worse' if (r['new'] or 999) > (r['base'] or 999) else ''
@@ -171,9 +196,19 @@ def main() -> int:
 
     better_mrr = overall_new['MRR'] > overall_base['MRR']
     no_regression = overall_new['recall@8'] >= overall_base['recall@8']
-    verdict = 'PASS' if (better_mrr and no_regression) else 'FAIL'
+    # recall@8 is "can this be found at all"; MRR is ranking quality and moves with
+    # a couple of queries on a ~20-query save, so only the capability floor gates
+    # per session — a per-session MRR dip is reported, not blocking.
+    sunk = [sid for sid, _, base, new in per_session if new['recall@8'] < base['recall@8']]
+    verdict = 'PASS' if (better_mrr and no_regression and not sunk) else 'FAIL'
     print(f'\nVERDICT {verdict} — MRR {overall_new["MRR"]:.3f} vs {overall_base["MRR"]:.3f}, '
           f'recall@8 {overall_new["recall@8"]:.2f} vs {overall_base["recall@8"]:.2f}')
+    for sid, _, base, new in per_session:
+        if new['MRR'] < base['MRR']:
+            print(f'  note: MRR below baseline on {sid} '
+                  f'({new["MRR"]:.3f} vs {base["MRR"]:.3f}) — advisory, not gating')
+    if sunk:
+        print(f'  recall@8 regressed on: {", ".join(sunk)}')
     if verdict == 'FAIL':
         print('  (promotion condition for THREADLOOM_RETRIEVE_V2 not met — keep injection off)')
     return 1 if (args.gate and verdict == 'FAIL') else 0
