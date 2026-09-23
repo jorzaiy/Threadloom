@@ -686,6 +686,11 @@ def build_narrator_input(context: dict, user_text: str, arbiter_result: Optional
     # --- 构建 system prompt 的各个区块 ---
     blocks = []
 
+    # 0. 世界模拟引擎 — 身份重置 + 世界模拟框架 + 玩家剥离（最高优先级，必须置于所有规则之前）
+    narrator_identity_reset = context.get("narrator_identity_reset", "").strip()
+    if narrator_identity_reset:
+        blocks.append("【世界模拟引擎】\n" + narrator_identity_reset)
+
     # 1. Runtime rules（长期底板规则）
     runtime_rules = context.get('runtime_rules', '').strip()
     if runtime_rules:

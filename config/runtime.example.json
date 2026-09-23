@@ -2,6 +2,7 @@
   "version": 1,
   "sources": {
     "runtime_rules": "prompts/runtime-rules.md",
+    "narrator_identity_reset": "prompts/narrator-identity-reset.md",
     "openclaw_models": "config/providers.json",
     "character_core": "examples/character/character-data.json",
     "lorebook": "examples/character/lorebook.json",
