@@ -1012,6 +1012,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     refresh_policy = cfg.get('refresh_policy', {}) if isinstance(cfg.get('refresh_policy', {}), dict) else {}
 
     runtime_rules = read_text(resolve_source(sources['runtime_rules']))
+    narrator_identity_reset = read_text(resolve_source(sources["narrator_identity_reset"])) if sources.get("narrator_identity_reset") else ""
     state_json = load_state(session_id)
     canon_text = load_canon(session_id)
     summary_text = load_summary(session_id)
@@ -1244,6 +1245,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
 
     return {
         'runtime_rules': runtime_rules,
+        "narrator_identity_reset": narrator_identity_reset,
         'session_context': session_context,
         'character_core': character_core,
         'player_profile_md': player_profile_md,
