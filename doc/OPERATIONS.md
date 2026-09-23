@@ -48,6 +48,7 @@ repair 报告里的常见 `changes[].action`：
 建议流程：先 dry-run 看报告；确认只命中上述可解释维护项后，再加 `--apply`。如果只想修 state/event/chunk，不想碰 keeper archive，可加 `--no-archive-write`；如果 archive 或 summary chunk 本身已经长期漂移，再考虑 `--rebuild-derived`。
 
 继续复用现有 `rp-agent` 资产：
+- 世界模拟引擎身份重置：`prompts/narrator-identity-reset.md`（系统提示词最首块）
 - runtime 规则底板：`prompts/runtime-rules.md`
 - 角色卡：`character/character-data.json`
 - 世界书：`character/lorebook.json`
@@ -446,6 +447,7 @@ server {
   - regenerate / delete-latest-turn：`truncate_after` fact-log，失败 restore 含 `facts.jsonl` / `entities.json`。
   - **手测不必续玩旧长档**：新开短 session，或复制/rebuild 出副本再开 flag；测完改回 `0` 并重启。清单见工作计划「手测」节。
 - 记忆 V2 其它：canonical 可升到专名；persona 在 consolidation 由 `persona_distiller` 提炼锁定（稳定性格 only）。
+- 世界模拟引擎身份重置（`narrator_identity_reset` source）：加载 `prompts/narrator-identity-reset.md`，注入为 narrator system prompt 最首块（【世界模拟引擎】标签）。身份重置 + 世界模拟框架（判断优先级 physics > social norms > NPC personality > player expectations）+ 玩家剥离（narrator = 世界，用户输入 = 行动尝试）。默认开启；删掉 source 或指向空文件即可关闭。旧 `runtime-rules.md` 中的简单破限语言已移除，由本块取代。
 - narrator 模型适配：narrator 模型名含 `grok` 时自动用 `prompts/runtime-rules-grok.md`（去 jailbreak + 鼓励铺陈 + 反套路），其他模型用默认 `runtime-rules.md`；**两版都含反脑补条款**（治 deepseek 等编造既定事实/前情，当下环境铺陈不受限）。换 narrator 模型只改 `model-runtime.json` 的 `narrator.model`，规则自动跟随、无需其他操作。
 - 调试时判断世界书实际注入体量，应优先看 `selected_summary_chars / source_hit_chars / index_hit_chars / foundation_chars / effective_total_chars`，不要只看旧 `total_chars`。
 - 轻量物件状态层已接入：

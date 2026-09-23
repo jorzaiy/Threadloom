@@ -48,6 +48,7 @@ Threadloom 应借鉴的是“**本地 typed graph index + source evidence + budg
 
 Threadloom 已经不是 transcript-only 系统。当前事实面包括：
 
+- `narrator-identity-reset`：世界模拟引擎身份重置（系统提示词最首块）；
 - `runtime-rules`：长期世界运行规则与控制权边界；
 - `character core / lorebook`：角色卡世界设定与候选知识；
 - `state`：当前场景结构化状态；

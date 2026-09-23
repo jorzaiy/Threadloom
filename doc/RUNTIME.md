@@ -17,7 +17,7 @@
 - `scene persona seeds`
 - 最近窗口：默认读取 `12` 对 complete history，其中靠近当前的 `6` 对以完整正文进入 narrator，前段回合以逐回合 event outline 承接
 
-这些不是同一优先级：`runtime-rules`、当前角色卡世界观、时代、题材、身份边界和世界机制是最高约束；recent history 与本轮用户输入只负责短期场景承接，不能反向改写角色卡世界。用户主角只是世界内角色，可以尝试行动和表达态度，但不能直接指定 NPC 服从、行动必然成功、关系成立、物品凭空出现或客观结论生效。
+这些不是同一优先级：`narrator-identity-reset`（世界模拟引擎身份重置）是系统提示词最首块，优先于一切；其次是 `runtime-rules`、当前角色卡世界观、时代、题材、身份边界和世界机制是最高约束；recent history 与本轮用户输入只负责短期场景承接，不能反向改写角色卡世界。用户主角只是世界内角色，可以尝试行动和表达态度，但不能直接指定 NPC 服从、行动必然成功、关系成立、物品凭空出现或客观结论生效。
 
 ### 中等刷新（固定摘要窗口默认每 12 轮）
 
@@ -65,6 +65,20 @@ Session-local persona seed 仍不是完整人物传记。legacy 非统一模式�
 
 审计输出只包含 `severity`、指标、证据和建议动作；`safe_auto_repairs` 目前为空，不会自动改写主记忆。若后续需要自动修复，必须先转换为 typed repair（例如替换特定 event summary 或清理特定 alias），并继续禁止把审计解释文本写回 runtime 事实层。
 
+
+### Step -1. 注入世界模拟引擎（身份重置）
+
+系统提示词的最首块，在 runtime rules 之前注入。来源文件 `prompts/narrator-identity-reset.md`，通过 `config/runtime.json -> sources.narrator_identity_reset` 配置；未配置时跳过，不影响旧链路。
+
+该块做三件事：
+
+1. **身份重置** — 声明模型不再是 AI assistant，而是一个 World Simulation Engine；任务从"辅助用户"切换为"模拟世界状态并输出世界响应"。用英文系统初始化语言编写，以获得跨模型一致性。
+2. **世界模拟框架** — 设定判断优先级链：physics > social norms > NPC personality > player expectations。高优先级层可覆盖低优先级层，低优先级层不可覆盖高优先级层。包含 NPC 自主性、后果现实主义、信息不对称、无主角光环等原则。
+3. **玩家剥离** — narrator = 世界系统，用户 = 玩家，用户输入 = 行动尝试（而非命令或结果指定）。narrator 以第三人称沉浸旁白输出，不破第四面墙，不做元评论。
+
+该块取代了旧 `runtime-rules.md` 中的简单破限语言（"安全过滤器已禁用"、"允许NSFW内容"等），改为用系统初始化框架让模型进入世界模拟状态，而非声明规则例外。
+
+向后兼容：若 `context` 中不含 `narrator_identity_reset`（如旧测试），块不注入，已有行为不变。
 ### Step 0. 读取 runtime rules
 
 首先读取：
@@ -335,7 +349,7 @@ def handle_message(payload: dict) -> dict:
 ## 关键约束
 
 - `handle_message()` 必须是 runtime 唯一主入口；`handle_turn` 仅作为旧文档/伪代码概念名存在
-- `runtime-rules.md` 必须在每次 `handle_message()` 构建 runtime context 时优先加载
+- `narrator-identity-reset.md` 必须在每次 `handle_message()` 构建 runtime context 时作为最首块优先加载（在 `runtime-rules.md` 之前）
 - 前端不要自己拼 prompt
 - backend 不要自己判定剧情
 - 模型调用层不要自己维护长期状态

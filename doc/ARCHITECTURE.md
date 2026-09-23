@@ -107,7 +107,7 @@
 ### Runtime
 
 负责：
-- 启动时优先读取 `prompts/runtime-rules.md`
+- 启动时优先读取 `prompts/narrator-identity-reset.md`（世界模拟引擎身份重置，系统提示词最首块）和 `prompts/runtime-rules.md`
 - 读取事实源
 - 解析当前 turn
 - 必要时裁定
@@ -119,6 +119,7 @@
 - `summary` 当前仍保留为 session-local 写回 / 调试产物
 - `summary` 当前不再作为 narrator 主输入
 - narrator 当前主输入收敛为：
+  - `narrator-identity-reset`（世界模拟引擎身份重置，最首块）
   - `runtime-rules`、当前角色卡核心与世界设定锁
   - 最近 `12` 对 turn 的 rolling window，作为短期场景事实而不是最高世界事实
   - 命中的 keeper archive 结构记录
@@ -243,19 +244,20 @@ mem0 的定位是 AI agent 的通用长期记忆层：从对话中自动提取�
 
 `runtime-first` 版本的启动顺序应固定为：
 
-1. `prompts/runtime-rules.md`
-2. `character/character-data.json`
-3. active preset
-4. `character/lorebook.json`
-5. `memory/canon.md`
-6. session-local `state.json` / actor registry / item 与 knowledge 账本
-7. relevant `memory/npcs/*.md`；缺失时可回落到当前 session persona seed
-8. 世界书 foundation + selector 命中的情境世界书回源片段
-9. 最近窗口：前段逐回合提纲 + 最近完整正文
-10. keeper archive / summary chunk 条件 recall 命中
+1. `prompts/narrator-identity-reset.md`（世界模拟引擎身份重置）
+2. `prompts/runtime-rules.md`
+3. `character/character-data.json`
+4. active preset
+5. `character/lorebook.json`
+6. `memory/canon.md`
+7. session-local `state.json` / actor registry / item 与 knowledge 账本
+8. relevant `memory/npcs/*.md`；缺失时可回落到当前 session persona seed
+9. 世界书 foundation + selector 命中的情境世界书回源片段
+10. 最近窗口：前段逐回合提纲 + 最近完整正文
+11. keeper archive / summary chunk 条件 recall 命中
 
 原则：
-- `runtime-rules.md` 必须先于其他上下文被加载
+- `narrator-identity-reset.md` 必须先于 `runtime-rules.md` 和所有其他上下文被加载
 - 它是 runtime 的长期底板，不依赖未注入的会话惯性；但每轮必须服从已注入的本轮输入与最近上下文
 
 ## 真相源顺序
@@ -353,7 +355,7 @@ mem0 的定位是 AI agent 的通用长期记忆层：从对话中自动提取�
 当前 preset 已重新定位为“节奏 / 镜头 / 注入预算调制器”，而不是世界真相或事实边界的主来源：
 - 默认 preset 名称由 `config/runtime.json -> sources.active_preset` 指定；当前主配置为 `world-sim-core`
 - preset 文件通过 `backend/paths.py` 的分层路径解析加载，不再承诺固定用户目录路径
-- 主角控制权、知情边界、世界自主流转等长期规则，应放在 `runtime-rules.md`
+- 身份重置与世界模拟框架由 `narrator-identity-reset.md` 负责（最首块）；主角控制权、知情边界、世界自主流转等长期规则，应放在 `runtime-rules.md`
 
 不应成为主真相源：
 - 超长聊天 transcript

@@ -24,6 +24,7 @@ online session
 ```text
 web input
   -> runtime handler
+  -> narrator_identity_reset (世界模拟引擎身份重置)
   -> runtime rules
   -> card / preset / lore / canon / state / persona / recent window / keeper archive
   -> narrator
@@ -33,7 +34,7 @@ web input
 ```
 
 关键差异：
-- `runtime-rules` 与当前角色卡世界设定是 narrator 的最高约束；`state` 是当前场景的结构化承接层，`summary` 不再是 narrator 主输入。
+- `narrator-identity-reset`（世界模拟引擎身份重置）是系统提示词最首块，优先于一切；其次 `runtime-rules` 与当前角色卡世界设定是 narrator 的最高约束；`state` 是当前场景的结构化承接层，`summary` 不再是 narrator 主输入。
 - `history` 只保留最近窗口承接，不再承担完整骨架职责；narrator 现在用“最近完整正文 + 前段逐回合提纲”桥接同一窗口内较早回合，避免大段 prose 淹没关键事实。
 - 更早历史优先收敛成 keeper archive，而不是自由摘要层。
 - 写回时先收口到结构化状态；`summary` 可继续保留为调试/运维产物，但不再主导 narrator。
