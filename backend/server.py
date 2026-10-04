@@ -685,6 +685,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         from simple_memory import (
             build_memory_context,
+            clean_stale_regenerating_flags,
             job_status,
             load_big_summaries,
             load_simple_state,
@@ -692,6 +693,7 @@ class Handler(BaseHTTPRequestHandler):
             load_turn_summaries,
             _memory_thresholds,
         )
+        clean_stale_regenerating_flags(session_id)
         big_every, super_every = _memory_thresholds()
         state = load_simple_state(session_id)
         turn_summaries = load_turn_summaries(session_id)

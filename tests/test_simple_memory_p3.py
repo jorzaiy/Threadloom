@@ -106,6 +106,8 @@ def p3_env(tmp_path, monkeypatch):
     }])
 
     yield {'tmp': tmp_path}
+    from simple_memory import cancel_and_wait
+    cancel_and_wait(SESSION_P3)
 
 
 def test_get_memory_api(p3_env):

@@ -88,6 +88,7 @@ def test_failed_big_summary_regenerate_keeps_old_content_in_context(p3_env, monk
     """
     # 清空超级总结，使大总结 B1 处于活跃呈现状态（不在超级总结之后被吸收）
     save_super_summaries(SESSION_P3, [])
+    monkeypatch.setattr('simple_memory.enqueue_regenerate_job', lambda *a, **k: None)
 
     # 当前已有一份 B1 大总结，内容为 "## 剧情\n大总结1"
     ctx_before = build_memory_context(SESSION_P3)
@@ -152,4 +153,83 @@ def test_regenerate_old_turn_does_not_clear_latest_arbiter(p3_env, monkeypatch):
 
     # 验证第 5 轮的裁定没有被冲掉成 (1, None)
     assert simple_memory._LATEST_ARBITER[SESSION_P3] == (5, [{'event_id': 'evt_005'}])
+
+
+def test_clean_stale_regenerating_flags_on_restart(p3_env):
+    """服务重启（无后台活动任务）后，访问 /api/memory 自动清理遗留的 regenerating 标记。"""
+    from simple_memory import clean_stale_regenerating_flags
+    # 模拟重启前遗留的 regenerating=True
+    bigs = load_big_summaries(SESSION_P3)
+    bigs[0]['regenerating'] = True
+    save_big_summaries(SESSION_P3, bigs)
+
+    supers = load_super_summaries(SESSION_P3)
+    supers[0]['regenerating'] = True
+    save_super_summaries(SESSION_P3, supers)
+
+    h = DummyHandler()
+    h._get_memory(None, {'session_id': [SESSION_P3]})
+    assert h.response_status == 200
+
+    # 验证已经被自动清除
+    loaded_bigs = load_big_summaries(SESSION_P3)
+    assert loaded_bigs[0].get('regenerating') is False
+    loaded_supers = load_super_summaries(SESSION_P3)
+    assert loaded_supers[0].get('regenerating') is False
+
+
+def test_parse_json_from_reply_robustness():
+    """解析模型返回的各种带代码块或闲聊的 JSON 串。"""
+    from simple_memory import _parse_json_from_reply
+
+    # 1. 干净 JSON
+    res = _parse_json_from_reply('{"summary": "ok", "state": {}}')
+    assert res['summary'] == 'ok'
+
+    # 2. ```json 包裹
+    res = _parse_json_from_reply('```json\n{"summary": "fenced", "state": {}}\n```')
+    assert res['summary'] == 'fenced'
+
+    # 3. 前后带闲聊
+    res = _parse_json_from_reply('好的，这是提取的小结：\n```json\n{"summary": "chatter", "state": {}}\n```\n希望对你有用！')
+    assert res['summary'] == 'chatter'
+
+
+def test_manual_edit_during_generation_is_not_overwritten(p3_env, monkeypatch):
+    """用户在后台生成期间手动保存了小结，后台生成结果不覆盖用户的修改。"""
+    from simple_memory import _process_turn_summary
+
+    t_rec = {
+        'turn': 1,
+        'turn_id': 'turn-0001',
+        'reply_hash': 'sha_test',
+        'status': 'pending',
+    }
+
+    # 模拟生成函数产生的结果
+    monkeypatch.setattr('simple_memory.generate_turn_summary', lambda sid, t, **k: {
+        'turn': 1,
+        'turn_id': 'turn-0001',
+        'reply_hash': 'sha_test',
+        'status': 'ok',
+        'summary': '模型生成的小结',
+        'state_after': {'location': '旧地'},
+        'edited': False,
+    })
+    monkeypatch.setattr('simple_memory._current_reply_hash', lambda sid, t: 'sha_test')
+
+    # 在锁前模拟用户手动编辑并保存
+    current = load_turn_summaries(SESSION_P3)[0]
+    current['summary'] = '用户手动写的高优先级小结'
+    current['edited'] = True
+    save_turn_summaries(SESSION_P3, [current])
+
+    # 后台任务完成返回
+    _process_turn_summary(SESSION_P3, t_rec, None)
+
+    # 验证最终记录依然是用户手动写的小结，没有被模型结果覆盖
+    loaded = load_turn_summaries(SESSION_P3)[0]
+    assert loaded['summary'] == '用户手动写的高优先级小结'
+    assert loaded['edited'] is True
+
 

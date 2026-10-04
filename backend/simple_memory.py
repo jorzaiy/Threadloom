@@ -244,8 +244,20 @@ def save_simple_state(session_id: str, state_data: dict) -> None:
     risks = state_data.get('risks')
     if risks is None:
         risks = state_data.get('immediate_risks', [])
+    # items 保护处理
+    items_raw = state_data.get('items')
+    if isinstance(items_raw, dict):
+        items_raw = [items_raw]
+    elif not isinstance(items_raw, list):
+        items_raw = []
+
     # secrets 最多保留 8 条
-    secrets_raw = list(state_data.get('secrets', []) or [])
+    secrets_raw = state_data.get('secrets')
+    if isinstance(secrets_raw, dict):
+        secrets_raw = [secrets_raw]
+    elif not isinstance(secrets_raw, list):
+        secrets_raw = load_simple_state(session_id).get('secrets', []) if 'secrets' not in state_data else []
+
     cleaned_secrets = []
     for s in secrets_raw:
         if isinstance(s, dict) and s.get('content'):
@@ -266,7 +278,7 @@ def save_simple_state(session_id: str, state_data: dict) -> None:
         'onstage': list(onstage or []),
         'goal': goal,
         'risks': list(risks or []),
-        'items': list(state_data.get('items', []) or []),
+        'items': items_raw,
         'secrets': trimmed_secrets,
         'opening_mode': state_data.get('opening_mode', 'direct'),
         'opening_resolved': bool(state_data.get('opening_resolved', True)),
@@ -585,6 +597,29 @@ def verify_and_restore_stars(new_content: str, prev_content: str) -> tuple[str, 
 # 同步生成函数 (Generation Functions)
 # ---------------------------------------------------------------------------
 
+def _parse_json_from_reply(text: str) -> dict:
+    s = str(text or '').strip()
+    if s.startswith('```'):
+        s = re.sub(r'^```(?:json)?\s*', '', s)
+        s = re.sub(r'\s*```$', '', s).strip()
+    try:
+        data = json.loads(s)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    first = s.find('{')
+    last = s.rfind('}')
+    if first != -1 and last != -1 and last > first:
+        try:
+            data = json.loads(s[first:last + 1])
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    raise ValueError(f"Could not extract valid JSON object from model reply: {text[:200]}")
+
+
 def generate_turn_summary(session_id: str, turn: int, *, arbiter_result: Optional[dict] = None) -> dict:
     """一次模型调用，同时产出 summary 和 state。"""
     pair = load_history_turn_pair(session_id, turn)
@@ -636,12 +671,7 @@ def generate_turn_summary(session_id: str, turn: int, *, arbiter_result: Optiona
     model_cfg['response_format'] = {'type': 'json_object'}
 
     reply, usage = call_model(model_cfg, system_prompt, user_prompt)
-    reply_clean = reply.strip()
-    if reply_clean.startswith('```'):
-        reply_clean = re.sub(r'^```(?:json)?\s*', '', reply_clean)
-        reply_clean = re.sub(r'\s*```$', '', reply_clean)
-
-    parsed = json.loads(reply_clean)
+    parsed = _parse_json_from_reply(reply)
     summary_text = str(parsed.get('summary', '') or '').strip()
     raw_state = parsed.get('state', {}) if isinstance(parsed.get('state'), dict) else {}
 
@@ -918,6 +948,9 @@ def _process_turn_summary(session_id: str, t_rec: dict, arbiter_for_turn: Option
             result, error = None, RuntimeError('reply changed since placeholder was written')
 
         if result is not None:
+            if current.get('edited'):
+                logger.info("Discarding turn summary for turn %d (user manually edited it)", t_num)
+                return
             upsert_turn_summary(session_id, result)
             # 只有在这一轮仍是最新一轮时才更新全局 state.json
             latest_turns = load_turn_summaries(session_id)
@@ -1114,6 +1147,8 @@ def cancel_and_wait(session_id: str, timeout_s: float = 5.0) -> None:
     """
     with _FUTURES_LOCK:
         _RERUN_REQUESTED.discard(session_id)
+        _REGEN_JOBS.pop(session_id, None)
+        _LATEST_ARBITER.pop(session_id, None)
         future = _SESSION_FUTURES.get(session_id)
     if not future:
         return
@@ -1122,6 +1157,32 @@ def cancel_and_wait(session_id: str, timeout_s: float = 5.0) -> None:
         future.result(timeout=timeout_s)
     except Exception:
         pass
+
+
+def clean_stale_regenerating_flags(session_id: str) -> None:
+    """清理服务重启后遗留的 regenerating 标记（若后台没有该会话的活动任务）。"""
+    with _FUTURES_LOCK:
+        future = _SESSION_FUTURES.get(session_id)
+        running = bool(future and not future.done())
+    if not running:
+        with _MEMORY_LOCK:
+            bigs = load_big_summaries(session_id)
+            changed_bigs = False
+            for b in bigs:
+                if b.get('regenerating'):
+                    b['regenerating'] = False
+                    changed_bigs = True
+            if changed_bigs:
+                save_big_summaries(session_id, bigs)
+
+            supers = load_super_summaries(session_id)
+            changed_supers = False
+            for s in supers:
+                if s.get('regenerating'):
+                    s['regenerating'] = False
+                    changed_supers = True
+            if changed_supers:
+                save_super_summaries(session_id, supers)
 
 
 _REGEN_JOBS: dict[str, list[dict]] = {}

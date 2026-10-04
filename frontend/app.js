@@ -2192,14 +2192,20 @@ stateEditForm?.addEventListener('submit', async (e) => {
   let secrets = [];
   try {
     const rawItems = document.getElementById('stateEditItems').value.trim();
-    if (rawItems) items = JSON.parse(rawItems);
+    if (rawItems) {
+      const parsed = JSON.parse(rawItems);
+      items = Array.isArray(parsed) ? parsed : [parsed];
+    }
   } catch (err) {
     alert('重要物品 JSON 格式错误: ' + err.message);
     return;
   }
   try {
     const rawSecrets = document.getElementById('stateEditSecrets').value.trim();
-    if (rawSecrets) secrets = JSON.parse(rawSecrets);
+    if (rawSecrets) {
+      const parsed = JSON.parse(rawSecrets);
+      secrets = Array.isArray(parsed) ? parsed : [parsed];
+    }
   } catch (err) {
     alert('秘密与知情 JSON 格式错误: ' + err.message);
     return;
