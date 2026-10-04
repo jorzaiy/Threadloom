@@ -275,6 +275,12 @@ def save_simple_state(session_id: str, state_data: dict) -> None:
     }
     with _MEMORY_LOCK:
         atomic_write_json(path, clean_state)
+        # 同步更新最新一条小结记录的 state_after，确保下一轮小结生成时基于手动修改后的最新状态
+        turns = load_turn_summaries(session_id)
+        if turns:
+            latest = turns[-1]
+            latest['state_after'] = copy.deepcopy(clean_state)
+            save_turn_summaries(session_id, turns)
 
 
 # ---------------------------------------------------------------------------
@@ -370,8 +376,9 @@ def build_memory_context(session_id: str, *, max_memory_chars: int = 40000, curr
     3. 【近期逐轮小结】最后一份总结 covered_end-9 之后的所有小结
     4. 【当前状态】state.json 渲染
     """
-    supers = [s for s in load_super_summaries(session_id) if s.get('status') == 'ok' and s.get('content')]
-    bigs = [b for b in load_big_summaries(session_id) if b.get('status') == 'ok' and b.get('content')]
+    # 总结读取：包含 status=ok 以及处于 regenerating=True 重生成过程中的旧内容（失败保留旧内容）
+    supers = [s for s in load_super_summaries(session_id) if (s.get('status') == 'ok' or s.get('content')) and s.get('content')]
+    bigs = [b for b in load_big_summaries(session_id) if (b.get('status') == 'ok' or b.get('content')) and b.get('content')]
     turn_summaries = load_turn_summaries(session_id)
     state = load_simple_state(session_id)
 
@@ -736,9 +743,10 @@ def generate_big_summary(session_id: str, index: int, *, big_every: int | None =
 
     interval_turn_summaries = '\n'.join(summaries_text_lines)
 
-    # 上一份大总结
+    # 上一份大总结：按 index - 1 找前序总结，避免拿当前总结自己或更后面的总结
     bigs = load_big_summaries(session_id)
-    prev_big_content = bigs[-1].get('content', '') if bigs else "暂无上一份大总结"
+    prev_big_record = next((b for b in bigs if int(b.get('index', 0) or 0) == index - 1), None)
+    prev_big_content = prev_big_record.get('content', '') if prev_big_record else "暂无上一份大总结"
 
     state = load_simple_state(session_id)
     template = _load_prompt_template('big-summary.md')
@@ -802,7 +810,8 @@ def generate_super_summary(session_id: str, index: int, *, big_every: int | None
     bigs_text = '\n\n---\n\n'.join(f"### 大总结 B{b.get('index')}\n{b.get('content')}" for b in interval_bigs)
 
     supers = load_super_summaries(session_id)
-    prev_super_content = supers[-1].get('content', '') if supers else "暂无上一份超级总结"
+    prev_super_record = next((s for s in supers if int(s.get('index', 0) or 0) == index - 1), None)
+    prev_super_content = prev_super_record.get('content', '') if prev_super_record else "暂无上一份超级总结"
 
     template = _load_prompt_template('super-summary.md')
     user_prompt = fill_prompt_template(template, 
@@ -992,6 +1001,56 @@ def _run_session_memory_job(session_id: str, user_id: str, character_id: str) ->
                             save_super_summaries(session_id, cur_supers)
                 except Exception:
                     logger.exception("Failed to generate super summary %d", next_super_index)
+            # 4. 执行由 regenerate 接口投递的主动重生成任务
+            with _FUTURES_LOCK:
+                my_regen_jobs = _REGEN_JOBS.pop(session_id, [])
+            for r_job in my_regen_jobs:
+                j_type = r_job.get('type')
+                t_id = int(r_job.get('target_id', 0) or 0)
+                if j_type == 'big_summary':
+                    try:
+                        res = generate_big_summary(session_id, t_id, big_every=big_every)
+                        with session_lock(session_id):
+                            cur_bigs = load_big_summaries(session_id)
+                            for i, b in enumerate(cur_bigs):
+                                if int(b.get('index', 0) or 0) == t_id:
+                                    res['regenerating'] = False
+                                    cur_bigs[i] = res
+                                    break
+                            save_big_summaries(session_id, cur_bigs)
+                    except Exception as err:
+                        logger.exception("Failed regenerating big summary %d", t_id)
+                        with session_lock(session_id):
+                            cur_bigs = load_big_summaries(session_id)
+                            for b in cur_bigs:
+                                if int(b.get('index', 0) or 0) == t_id:
+                                    b['status'] = 'failed'
+                                    b['regenerating'] = False
+                                    b['error'] = str(err)
+                                    break
+                            save_big_summaries(session_id, cur_bigs)
+                elif j_type == 'super_summary':
+                    try:
+                        res = generate_super_summary(session_id, t_id, big_every=big_every, super_every=super_every)
+                        with session_lock(session_id):
+                            cur_supers = load_super_summaries(session_id)
+                            for i, s in enumerate(cur_supers):
+                                if int(s.get('index', 0) or 0) == t_id:
+                                    res['regenerating'] = False
+                                    cur_supers[i] = res
+                                    break
+                            save_super_summaries(session_id, cur_supers)
+                    except Exception as err:
+                        logger.exception("Failed regenerating super summary %d", t_id)
+                        with session_lock(session_id):
+                            cur_supers = load_super_summaries(session_id)
+                            for s in cur_supers:
+                                if int(s.get('index', 0) or 0) == t_id:
+                                    s['status'] = 'failed'
+                                    s['regenerating'] = False
+                                    s['error'] = str(err)
+                                    break
+                            save_super_summaries(session_id, cur_supers)
         finally:
             reset_active_character_override(token)
             with _FUTURES_LOCK:
@@ -1064,91 +1123,21 @@ def cancel_and_wait(session_id: str, timeout_s: float = 5.0) -> None:
         pass
 
 
-def enqueue_turn_summary_job(session_id: str, turn: int, *, force: bool = False) -> None:
-    """供重新生成小结接口使用的单独调度函数。"""
+_REGEN_JOBS: dict[str, list[dict]] = {}
+
+
+def enqueue_regenerate_job(session_id: str, job_type: str, target_id: int) -> None:
+    """将重新生成任务（big_summary / super_summary）排入主 worker 队列，统一走锁与 session future 管控。"""
     user_id = active_user_id()
     char_id = active_character_id()
-
-    def _job():
-        with active_user_context(user_id):
-            token = set_active_character_override(char_id)
-            try:
-                result = generate_turn_summary(session_id, turn)
-                with session_lock(session_id):
-                    upsert_turn_summary(session_id, result)
-                    latest_turns = load_turn_summaries(session_id)
-                    if latest_turns and int(latest_turns[-1].get('turn', 0) or 0) == turn:
-                        save_simple_state(session_id, result['state_after'])
-            except Exception as err:
-                logger.exception("Failed in enqueue_turn_summary_job for turn %d", turn)
-                with session_lock(session_id):
-                    rec = _find_turn_record(session_id, turn)
-                    if rec:
-                        rec['status'] = 'failed'
-                        rec['error'] = str(err)
-                        upsert_turn_summary(session_id, rec)
-            finally:
-                reset_active_character_override(token)
-
-    _EXECUTOR.submit(_job)
-
-
-def enqueue_big_summary_job(session_id: str, index: int, *, force: bool = False) -> None:
-    """供重新生成大总结接口使用的单独调度函数。"""
-    user_id = active_user_id()
-    char_id = active_character_id()
-
-    def _job():
-        with active_user_context(user_id):
-            token = set_active_character_override(char_id)
-            try:
-                result = generate_big_summary(session_id, index)
-                with session_lock(session_id):
-                    cur_bigs = load_big_summaries(session_id)
-                    found = False
-                    for i, b in enumerate(cur_bigs):
-                        if int(b.get('index', 0) or 0) == index:
-                            cur_bigs[i] = result
-                            found = True
-                            break
-                    if not found:
-                        cur_bigs.append(result)
-                    save_big_summaries(session_id, cur_bigs)
-            except Exception:
-                logger.exception("Failed in enqueue_big_summary_job for index %d", index)
-            finally:
-                reset_active_character_override(token)
-
-    _EXECUTOR.submit(_job)
-
-
-def enqueue_super_summary_job(session_id: str, index: int, *, force: bool = False) -> None:
-    """供重新生成超级总结接口使用的单独调度函数。"""
-    user_id = active_user_id()
-    char_id = active_character_id()
-
-    def _job():
-        with active_user_context(user_id):
-            token = set_active_character_override(char_id)
-            try:
-                result = generate_super_summary(session_id, index)
-                with session_lock(session_id):
-                    cur_supers = load_super_summaries(session_id)
-                    found = False
-                    for i, s in enumerate(cur_supers):
-                        if int(s.get('index', 0) or 0) == index:
-                            cur_supers[i] = result
-                            found = True
-                            break
-                    if not found:
-                        cur_supers.append(result)
-                    save_super_summaries(session_id, cur_supers)
-            except Exception:
-                logger.exception("Failed in enqueue_super_summary_job for index %d", index)
-            finally:
-                reset_active_character_override(token)
-
-    _EXECUTOR.submit(_job)
+    with _FUTURES_LOCK:
+        job_list = _REGEN_JOBS.setdefault(session_id, [])
+        job_list.append({'type': job_type, 'target_id': target_id})
+        existing = _SESSION_FUTURES.get(session_id)
+        if existing and not existing.done():
+            _RERUN_REQUESTED.add(session_id)
+            return
+        _SESSION_FUTURES[session_id] = _EXECUTOR.submit(_run_session_memory_job, session_id, user_id, char_id)
 
 
 def job_status(session_id: str) -> dict:

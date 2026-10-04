@@ -699,13 +699,12 @@ class Handler(BaseHTTPRequestHandler):
         super_summaries = load_super_summaries(session_id)
         status = job_status(session_id)
 
-        # 进度计算
-        completed_turns = len([t for t in turn_summaries if t.get('status') == 'ok'])
-        next_big_idx = len(big_summaries) + 1
-        current_big_progress = completed_turns % big_every
+        # 进度计算：按轮次到达进度（max_turn % big_every）计算，避免失败小结导致进度不符
+        max_turn = max((int(t.get('turn', 0) or 0) for t in turn_summaries), default=0)
+        current_big_progress = max_turn % big_every
         big_progress_str = f"小结 {current_big_progress}/{big_every}"
 
-        ok_bigs = len([b for b in big_summaries if b.get('status') == 'ok'])
+        ok_bigs = len([b for b in big_summaries if b.get('status') == 'ok' or b.get('content')])
         current_super_progress = ok_bigs % super_every
         super_progress_str = f"大总结 {current_super_progress}/{super_every}"
 
@@ -1049,7 +1048,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._invalid_input('turn must be an integer')
         force = bool(payload.get('force', False))
 
-        from simple_memory import load_turn_summaries, enqueue_turn_summary_job
+        from simple_memory import load_turn_summaries, upsert_turn_summary, enqueue_after_turn
         with self._session_lock(session_id):
             turns = load_turn_summaries(session_id)
             target = next((t for t in turns if int(t.get('turn', 0) or 0) == turn), None)
@@ -1059,10 +1058,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, {'error': {'code': 'CONFLICT', 'message': 'turn summary has been edited; confirm with force'}})
 
             target['status'] = 'pending'
-            from simple_memory import upsert_turn_summary
+            target['retry_count'] = 0
             upsert_turn_summary(session_id, target)
 
-        enqueue_turn_summary_job(session_id, turn, force=force)
+        enqueue_after_turn(session_id, turn)
         return self._send(200, {'session_id': session_id, 'turn': turn, 'status': 'pending'})
 
     def _post_memory_big_summary(self, parsed, payload):
@@ -1104,7 +1103,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._invalid_input('index must be an integer')
         force = bool(payload.get('force', False))
 
-        from simple_memory import load_big_summaries, save_big_summaries, enqueue_big_summary_job
+        from simple_memory import load_big_summaries, save_big_summaries, enqueue_regenerate_job
         with self._session_lock(session_id):
             bigs = load_big_summaries(session_id)
             target = next((b for b in bigs if int(b.get('index', 0) or 0) == index), None)
@@ -1112,10 +1111,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': f'big summary {index} not found'}})
             if target.get('edited') and not force:
                 return self._send(409, {'error': {'code': 'CONFLICT', 'message': 'big summary has been edited; confirm with force'}})
-            target['status'] = 'pending'
+            # 重新生成期间保留旧内容与 ok 状态，标记 regenerating=True，避免从记忆上下文消失
+            target['regenerating'] = True
             save_big_summaries(session_id, bigs)
 
-        enqueue_big_summary_job(session_id, index, force=force)
+        enqueue_regenerate_job(session_id, 'big_summary', index)
         return self._send(200, {'session_id': session_id, 'index': index, 'status': 'pending'})
 
     def _post_memory_super_summary(self, parsed, payload):
@@ -1157,7 +1157,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._invalid_input('index must be an integer')
         force = bool(payload.get('force', False))
 
-        from simple_memory import load_super_summaries, save_super_summaries, enqueue_super_summary_job
+        from simple_memory import load_super_summaries, save_super_summaries, enqueue_regenerate_job
         with self._session_lock(session_id):
             supers = load_super_summaries(session_id)
             target = next((s for s in supers if int(s.get('index', 0) or 0) == index), None)
@@ -1165,10 +1165,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': f'super summary {index} not found'}})
             if target.get('edited') and not force:
                 return self._send(409, {'error': {'code': 'CONFLICT', 'message': 'super summary has been edited; confirm with force'}})
-            target['status'] = 'pending'
+            target['regenerating'] = True
             save_super_summaries(session_id, supers)
 
-        enqueue_super_summary_job(session_id, index, force=force)
+        enqueue_regenerate_job(session_id, 'super_summary', index)
         return self._send(200, {'session_id': session_id, 'index': index, 'status': 'pending'})
 
     def _post_session_audit(self, parsed, payload):

@@ -380,45 +380,9 @@ def _marker_supported_for_npc(marker: str, known_text: str, spoken_user_text: st
 
 
 def _unsupported_npc_private_knowledge_reason(reply: str, system_prompt: str, user_text: str = '') -> str:
-    guard = _extract_onstage_guard_knowledge(system_prompt)
-    if not guard:
-        return ''
-    body = str(reply or '')
-    if not body.strip():
-        return ''
-    current_user_text = _extract_current_user_text(user_text)
-    spoken_user_text = _extract_user_spoken_text(current_user_text)
-    names = list(guard)
-    single_onstage = len(names) == 1
-
-    def leaking_marker(text: str, known: str) -> str:
-        for marker in NPC_PRIVATE_PROBE_MARKERS:
-            if marker in text and not _marker_supported_for_npc(marker, known, spoken_user_text):
-                return marker
-        return ''
-
-    for match in re.finditer(r'[“"]([^”"\n]{1,180})[”"]', body):
-        quote = match.group(1)
-        if not any(marker in quote for marker in NPC_PRIVATE_PROBE_MARKERS):
-            continue
-        prefix = body[max(0, match.start() - 90):match.start()]
-        candidates = [name for name in names if name in prefix]
-        if single_onstage and '陆小环' not in prefix:
-            candidates = candidates or names
-        for name in candidates:
-            marker = leaking_marker(quote, guard.get(name, ''))
-            if marker:
-                return 'npc_private_knowledge_leak'
-
-    for name, known in guard.items():
-        for sentence in re.split(r'(?<=[。！？!?])', body):
-            if name not in sentence:
-                continue
-            if not any(verb in sentence for verb in ('问', '说', '追问', '开口', '提起', '点破')):
-                continue
-            marker = leaking_marker(sentence, known)
-            if marker:
-                return 'npc_private_knowledge_leak'
+    # Memory V3 / P2.5 说明：
+    # 旧版本依赖【当前在场 NPC 知情核对】区块做硬性正则关键词拦截。该旧区块在 V3 中已移除，
+    # 改由【知情边界】白名单规则与当前状态中的 secrets 约束模型输出，故本旧校验已停用，直接返回空串。
     return ''
 
 

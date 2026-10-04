@@ -536,7 +536,10 @@ async function apiJson(url, options = {}) {
     throw new Error(data?.error?.message || '请先登录');
   }
   if (!res.ok) {
-    throw new Error(data?.error?.message || `request failed: ${url}`);
+    const error = new Error(data?.error?.message || `request failed: ${url}`);
+    error.status = res.status;
+    error.data = data;
+    throw error;
   }
   return data;
 }
@@ -1407,7 +1410,7 @@ function stopMemoryPolling() {
 function startMemoryPolling() {
   if (memoryPollInterval) return;
   memoryPollInterval = setInterval(async () => {
-    if (!sessionId() || debugFloatPanel?.getAttribute('aria-hidden') === 'true') {
+    if (!sessionId() || debugFloatPanel?.dataset.open !== 'true') {
       stopMemoryPolling();
       return;
     }
@@ -2147,13 +2150,19 @@ settingsBackdrop?.addEventListener('click', closeSettings);
 })();
 
 function openDebugPanel() {
-  if (debugFloatPanel) debugFloatPanel.dataset.open = 'true';
+  if (debugFloatPanel) {
+    debugFloatPanel.dataset.open = 'true';
+    debugFloatPanel.setAttribute('aria-hidden', 'false');
+  }
   if (debugBackdrop) debugBackdrop.hidden = false;
   loadMemory();
 }
 
 function closeDebugPanel() {
-  if (debugFloatPanel) debugFloatPanel.dataset.open = 'false';
+  if (debugFloatPanel) {
+    debugFloatPanel.dataset.open = 'false';
+    debugFloatPanel.setAttribute('aria-hidden', 'true');
+  }
   if (debugBackdrop) debugBackdrop.hidden = true;
   stopMemoryPolling();
 }

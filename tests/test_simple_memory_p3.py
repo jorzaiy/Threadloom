@@ -162,7 +162,7 @@ def test_post_turn_summary_edit_and_stale_flag(p3_env):
 def test_post_turn_summary_regenerate_conflict_and_force(p3_env, monkeypatch):
     h = DummyHandler()
     called = []
-    monkeypatch.setattr('simple_memory.enqueue_turn_summary_job', lambda sid, turn, force=False: called.append((turn, force)))
+    monkeypatch.setattr('simple_memory.enqueue_after_turn', lambda sid, turn: called.append(turn))
 
     # 先编辑
     h._post_memory_turn_summary(None, {'session_id': SESSION_P3, 'turn': 1, 'summary': '手动编辑'})
@@ -172,16 +172,16 @@ def test_post_turn_summary_regenerate_conflict_and_force(p3_env, monkeypatch):
     assert h.response_status == 409
     assert called == []
 
-    # 带 force 放行
+    # 带 force 放行，进入主 worker 队列
     h._post_memory_turn_summary_regenerate(None, {'session_id': SESSION_P3, 'turn': 1, 'force': True})
     assert h.response_status == 200
-    assert called == [(1, True)]
+    assert called == [1]
 
 
 def test_post_big_summary_edit_and_regenerate(p3_env, monkeypatch):
     h = DummyHandler()
     called = []
-    monkeypatch.setattr('simple_memory.enqueue_big_summary_job', lambda sid, idx, force=False: called.append((idx, force)))
+    monkeypatch.setattr('simple_memory.enqueue_regenerate_job', lambda sid, jtype, idx: called.append((jtype, idx)))
 
     # 编辑
     h._post_memory_big_summary(None, {'session_id': SESSION_P3, 'index': 1, 'content': '## 剧情\n大总结已改'})
@@ -194,16 +194,16 @@ def test_post_big_summary_edit_and_regenerate(p3_env, monkeypatch):
     h._post_memory_big_summary_regenerate(None, {'session_id': SESSION_P3, 'index': 1, 'force': False})
     assert h.response_status == 409
 
-    # 带 force
+    # 带 force 进入主 worker 调度队列
     h._post_memory_big_summary_regenerate(None, {'session_id': SESSION_P3, 'index': 1, 'force': True})
     assert h.response_status == 200
-    assert called == [(1, True)]
+    assert called == [('big_summary', 1)]
 
 
 def test_post_super_summary_edit_and_regenerate(p3_env, monkeypatch):
     h = DummyHandler()
     called = []
-    monkeypatch.setattr('simple_memory.enqueue_super_summary_job', lambda sid, idx, force=False: called.append((idx, force)))
+    monkeypatch.setattr('simple_memory.enqueue_regenerate_job', lambda sid, jtype, idx: called.append((jtype, idx)))
 
     # 编辑
     h._post_memory_super_summary(None, {'session_id': SESSION_P3, 'index': 1, 'content': '## 剧情\n超级总结已改'})
@@ -219,7 +219,7 @@ def test_post_super_summary_edit_and_regenerate(p3_env, monkeypatch):
     # 带 force
     h._post_memory_super_summary_regenerate(None, {'session_id': SESSION_P3, 'index': 1, 'force': True})
     assert h.response_status == 200
-    assert called == [(1, True)]
+    assert called == [('super_summary', 1)]
 
 
 def test_api_input_length_limits(p3_env):

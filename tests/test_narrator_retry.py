@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import importlib
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
@@ -273,6 +274,7 @@ def test_narrator_retries_when_npc_hears_unspoken_question(monkeypatch):
     assert '把内心疑问当成对白' in prompts[1]
 
 
+@pytest.mark.skip(reason="Memory V3 / P2.5: 旧泄密校验依赖已删除的【当前在场 NPC 知情核对】区块，已停用")
 def test_narrator_retries_when_npc_uses_private_probe_knowledge(monkeypatch):
     bad_reply = (
         '庆历三十七年三月初十，午时初刻，悦来客栈二楼柳絮房内。\n\n'
