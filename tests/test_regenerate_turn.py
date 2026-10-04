@@ -59,6 +59,15 @@ def test_complete_regenerate_restores_artifacts_and_preserves_user(monkeypatch, 
         }
     })
     monkeypatch.setattr(regenerate_turn, 'save_state', lambda _session_id, state: saved_state.update(state=state))
+    # V3：回滚只写新格式 state.json；simple_memory 存储全部打桩，避免写真实会话目录
+    monkeypatch.setattr(regenerate_turn, 'save_simple_state', lambda _session_id, state: saved_state.update(state=state))
+    monkeypatch.setattr(regenerate_turn, 'cancel_and_wait', lambda _session_id: None)
+    monkeypatch.setattr(regenerate_turn, 'delete_turn_summaries_from', lambda _session_id, _turn: None)
+    monkeypatch.setattr(regenerate_turn, 'load_turn_summaries', lambda _session_id: [])
+    monkeypatch.setattr(regenerate_turn, 'save_turn_summaries', lambda _session_id, _items: None)
+    monkeypatch.setattr(regenerate_turn, 'load_big_summaries', lambda _session_id: [])
+    monkeypatch.setattr(regenerate_turn, 'save_big_summaries', lambda _session_id, _items: None)
+    monkeypatch.setattr(regenerate_turn, 'load_simple_state', lambda _session_id: {})
     monkeypatch.setattr(regenerate_turn, 'save_session_persona_layers', lambda _session_id, layers: saved_persona.update(layers=layers))
     monkeypatch.setattr(regenerate_turn, 'load_event_summaries', lambda _session_id: {
         'version': 1,
@@ -81,11 +90,6 @@ def test_complete_regenerate_restores_artifacts_and_preserves_user(monkeypatch, 
     assert meta_store['data']['turn_audits'] == [{'turn_id': 'turn-0002'}]
     assert meta_store['data']['last_turn_audit'] == {'turn_id': 'turn-0002'}
     assert saved_state['state'] == {'main_event': '旧状态'}
-    assert saved_persona['layers'] == {'scene': {}, 'archive': {}, 'longterm': {}}
-    assert saved_events['payload']['items'] == [{'turn_id': 'turn-0002'}]
-    assert saved_chunks['payload'] == {'version': 1, 'chunks': []}
-    assert summary_updates == [session_id]
-    assert not keeper_archive.exists()
 
 
 def test_complete_regenerate_requires_turn_trace(monkeypatch):
@@ -124,6 +128,14 @@ def test_complete_regenerate_restores_snapshot_when_generation_fails(monkeypatch
     monkeypatch.setattr(regenerate_turn, 'save_meta', lambda _session_id, meta: meta_store.update(data=dict(meta)))
     monkeypatch.setattr(regenerate_turn, 'load_state', lambda _session_id: dict(state_store['state']))
     monkeypatch.setattr(regenerate_turn, 'save_state', lambda _session_id, state: state_store.update(state=dict(state)))
+    monkeypatch.setattr(regenerate_turn, 'save_simple_state', lambda _session_id, state: state_store.update(state=dict(state)))
+    monkeypatch.setattr(regenerate_turn, 'cancel_and_wait', lambda _session_id: None)
+    monkeypatch.setattr(regenerate_turn, 'delete_turn_summaries_from', lambda _session_id, _turn: None)
+    monkeypatch.setattr(regenerate_turn, 'load_turn_summaries', lambda _session_id: [])
+    monkeypatch.setattr(regenerate_turn, 'save_turn_summaries', lambda _session_id, _items: None)
+    monkeypatch.setattr(regenerate_turn, 'load_big_summaries', lambda _session_id: [])
+    monkeypatch.setattr(regenerate_turn, 'save_big_summaries', lambda _session_id, _items: None)
+    monkeypatch.setattr(regenerate_turn, 'load_simple_state', lambda _session_id: {})
     monkeypatch.setattr(regenerate_turn, 'load_session_persona_layers', lambda _session_id: dict(persona_store['layers']))
     monkeypatch.setattr(regenerate_turn, 'save_session_persona_layers', lambda _session_id, layers: persona_store.update(layers=layers))
     monkeypatch.setattr(regenerate_turn, 'load_event_summaries', lambda _session_id: dict(events_store['payload']))
@@ -232,6 +244,15 @@ def test_delete_latest_turn_restores_pre_turn_artifacts(monkeypatch, tmp_path):
         }
     })
     monkeypatch.setattr(regenerate_turn, 'save_state', lambda _session_id, state: saved_state.update(state=state))
+    # V3：回滚只写新格式 state.json；simple_memory 存储全部打桩，避免写真实会话目录
+    monkeypatch.setattr(regenerate_turn, 'save_simple_state', lambda _session_id, state: saved_state.update(state=state))
+    monkeypatch.setattr(regenerate_turn, 'cancel_and_wait', lambda _session_id: None)
+    monkeypatch.setattr(regenerate_turn, 'delete_turn_summaries_from', lambda _session_id, _turn: None)
+    monkeypatch.setattr(regenerate_turn, 'load_turn_summaries', lambda _session_id: [])
+    monkeypatch.setattr(regenerate_turn, 'save_turn_summaries', lambda _session_id, _items: None)
+    monkeypatch.setattr(regenerate_turn, 'load_big_summaries', lambda _session_id: [])
+    monkeypatch.setattr(regenerate_turn, 'save_big_summaries', lambda _session_id, _items: None)
+    monkeypatch.setattr(regenerate_turn, 'load_simple_state', lambda _session_id: {})
     monkeypatch.setattr(regenerate_turn, 'save_session_persona_layers', lambda _session_id, layers: saved_persona.update(layers=layers))
     monkeypatch.setattr(regenerate_turn, 'save_event_summaries', lambda _session_id, payload: saved_events.update(payload=payload))
     monkeypatch.setattr(regenerate_turn, 'save_summary_chunks', lambda _session_id, payload: saved_chunks.update(payload=payload))
@@ -253,17 +274,6 @@ def test_delete_latest_turn_restores_pre_turn_artifacts(monkeypatch, tmp_path):
     assert meta_store['data']['turn_audits'] == [{'turn_id': 'turn-0004'}]
     assert meta_store['data']['last_turn_audit'] == {'turn_id': 'turn-0004'}
     assert saved_state['state'] == {'main_event': '误触前状态'}
-    assert saved_persona['layers'] == {'scene': {}, 'archive': {}, 'longterm': {}}
-    assert saved_events['payload']['items'] == [{'turn_id': 'turn-0004'}]
-    assert saved_chunks['payload'] == {'version': 1, 'chunks': [{'chunk_id': 'chunk_0001', 'turn_end': 4}]}
-    assert summary_updates == [session_id]
-    archive = json.loads(keeper_archive.read_text(encoding='utf-8'))
-    assert archive['source_pair_count'] == 4
-    assert archive['history_message_count'] == 2
-    assert archive['records'] == [
-        {'provider': 'heuristic', 'window': {'end_pair_index': 4}, 'history_digest': ['旧记录']},
-        {'provider': 'manual-cleanup', 'window': {'end_pair_index': 4}, 'history_digest': ['人工清理记录']},
-    ]
 
 
 def test_delete_latest_turn_requires_trace_for_complete_turn(monkeypatch):

@@ -11,12 +11,32 @@ try:
     from .handler_message import handle_message
     from .runtime_store import load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, load_summary_chunks, load_turn_trace, save_event_summaries, save_history, save_meta, save_session_persona_layers, save_state, save_summary, save_summary_chunks, session_paths
     from .summary_updater import update_summary
+    from .simple_memory import (
+        cancel_and_wait,
+        delete_turn_summaries_from,
+        load_big_summaries,
+        load_simple_state,
+        load_turn_summaries,
+        save_big_summaries,
+        save_simple_state,
+        save_turn_summaries,
+    )
 except ImportError:
     from atomic_io import atomic_write_text
     from fact_log import FactLog
     from handler_message import handle_message
     from runtime_store import load_event_summaries, load_history, load_meta, load_session_persona_layers, load_state, load_summary, load_summary_chunks, load_turn_trace, save_event_summaries, save_history, save_meta, save_session_persona_layers, save_state, save_summary, save_summary_chunks, session_paths
     from summary_updater import update_summary
+    from simple_memory import (
+        cancel_and_wait,
+        delete_turn_summaries_from,
+        load_big_summaries,
+        load_simple_state,
+        load_turn_summaries,
+        save_big_summaries,
+        save_simple_state,
+        save_turn_summaries,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -192,36 +212,38 @@ def _factlog_restore(session_id: str, snapshot: dict | None) -> None:
 
 
 def _rollback_derived_artifacts(session_id: str, target_turn_id: str, turn_trace: dict, *, reset_derived_caches: bool = True, history_message_count: int = 0) -> None:
-    pre_turn = turn_trace.get('pre_turn', {}) if isinstance(turn_trace.get('pre_turn', {}), dict) else {}
-    prev_state = pre_turn.get('state') if isinstance(pre_turn.get('state'), dict) else None
-    if prev_state is None:
-        raise ValueError('turn trace does not contain pre-turn state')
+    # 方案第 8 节改造：
+    # 1. cancel_and_wait 已在 server.py 拿会话锁之前调用（锁内等待会和后台任务互卡）。
+    #    这里只做数据回滚；仍在运行的任务提交时会因该轮不存在 / hash 不符而丢弃结果。
+    target_turn = _turn_number(target_turn_id)
 
-    save_state(session_id, prev_state)
-    persona_layers = pre_turn.get('persona_layers')
-    if isinstance(persona_layers, dict):
-        save_session_persona_layers(session_id, persona_layers)
+    # 2. delete_turn_summaries_from(session, turn)
+    delete_turn_summaries_from(session_id, target_turn)
 
-    event_payload = load_event_summaries(session_id)
-    items = [
-        item for item in event_payload.get('items', [])
-        if not isinstance(item, dict) or str(item.get('turn_id', '') or '') != target_turn_id
-    ]
-    event_payload['items'] = items
-    save_event_summaries(session_id, event_payload)
+    # 3. state.json 恢复为第 turn-1 轮的 state_after
+    restored_state = None
+    all_turns = load_turn_summaries(session_id)
+    for t in reversed(all_turns):
+        if int(t.get('turn', 0) or 0) < target_turn and t.get('state_after'):
+            restored_state = t.get('state_after')
+            break
 
-    # Keep fact-log aligned with state/history rollback (hard gate for WRITE_IMPORTANT).
-    _truncate_fact_log_before_turn(session_id, target_turn_id)
+    if not restored_state:
+        # 回退到 turn-trace 的 pre_turn.state，再没有就用 load_simple_state 默认值
+        pre_turn = turn_trace.get('pre_turn', {}) if isinstance(turn_trace.get('pre_turn', {}), dict) else {}
+        restored_state = pre_turn.get('state') if isinstance(pre_turn.get('state'), dict) else load_simple_state(session_id)
 
-    if reset_derived_caches:
-        save_summary_chunks(session_id, {'version': 1, 'chunks': []})
-        keeper_archive = session_paths(session_id)['keeper_archive']
-        if keeper_archive.exists():
-            keeper_archive.unlink()
-    else:
-        max_pair_index = max(0, _turn_number(target_turn_id) - 1)
-        _prune_summary_chunks(session_id, max_pair_index=max_pair_index)
-        _prune_keeper_archive(session_id, max_pair_index=max_pair_index, history_message_count=history_message_count)
+    save_simple_state(session_id, restored_state)
+
+    # 4. 如果 turn 落在某份大总结的范围内，把那份大总结标记为 stale=true
+    bigs = load_big_summaries(session_id)
+    modified_bigs = False
+    for b in bigs:
+        if int(b.get('turn_start', 0) or 0) <= target_turn <= int(b.get('turn_end', 0) or 0):
+            b['stale'] = True
+            modified_bigs = True
+    if modified_bigs:
+        save_big_summaries(session_id, bigs)
 
 
 def _snapshot_artifacts(session_id: str, history: list, meta: dict) -> dict:
@@ -237,6 +259,8 @@ def _snapshot_artifacts(session_id: str, history: list, meta: dict) -> dict:
         'summary': load_summary(session_id),
         'keeper_archive_exists': keeper_archive.exists(),
         'keeper_archive_text': keeper_archive.read_text(encoding='utf-8') if keeper_archive.exists() else '',
+        'turn_summaries': load_turn_summaries(session_id),
+        'big_summaries': load_big_summaries(session_id),
     }
     snap.update(_factlog_snapshot(session_id))
     return snap
@@ -247,7 +271,12 @@ def _restore_artifacts(session_id: str, snapshot: dict) -> None:
     save_meta(session_id, snapshot.get('meta', {}))
     state = snapshot.get('state')
     if isinstance(state, dict):
+        # 原样写回快照（快照里是什么格式就恢复什么格式）
         save_state(session_id, state)
+    if isinstance(snapshot.get('turn_summaries'), list):
+        save_turn_summaries(session_id, snapshot['turn_summaries'])
+    if isinstance(snapshot.get('big_summaries'), list):
+        save_big_summaries(session_id, snapshot['big_summaries'])
     persona_layers = snapshot.get('persona_layers')
     if isinstance(persona_layers, dict):
         save_session_persona_layers(session_id, persona_layers)

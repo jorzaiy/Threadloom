@@ -72,6 +72,10 @@ STATE_KEEPER_CANDIDATE_DEFAULT = {
     'stream': False,
     'response_format': {'type': 'json_object'},
 }
+DEFAULT_SUMMARIZER = {
+    'model': '',
+}
+SUMMARIZER_MIN_OUTPUT_TOKENS = 4000
 SYSTEM_ROLE_DEFAULTS = {
     'narrator': {
         'provider': 'llm',
@@ -81,17 +85,28 @@ SYSTEM_ROLE_DEFAULTS = {
         'provider': 'heuristic',
         'model_role': 'turn_analyzer',
     },
+    'summarizer': {
+        'provider': 'llm',
+        'model_role': 'summarizer',
+    },
     'state_keeper': {
         'provider': 'llm',
-        'model_role': 'state_keeper',
+        'model_role': 'summarizer',
     },
     'state_keeper_candidate': {
         'provider': 'llm',
-        'model_role': 'state_keeper_candidate',
+        'model_role': 'summarizer',
     },
 }
 SYSTEM_MODEL_DEFAULTS = {
     **copy.deepcopy(DEFAULT_ADVANCED_MODELS),
+    'summarizer': {
+        'provider': SITE_PROVIDER_NAME,
+        'model': '',
+        'temperature': 0.3,
+        'max_output_tokens': 4000,
+        'stream': False,
+    },
     'state_keeper_candidate': copy.deepcopy(STATE_KEEPER_CANDIDATE_DEFAULT),
 }
 
@@ -409,22 +424,24 @@ def load_user_model_store() -> dict:
     site = load_site_store()['site']
     model_config = _user_model_runtime_config()
     current = read_json(model_config) if model_config.exists() else {}
-    if isinstance(current.get('narrator'), dict) and isinstance(current.get('state_keeper'), dict):
-        available = _available_site_models(site)
+    available = _available_site_models(site)
+    if isinstance(current.get('narrator'), dict):
         narrator_current = str(current.get('narrator', {}).get('model', '') or '').strip()
-        keeper_current = str(current.get('state_keeper', {}).get('model', '') or '').strip()
+        summarizer_current = str((current.get('summarizer') or current.get('state_keeper') or {}).get('model', '') or '').strip()
         narrator_available = available + ([narrator_current] if narrator_current and narrator_current not in available else [])
-        keeper_available = available + ([keeper_current] if keeper_current and keeper_current not in available else [])
+        summarizer_available = available + ([summarizer_current] if summarizer_current and summarizer_current not in available else [])
         slim: dict[str, object] = {
             'version': 1,
             'active_preset': str(current.get('active_preset', '') or DEFAULT_ACTIVE_PRESET).strip() or DEFAULT_ACTIVE_PRESET,
             'narrator': {
                 'model': _pick_model_with_fallback([narrator_current], narrator_available),
             },
-            'state_keeper': {
-                'model': _pick_model_with_fallback([keeper_current], keeper_available),
+            'summarizer': {
+                'model': _pick_model_with_fallback([summarizer_current, narrator_current], summarizer_available),
             },
         }
+        # 兼容老配置里如果仍然依赖 state_keeper 的读取
+        slim['state_keeper'] = copy.deepcopy(slim['summarizer'])
         if isinstance(current.get('advanced_models'), dict):
             advanced = _advanced_models_without_keeper_candidate(current['advanced_models'])
             if advanced:
@@ -434,6 +451,10 @@ def load_user_model_store() -> dict:
         slim = _slim_runtime_from_legacy(source if isinstance(source, dict) else {}, site)
         source_sources = source.get('sources', {}) if isinstance(source, dict) and isinstance(source.get('sources'), dict) else {}
         slim['active_preset'] = str(current.get('active_preset') or source_sources.get('active_preset') or DEFAULT_ACTIVE_PRESET).strip() or DEFAULT_ACTIVE_PRESET
+        # 补充 summarizer 回退逻辑：state_keeper -> narrator
+        keeper_model = str((slim.get('state_keeper') or {}).get('model', '') or '').strip()
+        narrator_model = str((slim.get('narrator') or {}).get('model', '') or '').strip()
+        slim['summarizer'] = {'model': keeper_model or narrator_model}
         if isinstance(current.get('advanced_models'), dict):
             advanced = _advanced_models_without_keeper_candidate(current['advanced_models'])
             if advanced:
@@ -651,12 +672,14 @@ def discover_site_models() -> dict:
     model_store = load_user_model_store()
     available = _available_site_models(site)
     changed = False
-    for role_name in ('narrator', 'state_keeper'):
-        current_model = model_store[role_name].get('model', '')
-        if current_model not in available:
+    for role_name in ('narrator', 'summarizer'):
+        current_model = model_store.get(role_name, {}).get('model', '')
+        if current_model and current_model not in available:
             fallback = _pick_model_with_fallback([current_model], available)
             model_store[role_name]['model'] = fallback
             changed = True
+    if 'state_keeper' in model_store:
+        model_store['state_keeper'] = copy.deepcopy(model_store.get('summarizer', DEFAULT_SUMMARIZER))
     if changed:
         write_json(_user_model_runtime_config(), model_store)
     snapshot = get_site_config_snapshot()
@@ -666,12 +689,14 @@ def discover_site_models() -> dict:
 
 def get_model_config_snapshot() -> dict:
     store = load_user_model_store()
+    summarizer_cfg = copy.deepcopy(store.get('summarizer') or store.get('state_keeper') or DEFAULT_SUMMARIZER)
     return {
         'site': get_site_config_snapshot(),
         'active_preset': str(store.get('active_preset', '') or DEFAULT_ACTIVE_PRESET),
         'presets': list_narrator_presets(),
         'narrator': copy.deepcopy(store.get('narrator', DEFAULT_NARRATOR)),
-        'state_keeper': copy.deepcopy(store.get('state_keeper', DEFAULT_STATE_KEEPER)),
+        'summarizer': summarizer_cfg,
+        'state_keeper': copy.deepcopy(summarizer_cfg),
         'advanced_models': copy.deepcopy(store.get('advanced_models', DEFAULT_ADVANCED_MODELS)),
     }
 
@@ -699,16 +724,17 @@ def update_model_config(payload: object) -> dict:
         store['narrator'] = {
             'model': model_id,
         }
-    if 'state_keeper' in payload:
-        state_keeper = payload.get('state_keeper')
-        if not isinstance(state_keeper, dict):
-            raise ValueError('state_keeper config must be an object')
-        model_id = str(state_keeper.get('model', '') or '').strip()
+    if 'summarizer' in payload or 'state_keeper' in payload:
+        summarizer = payload.get('summarizer') or payload.get('state_keeper')
+        if not isinstance(summarizer, dict):
+            raise ValueError('summarizer config must be an object')
+        model_id = str(summarizer.get('model', '') or '').strip()
         if model_id not in available:
-            raise ValueError('state_keeper model not found in fetched site models')
-        store['state_keeper'] = {
+            raise ValueError('summarizer model not found in fetched site models')
+        store['summarizer'] = {
             'model': model_id,
         }
+        store['state_keeper'] = copy.deepcopy(store['summarizer'])
     write_json(_user_model_runtime_config(), store)
     return get_model_config_snapshot()
 
@@ -721,7 +747,8 @@ def load_runtime_config() -> dict:
     models = copy.deepcopy(SYSTEM_MODEL_DEFAULTS)
     advanced = copy.deepcopy(user_store.get('advanced_models', DEFAULT_ADVANCED_MODELS))
     narrator_defaults = _global_runtime_store().get('model_defaults', {}).get('narrator', {}) if isinstance(_global_runtime_store().get('model_defaults', {}), dict) else {}
-    state_keeper_defaults = _global_runtime_store().get('model_defaults', {}).get('state_keeper', {}) if isinstance(_global_runtime_store().get('model_defaults', {}), dict) else {}
+    summarizer_defaults = _global_runtime_store().get('model_defaults', {}).get('summarizer', {}) if isinstance(_global_runtime_store().get('model_defaults', {}), dict) else {}
+    summarizer = user_store.get('summarizer') or user_store.get('state_keeper') or DEFAULT_SUMMARIZER
     models['narrator'] = {
         'provider': SITE_PROVIDER_NAME,
         'model': narrator.get('model', ''),
@@ -729,18 +756,17 @@ def load_runtime_config() -> dict:
         'max_output_tokens': max(int(narrator_defaults.get('max_output_tokens', NARRATOR_MIN_OUTPUT_TOKENS) or NARRATOR_MIN_OUTPUT_TOKENS), NARRATOR_MIN_OUTPUT_TOKENS),
         'stream': bool(narrator_defaults.get('stream', True)),
     }
-    models['state_keeper'] = {
+    models['summarizer'] = {
         'provider': SITE_PROVIDER_NAME,
-        'model': state_keeper.get('model', ''),
-        'temperature': float(state_keeper_defaults.get('temperature', 0.1) or 0.1),
-        'max_output_tokens': max(int(state_keeper_defaults.get('max_output_tokens', STATE_KEEPER_MIN_OUTPUT_TOKENS) or STATE_KEEPER_MIN_OUTPUT_TOKENS), STATE_KEEPER_MIN_OUTPUT_TOKENS),
-        'stream': bool(state_keeper_defaults.get('stream', False)),
+        'model': summarizer.get('model', '') or narrator.get('model', ''),
+        'temperature': float(summarizer_defaults.get('temperature', 0.3) or 0.3),
+        'max_output_tokens': max(int(summarizer_defaults.get('max_output_tokens', 4000) or 4000), 4000),
+        'stream': bool(summarizer_defaults.get('stream', False)),
         'response_format': {'type': 'json_object'},
     }
-    models['state_keeper_candidate'] = {
-        **copy.deepcopy(STATE_KEEPER_CANDIDATE_DEFAULT),
-        'model': state_keeper.get('model', '') or narrator.get('model', ''),
-    }
+    # 兼容过渡保留 state_keeper 指向 summarizer
+    models['state_keeper'] = copy.deepcopy(models['summarizer'])
+    models['state_keeper_candidate'] = copy.deepcopy(models['summarizer'])
     for role_name in ('turn_analyzer', 'arbiter'):
         models[role_name] = {
             **copy.deepcopy(DEFAULT_ADVANCED_MODELS[role_name]),

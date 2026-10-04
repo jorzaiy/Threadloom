@@ -12,6 +12,10 @@ from clue_bootstrap_agent import load_clue_registry
 from player_profile import build_player_profile_detail_sections, format_player_profile_detail_sections, load_effective_player_profile, render_runtime_player_profile_markdown
 from selector import build_selector_decision
 from runtime_store import filter_committed_history_items, is_complete_assistant_item, load_canon, load_context, load_event_summaries, load_history_pair_count, load_history_turn_pair, load_persona_index, load_recent_history, load_state, load_summary, load_summary_chunks
+try:
+    from simple_memory import build_memory_context, load_simple_state
+except ImportError:
+    from .simple_memory import build_memory_context, load_simple_state
 from paths import APP_ROOT, SHARED_ROOT, read_json_file, resolve_layered_source
 from name_sanitizer import protagonist_names
 
@@ -1005,16 +1009,43 @@ def _slim_character_core(data: dict) -> dict:
     return keep
 
 
+def _get_narrator_model(cfg: dict) -> str:
+    """Extract the narrator model name from config, lowercased."""
+    return str((((cfg or {}).get('models', {}) or {}).get('narrator', {}) or {}).get('model', '') or '').lower()
+
+
 def _runtime_rules_path_for_narrator(cfg: dict, default_path: str) -> str:
-    """Grok-family narrators use a leaner, positively-framed rules variant when one
-    sits beside the default (runtime-rules-grok.md). Other models are unaffected;
-    if the variant is missing, fall back to the default."""
+    """Model-specific narrators use positively-framed rules variants when available.
+    Grok uses runtime-rules-grok.md, Claude uses runtime-rules-claude.md.
+    If the variant is missing, fall back to the default."""
     try:
-        model = str((((cfg or {}).get('models', {}) or {}).get('narrator', {}) or {}).get('model', '') or '').lower()
-        if 'grok' in model and default_path.endswith('runtime-rules.md'):
-            variant = default_path[:-len('runtime-rules.md')] + 'runtime-rules-grok.md'
-            if resolve_source(variant).exists():
-                return variant
+        model = _get_narrator_model(cfg)
+        if default_path.endswith('runtime-rules.md'):
+            # Check for model-specific variants in priority order
+            if 'claude' in model:
+                variant = default_path[:-len('runtime-rules.md')] + 'runtime-rules-claude.md'
+                if resolve_source(variant).exists():
+                    return variant
+            elif 'grok' in model:
+                variant = default_path[:-len('runtime-rules.md')] + 'runtime-rules-grok.md'
+                if resolve_source(variant).exists():
+                    return variant
+    except Exception:
+        pass
+    return default_path
+
+
+def _identity_reset_path_for_narrator(cfg: dict, default_path: str) -> str:
+    """Model-specific narrators use tailored identity-reset prompts when available.
+    Claude uses narrator-identity-reset-claude.md to avoid jailbreak-pattern language.
+    If the variant is missing, fall back to the default."""
+    try:
+        model = _get_narrator_model(cfg)
+        if default_path.endswith('narrator-identity-reset.md'):
+            if 'claude' in model:
+                variant = default_path[:-len('narrator-identity-reset.md')] + 'narrator-identity-reset-claude.md'
+                if resolve_source(variant).exists():
+                    return variant
     except Exception:
         pass
     return default_path
@@ -1027,7 +1058,7 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     refresh_policy = cfg.get('refresh_policy', {}) if isinstance(cfg.get('refresh_policy', {}), dict) else {}
 
     runtime_rules = read_text(resolve_source(_runtime_rules_path_for_narrator(cfg, sources['runtime_rules'])))
-    narrator_identity_reset = read_text(resolve_source(sources["narrator_identity_reset"])) if sources.get("narrator_identity_reset") else ""
+    narrator_identity_reset = read_text(resolve_source(_identity_reset_path_for_narrator(cfg, sources["narrator_identity_reset"]))) if sources.get("narrator_identity_reset") else ""
     state_json = load_state(session_id)
     canon_text = load_canon(session_id)
     summary_text = load_summary(session_id)
@@ -1084,24 +1115,16 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     lorebook_foundation_path, lorebook_index_path = _distilled_lore_paths(lorebook_path)
     # Situational lore matching should stay close to the active scene, with only
     # a small recent-history tail to avoid stale opening-menu terms dominating.
+    simple_state = load_simple_state(session_id)
     trigger_parts = []
     trigger_parts.append(user_text)
-    for item in state_json.get('carryover_signals', []) or []:
-        if not isinstance(item, dict):
-            continue
-        trigger_parts.append(str(item.get('type', '') or ''))
-        trigger_parts.append(str(item.get('text', '') or ''))
-    trigger_parts.extend(state_json.get('immediate_risks', []) or [])
-    trigger_parts.extend(state_json.get('carryover_clues', []) or [])
-    for item in arbiter_signals.get('events', []) if isinstance(arbiter_signals.get('events', []), list) else []:
-        if not isinstance(item, dict):
-            continue
-        trigger_parts.append(item.get('event_id', ''))
-        trigger_parts.append(item.get('result', ''))
-    for key, value in arbiter_signals.get('flags', {}).items() if isinstance(arbiter_signals.get('flags', {}), dict) else []:
-        trigger_parts.append(str(key))
-        trigger_parts.append(str(value))
-    for item in recent_history[-6:]:
+    if simple_state.get('goal'):
+        trigger_parts.append(str(simple_state.get('goal') or ''))
+    for r in simple_state.get('risks', []) or []:
+        trigger_parts.append(str(r or ''))
+    if simple_state.get('location'):
+        trigger_parts.append(str(simple_state.get('location') or ''))
+    for item in recent_history[-recent_full_prose_turns:]:
         trigger_parts.append(item.get('content', ''))
     trigger_text = '\n'.join(trigger_parts)
 
@@ -1198,17 +1221,11 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     selector_decision = build_selector_decision(
         state_json=state_json,
         recent_history=recent_history,
-        keeper_records=keeper_records,
-        active_threads=active_threads,
-        important_npcs=important_npcs,
         onstage=onstage,
         relevant=relevant,
         lorebook_entries=lorebook_entries,
         system_npc_candidates=system_npc_candidates,
         lorebook_npc_candidates=merged_lorebook_candidates,
-        event_summaries=event_summaries,
-        summary_text=summary_text,
-        summary_chunks=summary_chunks,
         player_profile_sections=player_profile_sections,
         user_text=user_text,
         recent_window_turns=recent_history_pairs,
@@ -1258,7 +1275,16 @@ def build_runtime_context(session_id: str, user_text: str = '') -> dict:
     preset_system_template = preset.get('systemTemplate', '')
     preset_reply_rules = preset.get('replyRules', [])
 
+    # Memory V3 context
+    memory_context = build_memory_context(
+        session_id,
+        max_memory_chars=int(memory_cfg.get('max_memory_chars', 40000) or 40000),
+        current_turn=current_pair_count,
+    )
+
     return {
+        'memory_context': memory_context,
+        'simple_state': simple_state,
         'runtime_rules': runtime_rules,
         "narrator_identity_reset": narrator_identity_reset,
         'session_context': session_context,

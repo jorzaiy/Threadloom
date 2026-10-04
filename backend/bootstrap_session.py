@@ -5,6 +5,7 @@ from pathlib import Path
 
 from runtime_store import ensure_session_dirs, load_canon, load_context, load_state, load_summary, save_canon, save_context, save_state, seed_default_state, session_paths
 from state_bridge import parse_root_state_markdown
+from simple_memory import save_simple_state
 from paths import APP_ROOT, SHARED_ROOT, current_session_owner_context, read_json_file, resolve_layered_source, resolve_source_key
 
 ROOT = SHARED_ROOT
@@ -65,7 +66,7 @@ def bootstrap_session(session_id: str) -> dict:
         state = parse_root_state_markdown(base_state_text, session_id) if base_state_text.strip() else seed_default_state(session_id)
         if not state.get('main_event') or state.get('main_event') == '待确认':
             state['main_event'] = '开始新的剧情会话。'
-        save_state(session_id, state)
+        save_simple_state(session_id, state)
 
         save_context(session_id, {
             **current_session_owner_context(session_id),

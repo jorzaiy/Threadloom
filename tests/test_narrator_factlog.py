@@ -49,6 +49,7 @@ class FactlogCastTests(unittest.TestCase):
         self.assertEqual(_format_factlog_cast(None), '')
         self.assertEqual(_format_factlog_cast({'important_npcs': []}), '')
 
+    @unittest.skip("Memory V3: 【人物档案·权威】已废弃")
     def test_build_narrator_input_injects_cast(self):
         system_prompt, _ = build_narrator_input({'scene_facts': {}, 'factlog': VIEW}, '测试输入')
         self.assertIn('【人物档案·权威】', system_prompt)

@@ -34,6 +34,7 @@ from model_config import (
     upsert_provider_config,
 )
 from regenerate_turn import delete_latest_turn, regenerate_last_partial
+from simple_memory import cancel_and_wait, wait_idle
 from session_auditor import run_session_audit
 from session_lifecycle import delete_session, list_sessions, start_new_game
 from paths import DEFAULT_USER_ID, active_character_id, active_user_id, current_session_dir, find_character_session_dir, is_path_within_user_root, normalize_session_id, resolve_session_dir, reset_active_user_id, reset_multi_user_request_context, set_active_user_id, set_multi_user_request_context, slugify
@@ -61,6 +62,17 @@ MAX_CHAT_IMPORT_BYTES = 16 * 1024 * 1024
 # alive while the ``with`` block is active.
 SESSION_LOCKS: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
 SESSION_LOCKS_GUARD = threading.Lock()
+
+
+def session_lock(session_id: str) -> threading.Lock:
+    """模块级会话锁函数，供 Handler 和 background worker 共享使用。"""
+    with SESSION_LOCKS_GUARD:
+        lock_key = str(resolve_session_dir(session_id, create=False).resolve(strict=False))
+        lock = SESSION_LOCKS.get(lock_key)
+        if lock is None:
+            lock = threading.Lock()
+            SESSION_LOCKS[lock_key] = lock
+        return lock
 LOGIN_THROTTLE_LOCK = threading.Lock()
 LOGIN_ATTEMPTS_BY_IP: dict[str, list[float]] = {}
 LOGIN_ATTEMPTS_GLOBAL: list[float] = []
@@ -440,13 +452,7 @@ class Handler(BaseHTTPRequestHandler):
             raise
 
     def _session_lock(self, session_id: str) -> threading.Lock:
-        with SESSION_LOCKS_GUARD:
-            lock_key = str(resolve_session_dir(session_id, create=False).resolve(strict=False))
-            lock = SESSION_LOCKS.get(lock_key)
-            if lock is None:
-                lock = threading.Lock()
-                SESSION_LOCKS[lock_key] = lock
-            return lock
+        return session_lock(session_id)
 
     def _extract_token(self) -> str:
         # Bearer-only: admin auth paths must not honour browser-issued cookies
@@ -859,6 +865,8 @@ class Handler(BaseHTTPRequestHandler):
         session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=True)
         if session_id is None:
             return
+        # 锁外等待后台记忆任务结束：任务提交时也要拿会话锁
+        cancel_and_wait(session_id)
         with self._session_lock(session_id):
             return self._send(200, start_new_game(session_id))
 
@@ -866,6 +874,7 @@ class Handler(BaseHTTPRequestHandler):
         session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
         if session_id is None:
             return
+        cancel_and_wait(session_id)
         with self._session_lock(session_id):
             return self._send(200, delete_session(session_id))
 
@@ -878,6 +887,7 @@ class Handler(BaseHTTPRequestHandler):
         if scoped is None:
             return
         session_id = scoped
+        cancel_and_wait(session_id)
         with self._session_lock(session_id):
             result = regenerate_last_partial(session_id, allow_complete=allow_complete)
         status = 200 if 'error' not in result else 400
@@ -887,6 +897,7 @@ class Handler(BaseHTTPRequestHandler):
         session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
         if session_id is None:
             return
+        cancel_and_wait(session_id)
         with self._session_lock(session_id):
             result = delete_latest_turn(session_id)
             if 'error' not in result:
@@ -902,6 +913,9 @@ class Handler(BaseHTTPRequestHandler):
         if session_id is None:
             return
         payload['session_id'] = session_id
+        # 方案 4.4：下一轮开始前等待上一轮小结写完（最多 20s）。
+        # 必须在拿会话锁之前等：后台任务提交结果时也需要这把锁，锁内等会互相卡住。
+        wait_idle(session_id, timeout_s=20.0)
         with self._session_lock(session_id):
             result = handle_message(payload)
         status = 200 if 'error' not in result else 400

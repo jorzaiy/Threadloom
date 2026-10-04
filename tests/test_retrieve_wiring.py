@@ -129,6 +129,7 @@ class RecallGuardTests(unittest.TestCase):
 
 
 class PromptInjectionTests(unittest.TestCase):
+    @unittest.skip("Memory V3: 【往事回溯·检索】已废弃")
     def test_recall_block_reaches_the_narrator_system_prompt(self):
         system_prompt, _ = build_narrator_input({'scene_facts': {}, 'factlog_recall': HITS}, '那少年什么来历')
         self.assertIn('【往事回溯·检索】', system_prompt)

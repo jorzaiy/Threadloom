@@ -15,8 +15,11 @@
     "persona_seeds_dir": "examples/runtime/persona-seeds"
   },
   "memory": {
-    "recent_history_turns": 12,
-    "recent_full_prose_turns": 6,
+    "recent_history_turns": 8,
+    "recent_full_prose_turns": 8,
+    "max_memory_chars": 40000,
+    "big_every": 100,
+    "super_every": 5,
     "consolidate_every_turns": 2,
     "skeleton_keeper_enabled": true
   },
@@ -26,16 +29,11 @@
       "max_output_tokens": 6000,
       "stream": true
     },
-    "state_keeper": {
-      "temperature": 0.1,
-      "max_output_tokens": 3000,
+    "summarizer": {
+      "temperature": 0.3,
+      "max_output_tokens": 4000,
       "stream": false
     }
-  },
-  "entity_recovery": {
-    "use_candidate_judge": true,
-    "judge_role": "state_keeper_candidate",
-    "max_candidates": 12
   },
   "web": {
     "default_debug": false,

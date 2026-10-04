@@ -10,6 +10,7 @@ refactoring the function (e.g. extracting finalize_opening_choice), not a test
 of the keepers themselves.
 """
 import sys
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -103,6 +104,10 @@ def _install_fakes(monkeypatch, *, state, meta, history=None):
         '_build_turn_audit': lambda *a, **k: {},
         '_store_turn_audit': lambda _meta, _audit: None,
         'run_session_audit': lambda *a, **k: {'severity': 'ok', 'summary': {'issue_count': 0}, 'issues': []},
+        'enqueue_after_turn': lambda *a, **k: None,
+        'save_simple_state': lambda _sid, s: spies['saved_state'].append(s),
+        'load_simple_state': lambda _sid: dict(state),
+        'upsert_turn_summary': lambda *a, **k: None,
     }
     for name, fake in patches.items():
         monkeypatch.setattr(hm, name, fake)
@@ -126,9 +131,9 @@ def test_successful_runtime_turn_commits_and_caches(monkeypatch):
     assert 'error' not in resp
     assert 'turn_audit' in resp.get('meta', {})   # committed runtime response shape
     assert 'state_snapshot' in resp
-    # committed exactly once, both user + assistant history items appended
-    assert len(spies['saved_state']) == 1
+    # both user + assistant history items appended
     assert [item['role'] for item in spies['appended']] == ['user', 'assistant']
+    assert resp['memory_status'] == 'pending'
     # idempotency: the response is cached under the client_turn_id and turn advanced
     last_meta = spies['saved_meta'][-1]
     assert last_meta['last_turn_id'] == 6
@@ -140,7 +145,7 @@ def test_successful_runtime_turn_commits_and_caches(monkeypatch):
 def test_debug_flag_adds_debug_block(monkeypatch):
     _install_fakes(monkeypatch, state=_RUNTIME_STATE, meta={'last_turn_id': 2, 'processed_client_turn_ids': {}})
     resp = hm.handle_message(_payload(debug=True))
-    assert resp['debug']['scene_mode'] == 'runtime-loaded'
+    assert resp['debug']['scene_mode'] == 'runtime-v3-memory'
 
 
 def test_idempotency_cache_hit_short_circuits(monkeypatch):
@@ -247,6 +252,8 @@ def test_opening_guard_when_already_started(monkeypatch):
 
 # ── periodic session audit (runs on consolidation turns) ─────────────────────
 
+# [Memory V3] 旧 session_audit 依赖 keeper/consolidation，在 V3 异步记忆架构下已退役 (见 11.1 节)。
+@pytest.mark.skip(reason="Memory V3: session_audit 已从主对话同步流程中移除")
 def test_session_audit_runs_on_consolidation_turn(monkeypatch):
     # turn 6 (last_turn_id 5) with consolidate_every=3 -> consolidation turn.
     _install_fakes(monkeypatch, state=_RUNTIME_STATE, meta={'last_turn_id': 5, 'processed_client_turn_ids': {}})
@@ -261,6 +268,7 @@ def test_session_audit_runs_on_consolidation_turn(monkeypatch):
     assert resp['debug']['session_audit']['issues'][0]['type'] == 'style_drift'
 
 
+@pytest.mark.skip(reason="Memory V3: session_audit 已从主对话同步流程中移除")
 def test_session_audit_skipped_off_consolidation_turn(monkeypatch):
     # turn 4 (last_turn_id 3) with consolidate_every=3 -> NOT a consolidation turn.
     _install_fakes(monkeypatch, state=_RUNTIME_STATE, meta={'last_turn_id': 3, 'processed_client_turn_ids': {}})
@@ -271,6 +279,7 @@ def test_session_audit_skipped_off_consolidation_turn(monkeypatch):
     assert resp['debug'].get('session_audit') is None
 
 
+@pytest.mark.skip(reason="Memory V3: session_audit 已从主对话同步流程中移除")
 def test_session_audit_failure_never_blocks_turn(monkeypatch):
     # A crashing auditor must not break the committed turn (diagnostic-only).
     spies = _install_fakes(monkeypatch, state=_RUNTIME_STATE, meta={'last_turn_id': 5, 'processed_client_turn_ids': {}})

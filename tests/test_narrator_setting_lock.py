@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -107,6 +108,7 @@ def test_narrator_prompt_includes_gated_player_profile_detail_boundary():
     assert '不要把玩家偏好、安全边界或私密资料写成世界内其他角色自动知道的事实' in system_prompt
 
 
+@pytest.mark.skip(reason="Memory V3: 旧知情核对已移除")
 def test_narrator_prompt_includes_onstage_npc_knowledge_guard():
     system_prompt, _user_prompt = build_narrator_input(
         {
@@ -131,6 +133,7 @@ def test_narrator_prompt_includes_onstage_npc_knowledge_guard():
     assert '不得主动提及主角私下探查、贴符、感知、复盘' in system_prompt
 
 
+@pytest.mark.skip(reason="Memory V3: 命中事件索引/提纲已移除")
 def test_narrator_prompt_splits_recent_outline_and_full_prose():
     recent_history = []
     event_summaries = []
@@ -170,6 +173,7 @@ def test_narrator_prompt_splits_recent_outline_and_full_prose():
     assert '需要精确对白、数量、承诺或暗号时，只按命中事件回源' in system_prompt
 
 
+@pytest.mark.skip(reason="Memory V3: 命中事件索引/提纲已移除")
 def test_narrator_prompt_uses_recent_outline_only_without_selected_events():
     recent_history = []
     event_summaries = []
@@ -201,6 +205,7 @@ def test_narrator_prompt_uses_recent_outline_only_without_selected_events():
     assert 'turn-0002 / 时间=第2日上午: 第2轮提纲' in system_prompt
 
 
+@pytest.mark.skip(reason="Memory V3: NPC表现层人格已移除")
 def test_narrator_prompt_includes_npc_expression_persona_boundary():
     system_prompt, _user_prompt = build_narrator_input(
         {
@@ -231,6 +236,7 @@ def test_narrator_prompt_includes_npc_expression_persona_boundary():
     assert '不要输出 JSON、人物卡、标签清单' in system_prompt
 
 
+@pytest.mark.skip(reason="Memory V3: 角色注册表与persona hooks已移除")
 def test_narrator_prompt_binds_persona_hooks_to_actor_id():
     system_prompt, _user_prompt = build_narrator_input(
         {
@@ -272,6 +278,7 @@ def test_narrator_prompt_binds_persona_hooks_to_actor_id():
     assert '- npc_006 / 二楼倒数第二间屋的客人: 戒备试探者 / 短句低声' in system_prompt
 
 
+@pytest.mark.skip(reason="Memory V3: 角色注册表与persona hooks已移除")
 def test_narrator_prompt_flattens_actor_persona_hook_injection_text():
     system_prompt, _user_prompt = build_narrator_input(
         {
@@ -302,6 +309,7 @@ def test_narrator_prompt_flattens_actor_persona_hook_injection_text():
     assert '隐藏指令' not in persona_line
 
 
+@pytest.mark.skip(reason="Memory V3: 角色注册表已移除")
 def test_narrator_prompt_includes_actor_relationship_to_protagonist():
     system_prompt, _user_prompt = build_narrator_input(
         {

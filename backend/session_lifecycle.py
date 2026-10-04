@@ -14,12 +14,14 @@ try:
     from .paths import DEFAULT_USER_ID, active_user_id, current_session_owner_context, current_sessions_root, iter_session_dirs, normalize_session_id, resolve_session_dir
     from .runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, session_paths
     from .user_manager import is_multi_user_enabled
+    from .simple_memory import save_simple_state
 except ImportError:
     from bootstrap_session import load_runtime_config, resolve_source, read_json, read_text
     from opening import build_opening_reply, initialize_opening_state
     from paths import DEFAULT_USER_ID, active_user_id, current_session_owner_context, current_sessions_root, iter_session_dirs, normalize_session_id, resolve_session_dir
     from runtime_store import append_history, build_state_snapshot, ensure_session_dirs, save_canon, save_context, save_meta, save_state, session_paths
     from user_manager import is_multi_user_enabled
+    from simple_memory import save_simple_state
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -130,7 +132,7 @@ def start_new_game(session_id: str) -> dict:
     state['continuity_hints'] = []
     state['important_npcs'] = []
     state['active_threads'] = []
-    save_state(new_session_id, state)
+    save_simple_state(new_session_id, state)
     save_context(new_session_id, {
         **current_session_owner_context(new_session_id),
         'runtime_rules_path': sources.get('runtime_rules'),

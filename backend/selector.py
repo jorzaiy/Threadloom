@@ -636,11 +636,14 @@ def player_profile_detail_hits(profile_sections: list[dict], *, state_json: dict
     return hits[:3]
 
 
-def build_selector_decision(*, state_json: dict, recent_history: list[dict], keeper_records: dict, active_threads: list[dict], important_npcs: list[dict], onstage: list[str], relevant: list[str], lorebook_entries: list[dict], system_npc_candidates: list[dict], lorebook_npc_candidates: list[dict], event_summaries: list[dict], summary_text: str, summary_chunks: list[dict] | None = None, player_profile_sections: list[dict] | None = None, user_text: str = '', recent_window_turns: int = 0) -> dict:
-    inject_lorebook = should_inject_lorebook_text(state_json, recent_history, keeper_records, lorebook_entries, active_threads, user_text=user_text)
+def build_selector_decision(*, state_json: dict, recent_history: list[dict], keeper_records: dict | None = None, active_threads: list[dict] | None = None, important_npcs: list[dict] | None = None, onstage: list[str], relevant: list[str], lorebook_entries: list[dict], system_npc_candidates: list[dict], lorebook_npc_candidates: list[dict], event_summaries: list[dict] | None = None, summary_text: str = '', summary_chunks: list[dict] | None = None, player_profile_sections: list[dict] | None = None, user_text: str = '', recent_window_turns: int = 0) -> dict:
+    active_threads_list = active_threads or []
+    important_npcs_list = important_npcs or []
+    keeper_records_dict = keeper_records or {}
+    inject_lorebook = should_inject_lorebook_text(state_json, recent_history, keeper_records_dict, lorebook_entries, active_threads_list, user_text=user_text)
     all_candidates = list(system_npc_candidates) + list(lorebook_npc_candidates)
-    inject_candidates = should_inject_npc_candidates(onstage, relevant, active_threads, recent_history, important_npcs, all_candidates)
-    event_hits = event_summary_hits(event_summaries, state_json=state_json, recent_history=recent_history, user_text=user_text, recent_window_turns=recent_window_turns)
+    inject_candidates = should_inject_npc_candidates(onstage, relevant, active_threads_list, recent_history, important_npcs_list, all_candidates)
+    event_hits = event_summary_hits(event_summaries or [], state_json=state_json, recent_history=recent_history, user_text=user_text, recent_window_turns=recent_window_turns) if event_summaries else []
     chunk_hits = summary_chunk_hits(
         summary_chunks or [],
         recent_history=recent_history,
@@ -648,17 +651,17 @@ def build_selector_decision(*, state_json: dict, recent_history: list[dict], kee
         tracked_objects=state_json.get('tracked_objects', []),
         knowledge_records=state_json.get('knowledge_records', []),
         event_hits=event_hits,
-        event_summaries=event_summaries,
-    )
-    targets = profile_targets(onstage, relevant, active_threads, recent_history, important_npcs, limit=3, event_hits=event_hits, event_summaries=event_summaries)
+        event_summaries=event_summaries or [],
+    ) if summary_chunks else []
+    targets = profile_targets(onstage, relevant, active_threads_list, recent_history, important_npcs_list, limit=3, event_hits=event_hits, event_summaries=event_summaries or [])
     inject_summary = bool(chunk_hits) and any(hit.get('score', 0) >= 2 for hit in chunk_hits)
     npc_roster = build_npc_roster(
         onstage=onstage,
         relevant=relevant,
-        active_threads=active_threads,
-        important_npcs=important_npcs,
+        active_threads=active_threads_list,
+        important_npcs=important_npcs_list,
         event_hits=event_hits,
-        event_summaries=event_summaries,
+        event_summaries=event_summaries or [],
         limit=5,
     )
     profile_detail_hits = player_profile_detail_hits(player_profile_sections or [], state_json=state_json, recent_history=recent_history, user_text=user_text)

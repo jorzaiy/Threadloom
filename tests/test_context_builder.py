@@ -182,33 +182,8 @@ def test_history_evidence_pack_hydrates_conjectural_cross_event_hits_without_sto
     assert '未确认和塔楼仪器有关' in pack['items'][1]['assistant_excerpt']
 
 
-def test_narrator_prompt_injects_history_evidence_above_event_index():
-    system_prompt, _user_prompt = build_narrator_input({
-        'active_preset': {},
-        'scene_facts': {},
-        'history_evidence_pack': {
-            'items': [{
-                'evidence_id': 'H1',
-                'source': 'turn-0001',
-                'event_id': 'evt_0001',
-                'reason': 'long_range_background',
-                'summary': '药铺掌柜提到井边线索。',
-                'user_excerpt': '询问药铺掌柜。',
-                'assistant_excerpt': '掌柜只说井边暗红泥屑早年见过，并未说沈青到过井边。',
-                'must_not_infer': ['不得新增沈青到过井边。'],
-            }],
-        },
-        'selected_event_summaries': [{
-            'event_id': 'evt_0001',
-            'turn_id': 'turn-0001',
-            'summary': '药铺掌柜提到井边线索。',
-        }],
-    }, '继续问沈青经脉残留')
-
-    assert '【历史原文证据包】' in system_prompt
-    assert '掌柜只说井边暗红泥屑早年见过' in system_prompt
-    assert '不得把多个真实碎片拼成新的旧行动链' in system_prompt
-    assert system_prompt.index('【历史原文证据包】') < system_prompt.index('【命中事件索引】')
+# [Memory V3] 旧记忆区块测试用例（【历史原文证据包】、【重要物件与持有关系】、【角色注册表】、【keeper archive 命中】、【当前事件目标】）已在 V3 精简架构中退役。
+# 对应断言已转入 test_simple_memory.py。
 
 
 def test_narrator_prompt_preserves_user_conjecture_as_uncertain_without_story_tokens():
@@ -489,20 +464,7 @@ def test_narrator_prompt_rejects_unevidenced_concrete_item_details():
     assert '不要编造购买地点、食用进度、存放位置或旁观者知情' in system_prompt
 
 
-def test_active_tracked_object_evidence_is_in_prompt_without_summary_recall():
-    system_prompt, _ = build_narrator_input({
-        'active_preset': {},
-        'scene_facts': {
-            'tracked_objects': [{'object_id': 'obj_01', 'label': '油纸包饼', 'kind': 'item', 'story_relevant': True}],
-            'possession_state': [{'object_id': 'obj_01', 'holder': '主角', 'status': 'saved', 'location': '怀里'}],
-            'object_visibility': [{'object_id': 'obj_01', 'visibility': 'private', 'known_to': ['主角']}],
-        },
-        'selected_summary_chunks': [],
-    }, '摸摸怀里的饼还在不在')
-
-    assert '【重要物件与持有关系】' in system_prompt
-    assert '油纸包饼 (item) / 持有者=主角 / 状态=saved / 可见性=private' in system_prompt
-    assert '【召回的归档提纲】' not in system_prompt
+# [Memory V3] test_active_tracked_object_evidence_is_in_prompt_without_summary_recall 退役，转入 test_simple_memory.py。
 
 
 def test_summary_chunk_actor_only_pressure_is_not_recalled_for_quiet_turn():
@@ -601,71 +563,9 @@ def test_selector_and_persona_reject_abstract_npc_names():
     assert not _valid_persona_token('时间栏')
 
 
-def test_narrator_prompt_marks_private_identity_as_not_npc_known():
-    system_prompt, _ = build_narrator_input({
-        'active_preset': {},
-        'scene_facts': {
-            'actors': {
-                'protagonist': {
-                    'actor_id': 'protagonist',
-                    'kind': 'protagonist',
-                    'name': '测试主角',
-                    'aliases': ['主角'],
-                    'public_identity': '场内公开呈现为见习学徒',
-                    'private_identity': '真实身份=逃亡继承人',
-                    'knowledge_boundary': '真实身份属于私密事实。',
-                }
-            },
-            'actor_context_index': {'active_actor_ids': ['protagonist']},
-        },
-    }, '继续后退')
-
-    assert '公开身份=场内公开呈现为见习学徒' in system_prompt
-    assert '私密身份=真实身份=逃亡继承人' in system_prompt
-    assert 'NPC 对白、称呼和判断只能使用其已知信息' in system_prompt
-    assert '否则只能按场内公开表象称呼与反应' in system_prompt
-
-
-def test_narrator_prompt_injects_keeper_archive_hits_as_background_only():
-    system_prompt, _ = build_narrator_input({
-        'active_preset': {},
-        'scene_facts': {},
-        'keeper_records': {
-            'records': [
-                {
-                    'window': {'from_turn': 13, 'to_turn': 24},
-                    'location_anchor': '旧训练场',
-                    'stable_entities': [{'name': '测试甲'}],
-                    'ongoing_events': ['测试甲曾经看守补给箱'],
-                    'tracked_objects': [{'label': '补给箱'}],
-                }
-            ]
-        },
-    }, '低头检查鞋带')
-
-    assert '【keeper archive 命中】' in system_prompt
-    assert '13..24 | 地点=旧训练场 | 人物=测试甲 | 事件=测试甲曾经看守补给箱 | 物件=补给箱' in system_prompt
-    assert '不是当前镜头事实源' in system_prompt
-    assert '不要把 archive 中的旧人物、旧压力或旧物件状态自动升级为当前场景事实' in system_prompt
-
-
-def test_narrator_prompt_injects_active_scene_objective():
-    system_prompt, _ = build_narrator_input({
-        'active_preset': {},
-        'scene_facts': {
-            'scene_objective': {
-                'label': '第二轮训练',
-                'objective': '测试学员在资源争夺和规则模糊下的判断能力',
-                'status': 'active',
-                'completion_hint': '取得补给、被承认完成或训练叫停时结束',
-            }
-        },
-    }, '继续谈判')
-
-    assert '【当前事件目标】' in system_prompt
-    assert '事件：第二轮训练' in system_prompt
-    assert '目标：测试学员在资源争夺和规则模糊下的判断能力' in system_prompt
-    assert '不要把主轴偏到无关旧风险、随机新威胁或纯心理观察' in system_prompt
+# [Memory V3] test_narrator_prompt_marks_private_identity_as_not_npc_known,
+# test_narrator_prompt_injects_keeper_archive_hits_as_background_only,
+# test_narrator_prompt_injects_active_scene_objective 退役（对应旧区块已移除）。
 
 
 def test_runtime_player_profile_renders_nested_character_override_fields():

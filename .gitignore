@@ -17,7 +17,7 @@ player-profile.json
 player-profile.md
 
 character/
-memory/
+/memory/
 runtime/
 
 .DS_Store

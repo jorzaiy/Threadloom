@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -35,6 +36,12 @@ try:
     from .session_auditor import run_session_audit
     from .fact_log import FactLog, merge_projected_important_npcs
     from .persona_distiller import distill_persona
+    from .simple_memory import (
+        enqueue_after_turn,
+        load_simple_state,
+        save_simple_state,
+        upsert_turn_summary,
+    )
 except ImportError:
     from arbiter_runtime import run_arbiter
     from arbiter_state import merge_arbiter_state
@@ -63,6 +70,12 @@ except ImportError:
     from session_auditor import run_session_audit
     from fact_log import FactLog, merge_projected_important_npcs
     from persona_distiller import distill_persona
+    from simple_memory import (
+        enqueue_after_turn,
+        load_simple_state,
+        save_simple_state,
+        upsert_turn_summary,
+    )
 
 
 TRACE_PROMPT_LIMIT = 4000
@@ -547,10 +560,10 @@ def _call_narrator_with_retries(
     secondary_max_attempts: int = 1,
 ) -> tuple[str, dict, dict]:
     primary_cfg = resolve_provider_model('narrator')
-    keeper_cfg = resolve_provider_model('state_keeper')
+    summarizer_cfg = resolve_provider_model('summarizer')
     model_plan = [
         ('primary', primary_cfg, primary_max_attempts),
-        ('secondary', _secondary_narrator_model_cfg(primary_cfg, keeper_cfg), secondary_max_attempts),
+        ('secondary', _secondary_narrator_model_cfg(primary_cfg, summarizer_cfg), secondary_max_attempts),
     ]
     attempts = []
     last_error = None
@@ -1223,7 +1236,7 @@ def validate_message_payload(payload: dict[str, Any]) -> tuple[bool, dict[str, A
 
 def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id, debug_enabled, meta, turn_trace, finalize_response, append_turn_history):
     """Handle an opening-choice turn end-to-end: bootstrap state from the chosen
-    opening, run narrator + skeleton/state keepers, commit history/state/meta, and
+    opening, run narrator, commit history/state/meta, enqueue the V3 summary job, and
     build the response + turn trace. Extracted (dedented) from the nested closure
     in handle_message; the handle_message-local helpers finalize_response /
     append_turn_history and the per-turn locals are passed in explicitly. Covered
@@ -1234,9 +1247,6 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
     scene = context.get('scene_facts', {})
     arbiter = run_arbiter(opening_prompt, scene)
     arbiter_result = arbiter.get('results', []) if arbiter.get('arbiter_needed') else None
-    state_fragment = build_state_fragment(state, scene, user_text=opening_prompt, arbiter=arbiter)
-    context = dict(context)
-    context['state_fragment'] = state_fragment
     system_prompt, user_prompt = build_narrator_input(context, opening_prompt, arbiter_result=arbiter_result)
     reply, usage, narrator_retry_trace = _call_narrator_with_retries(system_prompt, user_prompt)
     _message_stage('narrator_complete', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
@@ -1261,7 +1271,6 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
         trace['runtime'] = {
             'context': _trace_context_excerpt(context),
             'arbiter': copy.deepcopy(arbiter),
-            'state_fragment_initial': copy.deepcopy(state_fragment),
             'narrator': {
                 'system_prompt': _trim_trace_text(_redact_trace_prompt(system_prompt)),
                 'user_prompt': _trim_trace_text(user_prompt),
@@ -1279,90 +1288,26 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
             'not_committed': True,
         }
         return finalize_response(response, trace=trace)
-    state['opening_started'] = True
-    state['state_keeper_bootstrapped'] = False
-    state_error = None
-    state_keeper_trace = {}
-    state_keeper_diagnostics = None
-    skeleton_keeper_trace = None
-    skeleton_keeper_diagnostics = None
-    try:
-        skeleton_result = call_skeleton_keeper(
-            state,
-            state_fragment,
-            reply,
-            return_trace=True,
-        )
-        skeleton_fragment = skeleton_result[0]
-        skeleton_usage = skeleton_result[1]
-        skeleton_keeper_trace = skeleton_result[2] if len(skeleton_result) > 2 else None
-    except Exception as err:
-        skeleton_keeper_diagnostics = {
-            'provider_requested': 'llm',
-            'provider_used': 'disabled-or-failed',
-            'model_usage': None,
-            'fallback_used': True,
-            'fallback_reason': str(err),
-        }
-    else:
-        state_fragment = merge_state_skeleton(state_fragment, skeleton_fragment)
-        skeleton_keeper_diagnostics = {
-            'provider_requested': 'llm',
-            'provider_used': 'llm',
-            'model_usage': skeleton_usage,
-            'fallback_used': False,
-            'fallback_reason': None,
-            'skeleton_fragment': skeleton_fragment,
-        }
-
-    try:
-        state, state_keeper_trace = call_state_keeper(
-            session_id,
-            reply,
-            state_fragment=state_fragment,
-            user_text=opening_prompt,
-            return_trace=True,
-        )
-        state_keeper_diagnostics = state.get('state_keeper_diagnostics', {})
-        state_keeper_diagnostics['bootstrap_turn'] = True
-        state['state_keeper_bootstrapped'] = True
-    except Exception as err:
-        state_error = str(err)
-        fragment_state = build_state_from_fragment(state, state_fragment, session_id)
-        fragment_state['state_keeper_diagnostics'] = _state_keeper_failure_diagnostics(err, state_error)
-        fragment_state['state_keeper_diagnostics']['bootstrap_turn'] = True
-        fragment_state['state_keeper_bootstrapped'] = _keeper_fallback_bootstrapped(fragment_state, skeleton_keeper_diagnostics)
-        state = fragment_state
-        state_keeper_diagnostics = fragment_state.get('state_keeper_diagnostics', {})
-        state['state_keeper_diagnostics'] = state_keeper_diagnostics
-
-    append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
-    _message_stage('history_committed', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-    state = merge_arbiter_state(state, arbiter)
-    state = apply_thread_tracker(state, user_text=opening_prompt, narrator_reply=reply, arbiter=arbiter)
-    state['continuity_hints'] = normalized_hint_entries(session_id)
-    state = _apply_important_npc_trackers(state, session_id, context)
-    # The opening choice is resolved this turn, but call_state_keeper rebuilt state
-    # from the disk baseline (initialize_opening_choice_state used persist=False, so
-    # the in-memory opening flags were never written), dropping opening_resolved /
-    # opening_started. Re-assert them before the single end-of-turn commit, or the
-    # next turn falls back into the opening menu ("当前还在选择开局").
+    # 开局轮按 V3 流程提交：开局标记写入新格式 state.json，小结与 state 由后台生成。
     state['opening_resolved'] = True
     state['opening_started'] = True
-    write_important = _factlog_write_important_enabled()
-    opening_prev = {}
-    if isinstance(turn_trace, dict):
-        pre_turn = turn_trace.get('pre_turn', {})
-        if isinstance(pre_turn, dict) and isinstance(pre_turn.get('state'), dict):
-            opening_prev = pre_turn['state']
+    append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply})
+    _message_stage('history_committed', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+    save_simple_state(session_id, state)
     opening_turn_num = max(1, int(meta.get('last_turn_id', 0) or 0) + 1)
-    if write_important:
-        state = _commit_fact_log_turn(
-            session_id, turn_id, opening_turn_num, opening_prev, state, write_important=True,
-        )
-    save_state(session_id, state)
-    if not write_important:
-        _shadow_commit_fact_log(session_id, turn_id, opening_turn_num, opening_prev, state)
+    upsert_turn_summary(session_id, {
+        'turn': opening_turn_num,
+        'turn_id': turn_id,
+        'reply_hash': hashlib.sha1(reply.encode('utf-8')).hexdigest(),
+        'status': 'pending',
+        'summary': '',
+        'state_after': load_simple_state(session_id),
+        'edited': False,
+        'error': '',
+        'model': '',
+        'updated_at': int(time.time() * 1000),
+    })
+    enqueue_after_turn(session_id, opening_turn_num, arbiter_result=arbiter_result)
     _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
 
     response = {
@@ -1384,7 +1329,6 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
             'loaded_onstage': state.get('onstage_npcs', []),
             'model_error': model_error,
             'narrator_retry': copy.deepcopy(narrator_retry_trace),
-            'state_keeper_diagnostics': copy.deepcopy(state_keeper_diagnostics) if isinstance(state_keeper_diagnostics, dict) else {},
         }
     meta['last_turn_id'] += 1
     _cache_processed_turn(session_id, meta, client_turn_id, response)
@@ -1398,7 +1342,6 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
     trace['runtime'] = {
         'context': _trace_context_excerpt(context),
         'arbiter': copy.deepcopy(arbiter),
-        'state_fragment_initial': copy.deepcopy(state_fragment),
         'narrator': {
             'system_prompt': _trim_trace_text(_redact_trace_prompt(system_prompt)),
             'user_prompt': _trim_trace_text(user_prompt),
@@ -1408,15 +1351,6 @@ def _finalize_opening_choice(choice, *, session_id, turn_id, ts, client_turn_id,
             'usage': copy.deepcopy(usage),
             'model_error': model_error,
             'retry_trace': copy.deepcopy(narrator_retry_trace),
-        },
-        'skeleton_keeper': {
-            'diagnostics': copy.deepcopy(skeleton_keeper_diagnostics),
-            'trace': copy.deepcopy(skeleton_keeper_trace),
-        },
-        'state_keeper': {
-            'diagnostics': copy.deepcopy(state_keeper_diagnostics),
-            'trace': copy.deepcopy(state_keeper_trace),
-            'state_error': state_error,
         },
     }
     trace['post_turn'] = {
@@ -1503,6 +1437,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     client_turn_id = parsed['client_turn_id']
     request_meta = parsed['meta']
     debug_enabled = bool(request_meta.get('debug'))
+    # wait_idle 在 server._post_message 里、拿会话锁之前调用；这里持锁，不能再等。
     bootstrap_session(session_id)
     meta = load_meta(session_id)
 
@@ -1641,16 +1576,7 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
     }
     arbiter = run_arbiter(text, scene)
     arbiter_result = arbiter.get('results', []) if arbiter.get('arbiter_needed') else None
-    state_fragment = build_state_fragment(state, scene, user_text=text, arbiter=arbiter)
     turn_trace['runtime']['arbiter'] = copy.deepcopy(arbiter)
-    turn_trace['runtime']['state_fragment_initial'] = copy.deepcopy(state_fragment)
-    skeleton_keeper_diagnostics = None
-    skeleton_keeper_trace = None
-    state_keeper_trace = None
-    context = dict(context)
-    context['state_fragment'] = state_fragment
-    context['factlog'] = _load_factlog_view(session_id)
-    context['factlog_recall'] = _factlog_recall(session_id, turn_id, text, context)
     system_prompt, user_prompt = build_narrator_input(context, text, arbiter_result=arbiter_result)
     prompt_stats = prompt_block_stats(system_prompt)
     turn_trace['runtime']['narrator'] = {
@@ -1719,64 +1645,6 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         return finalize_response(response)
 
     current_turn_num = meta['last_turn_id'] + 1
-    is_first_turn = current_turn_num == 1
-    needs_keeper_bootstrap = bool(state.get('opening_resolved')) and bool(state.get('opening_started')) and not bool(state.get('state_keeper_bootstrapped'))
-    skeleton_every = 1
-    if completion_status == 'complete':
-        state_fragment = merge_reply_skeleton(state_fragment, reply)
-        context = dict(context)
-        context['state_fragment'] = state_fragment
-        turn_trace['runtime']['state_fragment_reply_skeleton'] = copy.deepcopy(state_fragment)
-    cfg = load_runtime_config()
-    memory_cfg = cfg.get('memory', {}) if isinstance(cfg.get('memory', {}), dict) else {}
-    unified_memory_transaction = bool(memory_cfg.get('unified_transaction_enabled', True))
-    consolidate_every = cfg.get('memory', {}).get('consolidate_every_turns', 3)
-    is_consolidation_turn = consolidate_every > 0 and current_turn_num % consolidate_every == 0
-    force_full_keeper_for_objects = _is_object_heavy_turn(text, reply, state, state_fragment)
-    _will_run_fill = unified_memory_transaction or is_first_turn or needs_keeper_bootstrap or is_consolidation_turn or force_full_keeper_for_objects
-    should_run_skeleton = completion_status == 'complete' and skeleton_keeper_enabled() and not unified_memory_transaction and (not is_first_turn) and (not needs_keeper_bootstrap)
-    if should_run_skeleton:
-        try:
-            skeleton_result = call_skeleton_keeper(state, state_fragment, reply, return_trace=True)
-            skeleton_fragment = skeleton_result[0]
-            skeleton_usage = skeleton_result[1]
-            skeleton_keeper_trace = skeleton_result[2] if len(skeleton_result) > 2 else None
-        except Exception as err:
-            skeleton_keeper_diagnostics = {
-                'provider_requested': 'llm',
-                'provider_used': 'disabled-or-failed',
-                'model_usage': None,
-                'fallback_used': True,
-                'fallback_reason': str(err),
-            }
-        else:
-            state_fragment = merge_state_skeleton(state_fragment, skeleton_fragment)
-            context = dict(context)
-            context['state_fragment'] = state_fragment
-            skeleton_keeper_diagnostics = {
-                'provider_requested': 'llm',
-                'provider_used': 'llm',
-                'model_usage': skeleton_usage,
-                'fallback_used': False,
-                'fallback_reason': None,
-                'skeleton_fragment': skeleton_fragment,
-                'skeleton_every_turns': skeleton_every,
-            }
-    elif completion_status == 'complete' and skeleton_keeper_enabled():
-        skeleton_keeper_diagnostics = {
-            'provider_requested': 'llm',
-            'provider_used': 'skipped',
-            'model_usage': None,
-            'fallback_used': False,
-            'fallback_reason': None,
-            'skipped_reason': 'skeleton_keeper disabled or incomplete reply',
-            'skeleton_every_turns': skeleton_every,
-        }
-    turn_trace['runtime']['skeleton_keeper'] = {
-        'diagnostics': copy.deepcopy(skeleton_keeper_diagnostics),
-        'trace': copy.deepcopy(skeleton_keeper_trace),
-    }
-    turn_trace['runtime']['state_fragment_final'] = copy.deepcopy(state_fragment)
 
     if completion_status == 'partial':
         response = {
@@ -1819,299 +1687,84 @@ def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
         }
         return finalize_response(response, trace=turn_trace)
 
-    state_error = None
-    state_keeper_diagnostics = None
-    state_keeper_trace = {}
+    # 方案 7.2：不再同步调用 state_keeper / skeleton_keeper / possession retry。
+    # 小结与 state 由后台 summarizer 在一次调用中生成。
 
-    if _will_run_fill:
-        try:
-            state, state_keeper_trace = call_state_keeper(
-                session_id,
-                reply,
-                state_fragment=state_fragment,
-                user_text=text,
-                return_trace=True,
-            )
-            state_keeper_diagnostics = state.get('state_keeper_diagnostics', {})
-            if force_full_keeper_for_objects:
-                state_keeper_diagnostics['forced_full_keeper_reason'] = 'object_heavy_turn'
-            if unified_memory_transaction:
-                state_keeper_diagnostics['unified_memory_transaction'] = True
-            if is_first_turn or needs_keeper_bootstrap:
-                state_keeper_diagnostics['bootstrap_turn'] = True
-            state['state_keeper_bootstrapped'] = True
-        except Exception as err:
-            state_error = str(err)
-            fragment_state = build_state_from_fragment(state, state_fragment, session_id)
-            fragment_state['state_keeper_diagnostics'] = _state_keeper_failure_diagnostics(err, state_error)
-            if force_full_keeper_for_objects:
-                fragment_state['state_keeper_diagnostics']['forced_full_keeper_reason'] = 'object_heavy_turn'
-            fragment_state['state_keeper_bootstrapped'] = _keeper_fallback_bootstrapped(fragment_state, skeleton_keeper_diagnostics)
-            state = fragment_state
-            state_keeper_diagnostics = fragment_state['state_keeper_diagnostics']
-    else:
-        state_keeper_trace = {}
-        fragment_state = build_state_from_fragment(state, state_fragment, session_id)
-        provider_used = 'skeleton+fragment' if skeleton_keeper_diagnostics and not skeleton_keeper_diagnostics.get('fallback_used') else 'fragment-baseline'
-        fragment_state['state_keeper_diagnostics'] = {
-            'provider_requested': 'skeleton-only',
-            'provider_used': provider_used,
-            'model_usage': None,
-            'fallback_used': False,
-            'skipped_reason': f'non-consolidation turn ({current_turn_num}/{consolidate_every}), skeleton keeper provides core fields',
-        }
-        state = fragment_state
-        state_keeper_diagnostics = fragment_state.get('state_keeper_diagnostics', {})
-        state['state_keeper_diagnostics'] = state_keeper_diagnostics
-        if 'state_keeper_bootstrapped' not in state:
-            state['state_keeper_bootstrapped'] = bool(state.get('opening_started'))
-    turn_trace['runtime']['state_keeper'] = {
-        'diagnostics': copy.deepcopy(state_keeper_diagnostics),
-        'trace': copy.deepcopy(state_keeper_trace),
-        'state_error': state_error,
-    }
-
-    # --- Fix 5: retry possession extraction when object_heavy_turn but keeper missed it ---
-    if force_full_keeper_for_objects and completion_status == 'complete' and not state_error and not unified_memory_transaction:
-        keeper_payload = state_keeper_trace.get('payload', {}) if isinstance(state_keeper_trace, dict) else {}
-        if not keeper_payload.get('possession_state'):
-            retry_result = retry_possession_keeper(
-                reply,
-                state.get('tracked_objects', []),
-                state.get('possession_state', []),
-                user_text=text,
-            )
-            if retry_result and retry_result.get('payload', {}).get('possession_state'):
-                from copy import deepcopy as _dc
-                retry_items = retry_result['payload']['possession_state']
-                possession = list(state.get('possession_state', []) or [])
-                existing_map = {str(item.get('object_id', '')): i for i, item in enumerate(possession) if isinstance(item, dict)}
-                for item in retry_items:
-                    if not isinstance(item, dict) or not item.get('object_id'):
-                        continue
-                    idx = existing_map.get(item['object_id'])
-                    if idx is not None:
-                        for k in ('holder', 'status', 'location'):
-                            if item.get(k):
-                                possession[idx][k] = item[k]
-                        possession[idx]['updated_by_turn'] = 'turn_current'
-                    else:
-                        possession.append(item)
-                state['possession_state'] = possession
-                if isinstance(state_keeper_diagnostics, dict):
-                    state_keeper_diagnostics['possession_retry'] = True
-
-    # --- Fix 2: reset stale immediate_goal when scene_objective is resolved ---
-    scene_obj = state.get('scene_objective', {}) if isinstance(state.get('scene_objective'), dict) else {}
-    keeper_payload = state_keeper_trace.get('payload', {}) if isinstance(state_keeper_trace, dict) else {}
-    keeper_scene_obj = keeper_payload.get('scene_objective', {}) if isinstance(keeper_payload.get('scene_objective'), dict) else {}
-    # Only trigger when keeper explicitly marked it resolved this turn
-    if keeper_scene_obj.get('status') == 'resolved' and scene_obj.get('status') == 'resolved':
-        current_goal = str(state.get('immediate_goal', '') or '').strip()
-        if current_goal and current_goal != '待确认':
-            state['immediate_goal'] = '待确认'
-
-    turn_trace['runtime']['state_after_keeper'] = copy.deepcopy(state)
     append_turn_history(assistant_item={'ts': ts + 1, 'role': 'assistant', 'content': reply, 'completion_status': completion_status})
     _message_stage('history_committed', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-    state = merge_arbiter_state(state, arbiter)
-    state = apply_thread_tracker(state, user_text=text, narrator_reply=reply, arbiter=arbiter)
-    state['continuity_hints'] = normalized_hint_entries(session_id)
-    state = _apply_important_npc_trackers(state, session_id, context)
-    recent_pairs = _recent_history_pairs(load_history(session_id), limit=3)
 
-    state = _add_lightweight_knowledge_delta(state, reply)
-    state = update_actor_registry(
-        state,
-        narrator_reply=reply,
-        turn_number=current_turn_num,
-        user_text=text,
-        recent_pairs=recent_pairs,
-        player_name=context.get('player_profile_json', {}).get('name', '') or context.get('player_profile_json', {}).get('courtesyName', ''),
-        use_llm=not unified_memory_transaction,
-    )
-    state, memory_canonicalization_changes = canonicalize_state_memory(state)
-    state, stale_memory_changes = resolve_stale_state_threads(state)
-    # Apply pending NPC bios from keeper (after actor_registry to avoid normalize overwrite)
-    _apply_pending_npc_bios(state, current_turn_num)
-    # Single authoritative turn commit after keeper, arbiter, thread/npc trackers,
-    # and actor registry have all merged their bindings. update_actor_registry
-    # contains its own LLM-failure fallback so it does not raise out, which lets
-    # us collapse the prior intermediate save into this final write.
-    # When WRITE_IMPORTANT is on, fact-log project merge is the last writer of
-    # important_npcs (after actor_registry / memory_maintenance may have touched it).
-    write_important = _factlog_write_important_enabled()
-    if write_important:
-        state = _commit_fact_log_turn(
-            session_id, turn_id, current_turn_num,
-            prev_state if isinstance(prev_state, dict) else {},
-            state, write_important=True,
-        )
-    save_state(session_id, state)
-    _message_stage('state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-    if not write_important:
-        _shadow_commit_fact_log(session_id, turn_id, current_turn_num, prev_state, state)
+    # Memory V3 流程：
+    # 1. 在 turn_summaries 里写入一条 status=pending 的占位记录
+    reply_hash = hashlib.sha1(reply.encode('utf-8')).hexdigest()
+    simple_state = load_simple_state(session_id)
+    placeholder_record = {
+        'turn': current_turn_num,
+        'turn_id': turn_id,
+        'reply_hash': reply_hash,
+        'status': 'pending',
+        'summary': '',
+        'state_after': simple_state,
+        'edited': False,
+        'error': '',
+        'model': '',
+        'updated_at': int(time.time() * 1000),
+    }
+    upsert_turn_summary(session_id, placeholder_record)
+
+    # 2. 调度后台任务
+    enqueue_after_turn(session_id, current_turn_num, arbiter_result=arbiter_result)
+
+    # 3. 构造返回响应
     committed_response = {
         'session_id': session_id,
         'turn_id': turn_id,
         'reply': reply,
         'usage': usage,
-        'state_snapshot': build_state_snapshot(state),
+        'state_snapshot': build_state_snapshot(simple_state),
         'web': web_runtime_settings(),
         'post_commit_status': 'state_saved',
+        'memory_status': 'pending',
     }
     meta['last_turn_id'] += 1
     _cache_processed_turn(session_id, meta, client_turn_id, committed_response)
     _message_stage('idempotency_cached_state_saved', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-    summary_chunk_result = update_summary_chunks(session_id, use_llm=not unified_memory_transaction)
-    _message_stage('summary_chunks_updated', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-    event_ledger = build_event_ledger_with_llm(
-        user_text=text,
-        narrator_reply=reply,
-        prev_state=prev_state if isinstance(prev_state, dict) else {},
-        onstage_names=state.get('onstage_npcs', []),
-        location=str(state.get('location', '') or ''),
-        recent_pairs=recent_pairs,
-        current_state=state,
-        keeper_signals=keeper_payload if unified_memory_transaction and isinstance(keeper_payload, dict) else None,
-        use_llm=not unified_memory_transaction,
-        require_turn_event_summary=unified_memory_transaction,
-    )
-    state_anchor_safe = not state_error and not (
-        isinstance(state_keeper_diagnostics, dict)
-        and state_keeper_diagnostics.get('provider_used') == 'fragment-baseline'
-    )
-    time_anchor, location_anchor = extract_time_location_anchor(
-        reply,
-        fallback_time=str(state.get('time', '') or '') if state_anchor_safe else '',
-        fallback_location=str(state.get('location', '') or '') if state_anchor_safe else '',
-    )
-    event_summary_item = build_event_summary_item(
-        turn_id=turn_id,
-        ledger=event_ledger,
-        onstage_names=state.get('onstage_npcs', []),
-        tracked_objects=state.get('tracked_objects', []),
-        carryover_clues=state.get('carryover_clues', []),
-        time_anchor=time_anchor,
-        location_anchor=location_anchor,
-        narrator_reply=reply,
-        actors_registry=state.get('actors', {}),
-    )
-    if event_summary_item.get('summary'):
-        upsert_event_summary(session_id, event_summary_item)
-    _message_stage('event_summary_updated', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-    summary_text = update_summary(session_id)
-    _message_stage('summary_updated', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-    if unified_memory_transaction:
-        persona_counts = {
-            'skipped': 'unified_memory_transaction',
-            'actor_persona_hooks': len(state.get('actor_persona_hooks', {}) if isinstance(state.get('actor_persona_hooks', {}), dict) else {}),
-        }
-    else:
-        persona_counts = update_persona(session_id, context.get('continuity_candidates', []))
-    _message_stage('persona_updated', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-    turn_audit = _build_turn_audit(
-        context,
-        turn_id=turn_id,
-        prompt_stats=prompt_stats,
-        force_full_keeper=force_full_keeper_for_objects,
-        force_full_keeper_reason='object_heavy_turn' if force_full_keeper_for_objects else '',
-        state_keeper_diagnostics=state_keeper_diagnostics if isinstance(state_keeper_diagnostics, dict) else {},
-    )
 
-    session_audit_summary = None
-    if is_consolidation_turn:
-        _consolidate_factlog_personas(session_id)
-        # Periodic heuristic self-check (no LLM): refreshes diagnostics/audit_*.json
-        # and surfaces style / persona / NPC-consistency warnings to the debug panel.
-        # Diagnostic-only and wrapped so it can never block the committed turn.
-        try:
-            audit_report = run_session_audit(session_id)
-            session_audit_summary = {
-                'severity': audit_report.get('severity'),
-                'summary': audit_report.get('summary'),
-                'issues': [
-                    {'type': issue.get('type'), 'severity': issue.get('severity'), 'message': issue.get('message')}
-                    for issue in (audit_report.get('issues', []) or [])
-                ],
-            }
-            _message_stage('session_audited', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
-        except Exception:
-            logger.exception('session audit failed: session=%s turn=%s', session_id, turn_id)
+    turn_audit = {
+        'turn_id': turn_id,
+        'narrator': {
+            'model': usage.get('model'),
+            'input_tokens': usage.get('input_tokens'),
+            'output_tokens': usage.get('output_tokens'),
+        },
+        'prompt_stats': prompt_stats,
+    }
 
     response = {
         'session_id': session_id,
         'turn_id': turn_id,
         'reply': reply,
         'usage': usage,
-        'state_snapshot': build_state_snapshot(state),
+        'state_snapshot': build_state_snapshot(simple_state),
         'meta': {'turn_audit': turn_audit},
         'web': web_runtime_settings(),
+        'memory_status': 'pending',
     }
     if debug_enabled:
-        retained_threads = [
-            {
-                'thread_id': item.get('thread_id'),
-                'label': item.get('label'),
-                'status': item.get('status'),
-                'cooldown_turns': item.get('cooldown_turns', 0),
-            }
-            for item in state.get('active_threads', []) if isinstance(item, dict) and item.get('status') == 'watch'
-        ]
-        retained_entities = [
-            {
-                'entity_id': item.get('entity_id'),
-                'primary_label': item.get('primary_label'),
-                'role_label': item.get('role_label'),
-            }
-            for item in state.get('scene_entities', []) if isinstance(item, dict) and not item.get('onstage')
-        ]
         response['debug'] = {
-            'scene_mode': 'runtime-loaded',
+            'scene_mode': 'runtime-v3-memory',
             'arbiter_used': bool(arbiter.get('arbiter_needed')),
             'arbiter_event_count': len(arbiter.get('results', [])),
             'arbiter_analysis': arbiter.get('analysis', {}),
-            'active_persona': [item['name'] for item in context.get('persona', [])],
             'loaded_preset': context.get('active_preset', {}).get('name', 'unknown'),
-                'loaded_onstage': scene.get('onstage_npcs', []),
-                'current_character': context.get('character_core', {}).get('name', ''),
-                'current_user': context.get('player_profile_json', {}).get('name', '') or context.get('player_profile_json', {}).get('courtesyName', '') or 'user',
-                'state_fragment': state_fragment,
-                'skeleton_keeper_diagnostics': skeleton_keeper_diagnostics,
-                'model_error': model_error,
-                'state_error': state_error,
-                'state_keeper_diagnostics': state_keeper_diagnostics,
-                'persona_counts': persona_counts,
-                'arbiter_results': arbiter.get('results', []),
-                'retained_threads': retained_threads,
-                'retained_entities': retained_entities,
-                'prompt_block_stats': copy.deepcopy(prompt_stats),
-                'selector': copy.deepcopy(context.get('context_audit', {})) if isinstance(context.get('context_audit', {}), dict) else {},
-                'lorebook_injection': copy.deepcopy(context.get('lorebook_injection', {})) if isinstance(context.get('lorebook_injection', {}), dict) else {},
-                'lorebook_text_injected': bool(context.get('lorebook_text', '')),
-                'system_npc_candidate_count': len(context.get('system_npc_candidates', []) or []),
-                'lorebook_npc_candidate_count': len(context.get('lorebook_npc_candidates', []) or []),
-                'npc_profile_count': len(context.get('npc_profiles', []) or []),
-                'session_audit': session_audit_summary,
-            }
-
-    _store_turn_audit(meta, turn_audit)
-    _cache_processed_turn(session_id, meta, client_turn_id, response)
-    _message_stage('idempotency_cached_final', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
+            'model_error': model_error,
+            'completion_status': completion_status,
+            'finish_reason': finish_reason,
+            'narrator_retry': copy.deepcopy(narrator_retry_trace),
+            'prompt_block_stats': copy.deepcopy(prompt_stats),
+        }
     turn_trace['post_turn'] = {
-        'state': copy.deepcopy(state),
-        'state_snapshot': build_state_snapshot(state),
-        'memory_maintenance': {
-            'canonicalization_changes': copy.deepcopy(memory_canonicalization_changes),
-            'stale_memory_changes': copy.deepcopy(stale_memory_changes),
-        },
-        'summary_updated': True,
-        'summary_text': summary_text,
-        'summary_chunks': copy.deepcopy(summary_chunk_result),
-        'event_ledger': copy.deepcopy(event_ledger),
-        'unified_memory_transaction': unified_memory_transaction,
-        'persona_counts': copy.deepcopy(persona_counts),
-        'event_summary_item': copy.deepcopy(event_summary_item),
+        'state': copy.deepcopy(simple_state),
+        'state_snapshot': build_state_snapshot(simple_state),
+        'turn_audit': copy.deepcopy(turn_audit),
     }
-    _message_stage('response_ready', session_id=session_id, turn_id=turn_id, client_turn_id=client_turn_id)
     return finalize_response(response)

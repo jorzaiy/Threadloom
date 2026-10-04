@@ -4,7 +4,7 @@ import random
 import re
 from pathlib import Path
 
-from runtime_store import save_state
+from simple_memory import save_simple_state
 from character_assets import load_character_core, load_openings
 
 
@@ -158,7 +158,7 @@ def initialize_opening_state(session_id: str, *, persist: bool = True) -> dict:
     # before the narrator turn. Handler_message.py still owns the final turn
     # commit after keeper, arbiter, thread, and actor merges complete.
     if persist:
-        save_state(session_id, state)
+        save_simple_state(session_id, state)
     return state
 
 
@@ -184,5 +184,5 @@ def initialize_opening_choice_state(session_id: str, choice: str, *, persist: bo
     # Persist the chosen opening before generating the first scene. This is a
     # checkpoint, not the authoritative end-of-turn commit.
     if persist:
-        save_state(session_id, state)
+        save_simple_state(session_id, state)
     return state
