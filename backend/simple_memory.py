@@ -211,6 +211,7 @@ def load_simple_state(session_id: str) -> dict:
             'goal': '待确认',
             'risks': [],
             'items': [],
+            'secrets': [],
             'opening_mode': 'direct',
             'opening_resolved': True,
             'opening_started': False,
@@ -243,6 +244,21 @@ def save_simple_state(session_id: str, state_data: dict) -> None:
     risks = state_data.get('risks')
     if risks is None:
         risks = state_data.get('immediate_risks', [])
+    # secrets 最多保留 8 条
+    secrets_raw = list(state_data.get('secrets', []) or [])
+    cleaned_secrets = []
+    for s in secrets_raw:
+        if isinstance(s, dict) and s.get('content'):
+            cleaned_secrets.append({
+                'content': str(s.get('content', '') or '').strip(),
+                'owner': str(s.get('owner', '') or '').strip(),
+                'knowers': list(s.get('knowers', []) or []),
+                'misbelief': dict(s.get('misbelief', {}) or {}) if isinstance(s.get('misbelief'), dict) else {},
+                'suspects': dict(s.get('suspects', {}) or {}) if isinstance(s.get('suspects'), dict) else {},
+            })
+    # 保留最近的 8 条
+    trimmed_secrets = cleaned_secrets[-8:]
+
     clean_state = {
         'session_id': session_id,
         'time': state_data.get('time', '待确认'),
@@ -251,6 +267,7 @@ def save_simple_state(session_id: str, state_data: dict) -> None:
         'goal': goal,
         'risks': list(risks or []),
         'items': list(state_data.get('items', []) or []),
+        'secrets': trimmed_secrets,
         'opening_mode': state_data.get('opening_mode', 'direct'),
         'opening_resolved': bool(state_data.get('opening_resolved', True)),
         'opening_started': bool(state_data.get('opening_started', False)),
@@ -295,6 +312,30 @@ def render_state_markdown(state: dict) -> str:
         lines.append("- 重要物品：" + "；".join(item_parts))
     else:
         lines.append("- 重要物品：暂无")
+    secrets = state.get('secrets', [])
+    if secrets:
+        secret_lines = []
+        for s in secrets:
+            if not isinstance(s, dict):
+                continue
+            content = s.get('content', '')
+            if not content:
+                continue
+            parts = [content]
+            knowers = s.get('knowers', [])
+            if knowers:
+                parts.append("知情：" + "、".join(str(k) for k in knowers))
+            misbelief = s.get('misbelief', {})
+            if isinstance(misbelief, dict) and misbelief:
+                mis_str = "、".join(f"{k}（{v}）" for k, v in misbelief.items())
+                parts.append(f"误以为：{mis_str}")
+            suspects = s.get('suspects', {})
+            if isinstance(suspects, dict) and suspects:
+                susp_str = "、".join(f"{k}（{v}）" for k, v in suspects.items())
+                parts.append(f"有所察觉：{susp_str}")
+            secret_lines.append(" —— ".join(parts))
+        if secret_lines:
+            lines.append("- 秘密与知情：\n  * " + "\n  * ".join(secret_lines))
     return '\n'.join(lines)
 
 
@@ -479,38 +520,56 @@ def verify_and_restore_stars(new_content: str, prev_content: str) -> tuple[str, 
     # 提取上一版人物档案中丢失人物的段落
     prev_sections = re.split(r'(?m)^(?=##\s+)', prev_content)
     prev_profiles_text = ''
+    prev_secrets_text = ''
     for sec in prev_sections:
         if sec.startswith('## 人物档案'):
             prev_profiles_text = sec
-            break
+        elif sec.startswith('## 秘密与知情'):
+            prev_secrets_text = sec
 
     restored_paragraphs = []
     restored_names = []
+    restored_secrets = []
     for name in missing:
         pattern = rf'(?m)^[^\n]*★\s*{re.escape(name)}.*?(?=(?:^[^\n]*★)|(?:\n\n)|(?:\Z))'
         found = re.search(pattern, prev_profiles_text, re.DOTALL)
         if found:
             restored_paragraphs.append(found.group(0).strip())
             restored_names.append(name)
+        # 保护与 ★ 角色相关的秘密不被删除
+        if prev_secrets_text and name in prev_secrets_text:
+            for s_line in prev_secrets_text.splitlines():
+                if name in s_line and s_line.strip() and s_line not in new_content:
+                    restored_secrets.append(s_line.strip())
 
-    if not restored_paragraphs:
+    if not restored_paragraphs and not restored_secrets:
         return new_content, []
 
-    # 将段落补回新版“## 人物档案”的末尾
+    # 将段落补回新版“## 人物档案”与“## 秘密与知情”的末尾
     new_sections = re.split(r'(?m)^(?=##\s+)', new_content)
     final_sections = []
-    appended = False
+    appended_profile = False
+    appended_secrets = False
     for sec in new_sections:
         if sec.startswith('## 人物档案'):
-            sec_trimmed = sec.rstrip()
-            sec_with_restored = sec_trimmed + '\n' + '\n'.join(restored_paragraphs) + '\n\n'
-            final_sections.append(sec_with_restored)
-            appended = True
+            if restored_paragraphs:
+                sec_trimmed = sec.rstrip()
+                sec = sec_trimmed + '\n' + '\n'.join(restored_paragraphs) + '\n\n'
+                appended_profile = True
+            final_sections.append(sec)
+        elif sec.startswith('## 秘密与知情'):
+            if restored_secrets:
+                sec_trimmed = sec.rstrip()
+                sec = sec_trimmed + '\n' + '\n'.join(restored_secrets) + '\n\n'
+                appended_secrets = True
+            final_sections.append(sec)
         else:
             final_sections.append(sec)
 
-    if not appended:
+    if not appended_profile and restored_paragraphs:
         final_sections.append('## 人物档案\n' + '\n'.join(restored_paragraphs) + '\n\n')
+    if not appended_secrets and restored_secrets:
+        final_sections.append('## 秘密与知情\n' + '\n'.join(restored_secrets) + '\n\n')
 
     return ''.join(final_sections), restored_names
 
@@ -579,6 +638,34 @@ def generate_turn_summary(session_id: str, turn: int, *, arbiter_result: Optiona
     summary_text = str(parsed.get('summary', '') or '').strip()
     raw_state = parsed.get('state', {}) if isinstance(parsed.get('state'), dict) else {}
 
+    # 提取并清理 secrets，做最多 8 条限制，被挤出的条目写进小结【知情】行
+    secrets_in = raw_state.get('secrets')
+    if secrets_in is None:
+        secrets_in = prev_state.get('secrets', [])
+    valid_secrets = []
+    for s in (secrets_in or []):
+        if isinstance(s, dict) and s.get('content'):
+            valid_secrets.append({
+                'content': str(s.get('content', '') or '').strip(),
+                'owner': str(s.get('owner', '') or '').strip(),
+                'knowers': list(s.get('knowers', []) or []),
+                'misbelief': dict(s.get('misbelief', {}) or {}) if isinstance(s.get('misbelief'), dict) else {},
+                'suspects': dict(s.get('suspects', {}) or {}) if isinstance(s.get('suspects'), dict) else {},
+            })
+
+    overflow_secrets = []
+    if len(valid_secrets) > 8:
+        overflow_secrets = valid_secrets[:-8]
+        valid_secrets = valid_secrets[-8:]
+
+    # 被挤出的条目追加进当轮小结的【知情】行
+    if overflow_secrets:
+        overflow_lines = []
+        for os_sec in overflow_secrets:
+            knowers_str = "、".join(os_sec['knowers']) if os_sec['knowers'] else "未知"
+            overflow_lines.append(f"【知情】（归档）{os_sec['content']}（知情者：{knowers_str}）")
+        summary_text = summary_text.rstrip() + "\n" + "\n".join(overflow_lines)
+
     # 保留开局等基础字段
     merged_state = {
         'session_id': session_id,
@@ -588,6 +675,7 @@ def generate_turn_summary(session_id: str, turn: int, *, arbiter_result: Optiona
         'goal': raw_state.get('goal') or prev_state.get('goal', '待确认'),
         'risks': list(raw_state.get('risks', []) or prev_state.get('risks', []) or []),
         'items': list(raw_state.get('items', []) or prev_state.get('items', []) or []),
+        'secrets': valid_secrets,
         'opening_mode': prev_state.get('opening_mode', 'direct'),
         'opening_resolved': bool(prev_state.get('opening_resolved', True)),
         'opening_started': bool(prev_state.get('opening_started', False)),
