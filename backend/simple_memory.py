@@ -1064,12 +1064,13 @@ def _run_session_memory_job(session_id: str, user_id: str, character_id: str) ->
                     _SESSION_FUTURES.pop(session_id, None)
 
 
-def enqueue_after_turn(session_id: str, turn: int, *, arbiter_result: Optional[dict] = None) -> None:
+def enqueue_after_turn(session_id: str, turn: int, *, arbiter_result: Optional[dict] = None, update_arbiter: bool = True) -> None:
     """每轮提交后放入队列调度。已有任务在跑时，标记续跑而不是丢弃。"""
     user_id = active_user_id()
     char_id = active_character_id()
     with _FUTURES_LOCK:
-        _LATEST_ARBITER[session_id] = (int(turn), arbiter_result)
+        if update_arbiter:
+            _LATEST_ARBITER[session_id] = (int(turn), arbiter_result)
         existing = _SESSION_FUTURES.get(session_id)
         if existing and not existing.done():
             _RERUN_REQUESTED.add(session_id)

@@ -978,9 +978,9 @@ def _build_retrieve_shadow_record(
         'lane_counts': lane_counts,
         'beyond_window': [hit.get('fact_id') for hit in hits
                           if int(hit.get('turn', 0) or 0) < window_start],
-        'selector_event_hits': [str(h.get('event_id', '') or '') for h in (audit.get('event_hits') or [])
+        'selector_event_hits': [str(h.get('event_id', '') or '') for h in ((audit or {}).get('event_hits') or [])
                                 if isinstance(h, dict)],
-        'selector_summary_chunk_hits': [str(h.get('chunk_id', '') or '') for h in (audit.get('summary_chunk_hits') or [])
+        'selector_summary_chunk_hits': [str(h.get('chunk_id', '') or '') for h in ((audit or {}).get('summary_chunk_hits') or [])
                                         if isinstance(h, dict)],
         'injected': bool(injected),
     }

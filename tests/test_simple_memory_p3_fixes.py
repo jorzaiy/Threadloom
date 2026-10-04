@@ -15,6 +15,7 @@ from simple_memory import (
     save_turn_summaries,
     upsert_turn_summary,
 )
+import server
 from tests.test_simple_memory_p3 import p3_env, DummyHandler, SESSION_P3
 
 
@@ -111,3 +112,44 @@ def test_failed_big_summary_regenerate_keeps_old_content_in_context(p3_env, monk
     # 验证失败后，旧内容仍然留在记忆上下文里！
     ctx_after_failure = build_memory_context(SESSION_P3)
     assert '大总结1' in ctx_after_failure['big_summary_block']
+
+
+def test_post_memory_state_waits_idle_outside_lock(p3_env, monkeypatch):
+    """验证 /api/memory/state 在获取会话锁之前先 wait_idle。"""
+    events = []
+    fake_lock = server.session_lock(SESSION_P3)
+
+    def spy_wait_idle(session_id, timeout_s=20.0):
+        events.append(('wait_idle', fake_lock.locked()))
+        return True
+
+    monkeypatch.setattr('simple_memory.wait_idle', spy_wait_idle)
+    h = DummyHandler()
+    h._post_memory_state(None, {
+        'session_id': SESSION_P3,
+        'state': {'location': '新地点'},
+    })
+    assert h.response_status == 200
+    assert len(events) == 1
+    # 必须在锁外调用 wait_idle（即 locked() 为 False）
+    assert events[0] == ('wait_idle', False)
+
+
+def test_regenerate_old_turn_does_not_clear_latest_arbiter(p3_env, monkeypatch):
+    """重新生成旧轮次小结时，传入 update_arbiter=False，不冲掉最新一轮的裁定结果。"""
+    import simple_memory
+    # 假设当前最新一轮是第 5 轮，带裁定结果
+    simple_memory._LATEST_ARBITER[SESSION_P3] = (5, [{'event_id': 'evt_005'}])
+
+    h = DummyHandler()
+    # 重新生成第 1 轮
+    h._post_memory_turn_summary_regenerate(None, {
+        'session_id': SESSION_P3,
+        'turn': 1,
+        'force': True,
+    })
+    assert h.response_status == 200
+
+    # 验证第 5 轮的裁定没有被冲掉成 (1, None)
+    assert simple_memory._LATEST_ARBITER[SESSION_P3] == (5, [{'event_id': 'evt_005'}])
+

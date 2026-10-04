@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 try:
     from .atomic_io import atomic_write_text
@@ -221,17 +222,18 @@ def _rollback_derived_artifacts(session_id: str, target_turn_id: str, turn_trace
     delete_turn_summaries_from(session_id, target_turn)
 
     # 3. state.json 恢复为第 turn-1 轮的 state_after
-    restored_state = None
+    restored_state: dict[str, Any] | None = None
     all_turns = load_turn_summaries(session_id)
     for t in reversed(all_turns):
-        if int(t.get('turn', 0) or 0) < target_turn and t.get('state_after'):
+        if int(t.get('turn', 0) or 0) < target_turn and isinstance(t.get('state_after'), dict):
             restored_state = t.get('state_after')
             break
 
-    if not restored_state:
+    if not isinstance(restored_state, dict):
         # 回退到 turn-trace 的 pre_turn.state，再没有就用 load_simple_state 默认值
         pre_turn = turn_trace.get('pre_turn', {}) if isinstance(turn_trace.get('pre_turn', {}), dict) else {}
-        restored_state = pre_turn.get('state') if isinstance(pre_turn.get('state'), dict) else load_simple_state(session_id)
+        pre_state = pre_turn.get('state') if isinstance(pre_turn, dict) else None
+        restored_state = pre_state if isinstance(pre_state, dict) else load_simple_state(session_id)
 
     save_simple_state(session_id, restored_state)
 

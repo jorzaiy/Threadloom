@@ -162,7 +162,7 @@ def test_post_turn_summary_edit_and_stale_flag(p3_env):
 def test_post_turn_summary_regenerate_conflict_and_force(p3_env, monkeypatch):
     h = DummyHandler()
     called = []
-    monkeypatch.setattr('simple_memory.enqueue_after_turn', lambda sid, turn: called.append(turn))
+    monkeypatch.setattr('simple_memory.enqueue_after_turn', lambda sid, turn, *a, **k: called.append(turn))
 
     # 先编辑
     h._post_memory_turn_summary(None, {'session_id': SESSION_P3, 'turn': 1, 'summary': '手动编辑'})

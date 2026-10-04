@@ -986,7 +986,9 @@ class Handler(BaseHTTPRequestHandler):
         state_in = payload.get('state')
         if not isinstance(state_in, dict):
             return self._invalid_input('state must be an object')
-        from simple_memory import save_simple_state, load_simple_state
+        from simple_memory import save_simple_state, load_simple_state, wait_idle
+        # 锁外等待后台小结任务结束，防止正在生成的旧状态推导覆盖刚编辑的状态
+        wait_idle(session_id, timeout_s=20.0)
         with self._session_lock(session_id):
             save_simple_state(session_id, state_in)
             updated = load_simple_state(session_id)
@@ -1061,7 +1063,8 @@ class Handler(BaseHTTPRequestHandler):
             target['retry_count'] = 0
             upsert_turn_summary(session_id, target)
 
-        enqueue_after_turn(session_id, turn)
+        # 重新生成旧轮次时不更新 _LATEST_ARBITER，避免冲掉最新轮次的裁定结果
+        enqueue_after_turn(session_id, turn, update_arbiter=False)
         return self._send(200, {'session_id': session_id, 'turn': turn, 'status': 'pending'})
 
     def _post_memory_big_summary(self, parsed, payload):
