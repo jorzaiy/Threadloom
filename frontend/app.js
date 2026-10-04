@@ -423,11 +423,6 @@ function renderCharacterSelect() {
 }
 
 function resetSidePanels() {
-  if (entityEl) {
-    entityEl.textContent = '点击状态面板中的 NPC 名称查看详情';
-  }
-  if (npcSectionEl) npcSectionEl.innerHTML = '';
-  if (objectThreadSectionEl) objectThreadSectionEl.innerHTML = '';
   renderDebug(null);
 }
 
@@ -2000,11 +1995,6 @@ async function deleteSession(targetSessionId = sessionId()) {
     renderDebug({session_deleted: {session_id: current, next_session: next, deleted_paths: data.deleted_paths || []}});
     updateSessionIndicator();
   }
-}
-
-async function loadEntity(entityId) {
-  const data = await apiJson(`/api/entity?session_id=${encodeURIComponent(sessionId())}&entity_id=${encodeURIComponent(entityId)}`);
-  entityEl.textContent = JSON.stringify(data.entity || data, null, 2);
 }
 
 composer.addEventListener('submit', async (e) => {
