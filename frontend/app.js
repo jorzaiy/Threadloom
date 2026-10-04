@@ -1,9 +1,15 @@
 const messagesEl = document.getElementById('messages');
-const stateEl = document.getElementById('state');
-const npcSectionEl = document.getElementById('npcSection');
-const objectThreadSectionEl = document.getElementById('objectThreadSection');
-const entityEl = document.getElementById('entityDetail');
-const debugEl = document.getElementById('debugDetail');
+const stateSectionEl = document.getElementById('stateSection');
+const stateViewEl = document.getElementById('stateView');
+const editStateBtn = document.getElementById('editStateBtn');
+const stateEditForm = document.getElementById('stateEditForm');
+const cancelStateEditBtn = document.getElementById('cancelStateEditBtn');
+const turnSummaryProgressBadge = document.getElementById('turnSummaryProgressBadge');
+const turnSummariesList = document.getElementById('turnSummariesList');
+const bigSummaryProgressBadge = document.getElementById('bigSummaryProgressBadge');
+const bigSummariesList = document.getElementById('bigSummariesList');
+const superSummariesList = document.getElementById('superSummariesList');
+let memoryPollInterval = null;
 const composer = document.getElementById('composer');
 const input = document.getElementById('input');
 const regenerateBtn = document.getElementById('regenerateBtn');
@@ -467,8 +473,9 @@ function renderModelConfig() {
     value: item.id,
     label: item.id,
   }));
+  const summarizerModel = modelConfig.summarizer?.model || modelConfig.state_keeper?.model;
   setSelectOptions(narratorModelSelect, models, modelConfig.narrator?.model, item => item.label);
-  setSelectOptions(stateKeeperModelSelect, models, modelConfig.state_keeper?.model, item => item.label);
+  setSelectOptions(stateKeeperModelSelect, models, summarizerModel, item => item.label);
   setSelectOptions(narratorPresetSelect, presets, modelConfig.active_preset, item => item.label);
   if (modelConfigNote && !modelConfigNote.dataset.kind) {
   }
@@ -484,12 +491,13 @@ function validateSiteDraft(draft) {
 function validateRuntimeDraft(draft) {
   const available = new Set((siteConfig.models || []).map(item => item.id));
   const presetIds = new Set((modelConfig.presets || []).map(item => item.id));
-  if (!draft.narrator.model) return 'Narrator 模型不能为空';
-  if (!draft.state_keeper.model) return 'State Keeper 模型不能为空';
+  if (!draft.narrator.model) return '叙事模型不能为空';
+  const summarizerChoice = draft.summarizer?.model || draft.state_keeper?.model;
+  if (!summarizerChoice) return '总结模型不能为空';
   if (!draft.active_preset) return '叙事预设不能为空';
   if (available.size === 0) return '当前还没有模型列表，请先点击“获取模型”';
-  if (!available.has(draft.narrator.model)) return 'Narrator 模型不在当前站点模型列表中';
-  if (!available.has(draft.state_keeper.model)) return 'State Keeper 模型不在当前站点模型列表中';
+  if (!available.has(draft.narrator.model)) return '叙事模型不在当前站点模型列表中';
+  if (!available.has(summarizerChoice)) return '总结模型不在当前站点模型列表中';
   if (presetIds.size > 0 && !presetIds.has(draft.active_preset)) return '叙事预设不存在';
   return '';
 }
@@ -765,6 +773,9 @@ async function saveModelRuntimeConfig() {
     active_preset: narratorPresetSelect.value,
     narrator: {
       model: narratorModelSelect.value,
+    },
+    summarizer: {
+      model: stateKeeperModelSelect.value,
     },
     state_keeper: {
       model: stateKeeperModelSelect.value,
@@ -1384,417 +1395,397 @@ function isNearBottom(threshold = 96) {
   return distance <= threshold;
 }
 
-function renderState(state) {
-  stateEl.innerHTML = '';
-  if (npcSectionEl) npcSectionEl.innerHTML = '';
-  if (objectThreadSectionEl) objectThreadSectionEl.innerHTML = '';
+let currentMemoryData = null;
 
-  // --- Context table (time / location / main event / goal) ---
-  const rows = [
-    ['时间', state.time],
-    ['地点', state.location],
-  ];
+function stopMemoryPolling() {
+  if (memoryPollInterval) {
+    clearInterval(memoryPollInterval);
+    memoryPollInterval = null;
+  }
+}
+
+function startMemoryPolling() {
+  if (memoryPollInterval) return;
+  memoryPollInterval = setInterval(async () => {
+    if (!sessionId() || debugFloatPanel?.getAttribute('aria-hidden') === 'true') {
+      stopMemoryPolling();
+      return;
+    }
+    await loadMemory();
+  }, 2000);
+}
+
+async function loadMemory() {
+  const sid = sessionId();
+  if (!sid) return;
+  try {
+    const data = await apiJson(`/api/memory?session_id=${encodeURIComponent(sid)}`);
+    currentMemoryData = data;
+    renderMemoryPanel(data);
+    if (data.job_status?.running || data.turn_summaries?.some(t => t.status === 'pending')) {
+      startMemoryPolling();
+    } else {
+      stopMemoryPolling();
+    }
+  } catch (err) {
+    console.error('loadMemory failed:', err);
+  }
+}
+
+function renderMemoryPanel(data) {
+  if (!data) return;
+  renderMemoryState(data.state || {});
+  renderTurnSummaries(data.turn_summaries || [], data.progress?.big_summary || '');
+  renderBigSummaries(data.big_summaries || [], data.progress?.super_summary || '');
+  renderSuperSummaries(data.super_summaries || []);
+}
+
+function renderMemoryState(state) {
+  if (!stateViewEl) return;
+  stateViewEl.innerHTML = '';
   const table = document.createElement('table');
   table.className = 'state-table';
-  for (const [label, value] of rows) {
-    if (!value || value === '待确认') continue;
+  const rows = [
+    ['时间', state.time || '待确认'],
+    ['地点', state.location || '待确认'],
+    ['在场人物', (state.onstage || []).join('、') || '无'],
+    ['当前目标', state.goal || '待确认'],
+    ['当前风险', (state.risks || []).join('；') || '暂无'],
+  ];
+  for (const [k, v] of rows) {
     const tr = document.createElement('tr');
     const th = document.createElement('th');
-    th.textContent = label;
+    th.textContent = k;
     const td = document.createElement('td');
-    td.textContent = value || '待确认';
+    td.textContent = v;
     tr.appendChild(th);
     tr.appendChild(td);
     table.appendChild(tr);
   }
-  if (table.children.length) {
-    stateEl.appendChild(table);
-  }
-
-  const summaryWrap = document.createElement('div');
-  summaryWrap.className = 'state-summary-block';
-
-  if (state.main_event) {
-    const summaryLine = document.createElement('div');
-    summaryLine.className = 'state-summary-line';
-    summaryLine.innerHTML = '<strong>主要事件</strong>';
-    const _span1 = document.createElement('span'); _span1.textContent = state.main_event; summaryLine.appendChild(_span1);
-    summaryWrap.appendChild(summaryLine);
-  }
-
-  const sceneObjective = state.scene_objective && typeof state.scene_objective === 'object' ? state.scene_objective : null;
-  if (sceneObjective && sceneObjective.status !== 'resolved' && sceneObjective.objective) {
-    const summaryLine = document.createElement('div');
-    summaryLine.className = 'state-summary-line';
-    summaryLine.innerHTML = '<strong>事件目标</strong>';
-    const objectiveParts = [];
-    if (sceneObjective.label) objectiveParts.push(sceneObjective.label);
-    objectiveParts.push(sceneObjective.objective);
-    if (sceneObjective.completion_hint) objectiveParts.push(`边界：${sceneObjective.completion_hint}`);
-    const objectiveSpan = document.createElement('span');
-    objectiveSpan.textContent = objectiveParts.join(' / ');
-    summaryLine.appendChild(objectiveSpan);
-    summaryWrap.appendChild(summaryLine);
-  }
-
-  if (state.immediate_goal && state.immediate_goal !== '待确认') {
-    const summaryLine = document.createElement('div');
-    summaryLine.className = 'state-summary-line';
-    summaryLine.innerHTML = '<strong>下一步</strong>';
-    const _span2 = document.createElement('span'); _span2.textContent = state.immediate_goal; summaryLine.appendChild(_span2);
-    summaryWrap.appendChild(summaryLine);
-  }
-
-  const signals = Array.isArray(state.carryover_signals) ? state.carryover_signals : [];
-  if (signals.length) {
-    const signalLine = document.createElement('div');
-    signalLine.className = 'state-summary-line';
-    signalLine.innerHTML = '<strong>延续信号</strong>';
-    const signalText = signals
-      .slice(0, 4)
-      .map(item => typeof item === 'string' ? item : [item?.type, item?.text].filter(Boolean).join('：'))
-      .filter(Boolean)
-      .join(' / ');
-    const signalSpan = document.createElement('span');
-    signalSpan.textContent = signalText;
-    signalLine.appendChild(signalSpan);
-    summaryWrap.appendChild(signalLine);
-  }
-
-  if (summaryWrap.children.length) {
-    stateEl.appendChild(summaryWrap);
-  }
-
-  // --- NPC section ---
-  const npcTarget = npcSectionEl || stateEl;
-
-  function buildNpcTable(title, items) {
-    const wrap = document.createElement('div');
-    wrap.className = 'npc-block';
-    const heading = document.createElement('strong');
-    heading.textContent = title;
-    wrap.appendChild(heading);
-
-    const table = document.createElement('table');
-    table.className = 'state-table npc-table';
-    const tbody = document.createElement('tbody');
-
-    if (!items || items.length === 0) {
-      const tr = document.createElement('tr');
-      const emptyTd = document.createElement('td');
-      emptyTd.colSpan = 2;
-      emptyTd.textContent = '暂无';
-      emptyTd.className = 'empty-hint';
-      tr.appendChild(emptyTd);
-      tbody.appendChild(tr);
-    } else {
-      items.forEach((item, idx) => {
-        const tr = document.createElement('tr');
-        const th = document.createElement('th');
-        th.textContent = `${idx + 1}`;
-        const td = document.createElement('td');
-        const name = item?.name || '待确认';
-        const entityId = item?.entity_id || item?.actor_id || null;
-        const roleLabel = item?.role_label || '';
-        const ambiguous = Boolean(item?.ambiguous);
-        const label = roleLabel ? `${name} / ${roleLabel}` : name;
-
-        if (entityId && !ambiguous) {
-          const btn = document.createElement('button');
-          btn.className = 'npc-link';
-          btn.textContent = label;
-          btn.onclick = () => loadEntity(entityId);
-          td.appendChild(btn);
-        } else {
-          const span = document.createElement('span');
-          span.className = 'npc-fallback';
-          span.textContent = ambiguous ? `${label}（存在多个同名实体）` : label;
-          td.appendChild(span);
-        }
-        const ownedObjects = Array.isArray(item?.owned_objects) ? item.owned_objects : [];
-        if (ownedObjects.length) {
-          const owned = document.createElement('div');
-          owned.className = 'object-line muted-line';
-          owned.textContent = `持有：${ownedObjects.slice(0, 3).map(obj => obj?.label || obj?.object_id).filter(Boolean).join(' / ')}`;
-          td.appendChild(owned);
-        }
-        tr.appendChild(th);
-        tr.appendChild(td);
-        tbody.appendChild(tr);
-      });
-    }
-
-    table.appendChild(tbody);
-    wrap.appendChild(table);
-    return wrap;
-  }
-
-  const npcRows = [];
-  const seenNpc = new Set();
-  const seenNpcNames = new Set();
-  const actors = state.actors && typeof state.actors === 'object' ? state.actors : {};
-  const actorIndex = state.actor_context_index && typeof state.actor_context_index === 'object' ? state.actor_context_index : {};
-  const activeActorIds = Array.isArray(actorIndex.active_actor_ids) ? actorIndex.active_actor_ids : Object.keys(actors);
-  for (const actorId of activeActorIds) {
-    if (actorId === 'protagonist') continue;
-    const actor = actors[actorId];
-    if (!actor || typeof actor !== 'object' || actor.kind === 'protagonist') continue;
-    const name = actor.name || actor.aliases?.[0] || '';
-    if (!name) continue;
-    const key = `actor|${actorId}`;
-    if (seenNpc.has(key) || seenNpcNames.has(name)) continue;
-    seenNpc.add(key);
-    seenNpcNames.add(name);
-    npcRows.push({
-      name,
-      entity_id: actorId,
-      actor_id: actorId,
-      role_label: actor.identity || 'actor registry',
-      ambiguous: false,
-    });
-  }
-  for (const group of [state.onstage_entities || [], state.relevant_entities || []]) {
-    for (const item of group) {
-      const key = `${item?.entity_id || ''}|${item?.name || ''}`;
-      if (seenNpc.has(key) || seenNpcNames.has(item?.name || '')) continue;
-      seenNpc.add(key);
-      if (item?.name) seenNpcNames.add(item.name);
-      npcRows.push(item);
-    }
-  }
-  for (const item of state.scene_entities || []) {
-    const key = `${item?.entity_id || ''}|${item?.primary_label || ''}`;
-    if (seenNpc.has(key) || !item?.primary_label || seenNpcNames.has(item.primary_label)) continue;
-    seenNpc.add(key);
-    seenNpcNames.add(item.primary_label);
-    npcRows.push({
-      name: item.primary_label,
-      entity_id: item.entity_id || null,
-      role_label: item.role_label || '',
-      ambiguous: false,
-      owned_objects: item.owned_objects || [],
-    });
-  }
-  for (const item of state.important_npcs || []) {
-    const key = `important|${item?.primary_label || ''}`;
-    if (seenNpc.has(key) || !item?.primary_label || seenNpcNames.has(item.primary_label)) continue;
-    seenNpc.add(key);
-    seenNpcNames.add(item.primary_label);
-    npcRows.push({
-      name: item.primary_label,
-      entity_id: null,
-      role_label: item.role_label || '',
-      ambiguous: false,
-    });
-  }
-  npcTarget.appendChild(buildNpcTable('NPC 列表', npcRows));
-
-  // --- Objects & Carryover Signals section ---
-  const otTarget = objectThreadSectionEl || stateEl;
-
-  const objects = state.tracked_objects || [];
-  const possession = state.possession_state || [];
-  const visibility = state.object_visibility || [];
-  const possessionById = Object.fromEntries((possession || []).map(item => [item.object_id, item]));
-  const visibilityById = Object.fromEntries((visibility || []).map(item => [item.object_id, item]));
-
-  const objectWrap = document.createElement('div');
-  objectWrap.className = 'npc-block';
-  const objectHeading = document.createElement('strong');
-  objectHeading.textContent = '关键物件';
-  objectWrap.appendChild(objectHeading);
-
-  const objectTable = document.createElement('table');
-  objectTable.className = 'state-table npc-table';
-  const objectBody = document.createElement('tbody');
-  if (!objects.length) {
+  if (state.items?.length) {
     const tr = document.createElement('tr');
+    const th = document.createElement('th');
+    th.textContent = '重要物品';
     const td = document.createElement('td');
-    td.colSpan = 2;
-    td.textContent = '暂无';
-    td.className = 'empty-hint';
+    td.textContent = state.items.map(it => `${it.name || ''}（持有：${it.holder || '未知'}）`).join('；');
+    tr.appendChild(th);
     tr.appendChild(td);
-    objectBody.appendChild(tr);
-  } else {
-    objects.slice(0, 6).forEach((item, idx) => {
-      const tr = document.createElement('tr');
-      const th = document.createElement('th');
-      th.textContent = `${idx + 1}`;
-      const td = document.createElement('td');
-      const holder = item.owner || item.bound_entity_label || possessionById[item.object_id]?.holder || '未指明';
-      const status = item.possession_status || possessionById[item.object_id]?.status || '未指明';
-      const vis = visibilityById[item.object_id]?.visibility || '未指明';
-      const kind = item?.kind || 'item';
-      const lines = [
-        `${item.label || item.object_id} / ${kind}`,
-        `归属：${holder}`,
-        `状态：${status}`,
-        `可见：${vis}`,
-      ];
-      if (item.bound_entity_id) lines.push(`绑定：${item.bound_entity_label || holder} (${item.bound_entity_id})`);
-      lines.forEach(line => {
-        const div = document.createElement('div');
-        div.className = 'object-line';
-        div.textContent = line;
-        td.appendChild(div);
-      });
-      tr.appendChild(th);
-      tr.appendChild(td);
-      objectBody.appendChild(tr);
-    });
+    table.appendChild(tr);
   }
-  objectTable.appendChild(objectBody);
-  objectWrap.appendChild(objectTable);
-  otTarget.appendChild(objectWrap);
-
-  const signalWrap = document.createElement('div');
-  signalWrap.className = 'npc-block';
-  const signalHeading = document.createElement('strong');
-  signalHeading.textContent = '延续信号';
-  signalWrap.appendChild(signalHeading);
-
-  const signalTable = document.createElement('table');
-  signalTable.className = 'state-table npc-table';
-  const signalBody = document.createElement('tbody');
-  if (!signals.length) {
+  if (state.secrets?.length) {
     const tr = document.createElement('tr');
+    const th = document.createElement('th');
+    th.textContent = '秘密与知情';
     const td = document.createElement('td');
-    td.colSpan = 2;
-    td.textContent = '暂无';
-    td.className = 'empty-hint';
+    td.textContent = state.secrets.map(s => `${s.content} (知情：${(s.knowers || []).join('、')})`).join('；');
+    tr.appendChild(th);
     tr.appendChild(td);
-    signalBody.appendChild(tr);
-  } else {
-    signals.slice(0, 6).forEach((item, idx) => {
-      const tr = document.createElement('tr');
-      const th = document.createElement('th');
-      th.textContent = `${idx + 1}`;
-      const td = document.createElement('td');
-      if (typeof item === 'string') {
-        td.textContent = item;
-      } else {
-        const type = item?.type || 'mixed';
-        const text = item?.text || '待确认';
-        td.textContent = `${type} / ${text}`;
+    table.appendChild(tr);
+  }
+  stateViewEl.appendChild(table);
+}
+
+function renderTurnSummaries(turns, progressStr) {
+  if (turnSummaryProgressBadge) {
+    turnSummaryProgressBadge.textContent = progressStr || '';
+  }
+  if (!turnSummariesList) return;
+  turnSummariesList.innerHTML = '';
+  const reversedTurns = [...turns].reverse();
+  for (const t of reversedTurns) {
+    const itemEl = document.createElement('div');
+    itemEl.className = 'summary-item';
+
+    const headerEl = document.createElement('div');
+    headerEl.className = 'summary-item-header';
+    const titleEl = document.createElement('strong');
+    titleEl.textContent = `第${t.turn}轮`;
+    headerEl.appendChild(titleEl);
+
+    const statusBadge = document.createElement('span');
+    statusBadge.className = 'status-tag';
+    if (t.status === 'pending') {
+      statusBadge.textContent = '生成中';
+      statusBadge.dataset.status = 'pending';
+    } else if (t.status === 'failed') {
+      statusBadge.textContent = '失败';
+      statusBadge.dataset.status = 'failed';
+    } else if (t.edited) {
+      statusBadge.textContent = '已编辑';
+      statusBadge.dataset.status = 'edited';
+    }
+    if (statusBadge.textContent) headerEl.appendChild(statusBadge);
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'summary-item-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'subtle-btn';
+    editBtn.type = 'button';
+    editBtn.textContent = '编辑';
+    editBtn.setAttribute('aria-label', `编辑第${t.turn}轮小结`);
+
+    const regenBtn = document.createElement('button');
+    regenBtn.className = 'subtle-btn';
+    regenBtn.type = 'button';
+    regenBtn.textContent = '重写';
+    regenBtn.setAttribute('aria-label', `重写第${t.turn}轮小结`);
+
+    actionsEl.appendChild(editBtn);
+    actionsEl.appendChild(regenBtn);
+    headerEl.appendChild(actionsEl);
+    itemEl.appendChild(headerEl);
+
+    const contentEl = document.createElement('div');
+    contentEl.className = 'summary-item-content';
+    contentEl.innerHTML = renderMarkdown(t.summary || (t.status === 'pending' ? '正在提炼小结...' : '暂无内容'));
+    itemEl.appendChild(contentEl);
+
+    editBtn.onclick = () => {
+      if (itemEl.querySelector('textarea')) return;
+      contentEl.hidden = true;
+      const editorWrap = document.createElement('div');
+      editorWrap.className = 'item-editor-wrap';
+      const ta = document.createElement('textarea');
+      ta.value = t.summary || '';
+      ta.rows = 4;
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'primary-btn';
+      saveBtn.type = 'button';
+      saveBtn.textContent = '保存';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'subtle-btn';
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = '取消';
+
+      saveBtn.onclick = async () => {
+        await apiJson('/api/memory/turn-summary', {
+          method: 'POST',
+          body: JSON.stringify({ session_id: sessionId(), turn: t.turn, summary: ta.value })
+        });
+        await loadMemory();
+      };
+      cancelBtn.onclick = () => {
+        editorWrap.remove();
+        contentEl.hidden = false;
+      };
+      editorWrap.appendChild(ta);
+      editorWrap.appendChild(saveBtn);
+      editorWrap.appendChild(cancelBtn);
+      itemEl.appendChild(editorWrap);
+    };
+
+    regenBtn.onclick = async () => {
+      let force = false;
+      if (t.edited) {
+        if (!confirm('重新生成会覆盖你的手动修改，确认继续？')) return;
+        force = true;
       }
-      tr.appendChild(th);
-      tr.appendChild(td);
-      signalBody.appendChild(tr);
-    });
+      try {
+        await apiJson('/api/memory/turn-summary/regenerate', {
+          method: 'POST',
+          body: JSON.stringify({ session_id: sessionId(), turn: t.turn, force })
+        });
+        await loadMemory();
+      } catch (err) {
+        if (err.status === 409) {
+          if (confirm('该小结已手动编辑，确认强行覆盖重写？')) {
+            await apiJson('/api/memory/turn-summary/regenerate', {
+              method: 'POST',
+              body: JSON.stringify({ session_id: sessionId(), turn: t.turn, force: true })
+            });
+            await loadMemory();
+          }
+        }
+      }
+    };
+
+    turnSummariesList.appendChild(itemEl);
   }
-  signalTable.appendChild(signalBody);
-  signalWrap.appendChild(signalTable);
-  otTarget.appendChild(signalWrap);
+}
+
+function renderBigSummaries(bigs, progressStr) {
+  if (bigSummaryProgressBadge) {
+    bigSummaryProgressBadge.textContent = progressStr || '';
+  }
+  if (!bigSummariesList) return;
+  bigSummariesList.innerHTML = '';
+  for (const b of bigs) {
+    const itemEl = document.createElement('div');
+    itemEl.className = 'summary-item';
+
+    const headerEl = document.createElement('div');
+    headerEl.className = 'summary-item-header';
+    const titleEl = document.createElement('strong');
+    titleEl.textContent = `B${b.index} · 第${b.turn_start}-${b.turn_end}轮`;
+    headerEl.appendChild(titleEl);
+
+    if (b.status === 'pending') {
+      const tag = document.createElement('span'); tag.className = 'status-tag'; tag.dataset.status = 'pending'; tag.textContent = '生成中'; headerEl.appendChild(tag);
+    } else if (b.status === 'failed') {
+      const tag = document.createElement('span'); tag.className = 'status-tag'; tag.dataset.status = 'failed'; tag.textContent = '失败'; headerEl.appendChild(tag);
+    } else if (b.stale) {
+      const tag = document.createElement('span'); tag.className = 'status-tag'; tag.dataset.status = 'stale'; tag.textContent = '可能过期'; headerEl.appendChild(tag);
+    } else if (b.edited) {
+      const tag = document.createElement('span'); tag.className = 'status-tag'; tag.dataset.status = 'edited'; tag.textContent = '已编辑'; headerEl.appendChild(tag);
+    }
+    if (b.restored_stars?.length) {
+      const tag = document.createElement('span'); tag.className = 'status-tag'; tag.textContent = `已自动补回★: ${b.restored_stars.join('、')}`; headerEl.appendChild(tag);
+    }
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'summary-item-actions';
+    const editBtn = document.createElement('button'); editBtn.className = 'subtle-btn'; editBtn.type = 'button'; editBtn.textContent = '编辑'; editBtn.setAttribute('aria-label', `编辑大总结B${b.index}`);
+    const regenBtn = document.createElement('button'); regenBtn.className = 'subtle-btn'; regenBtn.type = 'button'; regenBtn.textContent = '重新生成'; regenBtn.setAttribute('aria-label', `重新生成大总结B${b.index}`);
+    actionsEl.appendChild(editBtn); actionsEl.appendChild(regenBtn);
+    headerEl.appendChild(actionsEl);
+    itemEl.appendChild(headerEl);
+
+    const contentEl = document.createElement('div');
+    contentEl.className = 'summary-item-content';
+    contentEl.innerHTML = renderMarkdown(b.content || '');
+    itemEl.appendChild(contentEl);
+
+    editBtn.onclick = () => {
+      if (itemEl.querySelector('textarea')) return;
+      contentEl.hidden = true;
+      const editorWrap = document.createElement('div');
+      editorWrap.className = 'item-editor-wrap';
+      const ta = document.createElement('textarea'); ta.value = b.content || ''; ta.rows = 10;
+      const saveBtn = document.createElement('button'); saveBtn.className = 'primary-btn'; saveBtn.type = 'button'; saveBtn.textContent = '保存';
+      const cancelBtn = document.createElement('button'); cancelBtn.className = 'subtle-btn'; cancelBtn.type = 'button'; cancelBtn.textContent = '取消';
+      saveBtn.onclick = async () => {
+        await apiJson('/api/memory/big-summary', {
+          method: 'POST',
+          body: JSON.stringify({ session_id: sessionId(), index: b.index, content: ta.value })
+        });
+        await loadMemory();
+      };
+      cancelBtn.onclick = () => { editorWrap.remove(); contentEl.hidden = false; };
+      editorWrap.appendChild(ta); editorWrap.appendChild(saveBtn); editorWrap.appendChild(cancelBtn);
+      itemEl.appendChild(editorWrap);
+    };
+
+    regenBtn.onclick = async () => {
+      let force = false;
+      if (b.edited) {
+        if (!confirm('重新生成大总结会覆盖你的手动修改，确认继续？')) return;
+        force = true;
+      }
+      try {
+        await apiJson('/api/memory/big-summary/regenerate', {
+          method: 'POST',
+          body: JSON.stringify({ session_id: sessionId(), index: b.index, force })
+        });
+        await loadMemory();
+      } catch (err) {
+        if (err.status === 409 && confirm('大总结已手动编辑，确认强行覆盖重新生成？')) {
+          await apiJson('/api/memory/big-summary/regenerate', {
+            method: 'POST',
+            body: JSON.stringify({ session_id: sessionId(), index: b.index, force: true })
+          });
+          await loadMemory();
+        }
+      }
+    };
+    bigSummariesList.appendChild(itemEl);
+  }
+}
+
+function renderSuperSummaries(supers) {
+  if (!superSummariesList) return;
+  superSummariesList.innerHTML = '';
+  for (const s of supers) {
+    const itemEl = document.createElement('div');
+    itemEl.className = 'summary-item';
+
+    const headerEl = document.createElement('div');
+    headerEl.className = 'summary-item-header';
+    const titleEl = document.createElement('strong');
+    titleEl.textContent = `S${s.index} · 第${s.turn_start}-${s.turn_end}轮`;
+    headerEl.appendChild(titleEl);
+
+    if (s.status === 'pending') {
+      const tag = document.createElement('span'); tag.className = 'status-tag'; tag.dataset.status = 'pending'; tag.textContent = '生成中'; headerEl.appendChild(tag);
+    } else if (s.status === 'failed') {
+      const tag = document.createElement('span'); tag.className = 'status-tag'; tag.dataset.status = 'failed'; tag.textContent = '失败'; headerEl.appendChild(tag);
+    } else if (s.edited) {
+      const tag = document.createElement('span'); tag.className = 'status-tag'; tag.dataset.status = 'edited'; tag.textContent = '已编辑'; headerEl.appendChild(tag);
+    }
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'summary-item-actions';
+    const editBtn = document.createElement('button'); editBtn.className = 'subtle-btn'; editBtn.type = 'button'; editBtn.textContent = '编辑'; editBtn.setAttribute('aria-label', `编辑超级总结S${s.index}`);
+    const regenBtn = document.createElement('button'); regenBtn.className = 'subtle-btn'; regenBtn.type = 'button'; regenBtn.textContent = '重新生成'; regenBtn.setAttribute('aria-label', `重新生成超级总结S${s.index}`);
+    actionsEl.appendChild(editBtn); actionsEl.appendChild(regenBtn);
+    headerEl.appendChild(actionsEl);
+    itemEl.appendChild(headerEl);
+
+    const contentEl = document.createElement('div');
+    contentEl.className = 'summary-item-content';
+    contentEl.innerHTML = renderMarkdown(s.content || '');
+    itemEl.appendChild(contentEl);
+
+    editBtn.onclick = () => {
+      if (itemEl.querySelector('textarea')) return;
+      contentEl.hidden = true;
+      const editorWrap = document.createElement('div');
+      editorWrap.className = 'item-editor-wrap';
+      const ta = document.createElement('textarea'); ta.value = s.content || ''; ta.rows = 12;
+      const saveBtn = document.createElement('button'); saveBtn.className = 'primary-btn'; saveBtn.type = 'button'; saveBtn.textContent = '保存';
+      const cancelBtn = document.createElement('button'); cancelBtn.className = 'subtle-btn'; cancelBtn.type = 'button'; cancelBtn.textContent = '取消';
+      saveBtn.onclick = async () => {
+        await apiJson('/api/memory/super-summary', {
+          method: 'POST',
+          body: JSON.stringify({ session_id: sessionId(), index: s.index, content: ta.value })
+        });
+        await loadMemory();
+      };
+      cancelBtn.onclick = () => { editorWrap.remove(); contentEl.hidden = false; };
+      editorWrap.appendChild(ta); editorWrap.appendChild(saveBtn); editorWrap.appendChild(cancelBtn);
+      itemEl.appendChild(editorWrap);
+    };
+
+    regenBtn.onclick = async () => {
+      let force = false;
+      if (s.edited) {
+        if (!confirm('重新生成超级总结会覆盖你的手动修改，确认继续？')) return;
+        force = true;
+      }
+      try {
+        await apiJson('/api/memory/super-summary/regenerate', {
+          method: 'POST',
+          body: JSON.stringify({ session_id: sessionId(), index: s.index, force })
+        });
+        await loadMemory();
+      } catch (err) {
+        if (err.status === 409 && confirm('超级总结已手动编辑，确认强行覆盖重新生成？')) {
+          await apiJson('/api/memory/super-summary/regenerate', {
+            method: 'POST',
+            body: JSON.stringify({ session_id: sessionId(), index: s.index, force: true })
+          });
+          await loadMemory();
+        }
+      }
+    };
+    superSummariesList.appendChild(itemEl);
+  }
+}
+
+function renderState(state) {
+  renderMemoryState(state);
 }
 
 function renderDebug(debug) {
-  if (!debugEl) return;
   if (regenerateBtn) {
     const isPartial = debug && debug.completion_status === 'partial';
     regenerateBtn.hidden = !isPartial;
   }
-  if (!debug) {
-    debugEl.textContent = '本轮未返回调试信息';
-    return;
-  }
-  const lorebookInjection = debug.lorebook_injection || {};
-  const promptBlocks = debug.prompt_block_stats || [];
-  const selector = debug.selector || {};
-  const eventSummaryItem = debug.event_summary_item || null;
-  const lines = [];
-  if (promptBlocks.length) {
-    lines.push('Prompt Blocks');
-    for (const item of promptBlocks) {
-      lines.push(`- ${item.label}: ${item.chars}`);
-    }
-    lines.push('');
-  }
-  if (lorebookInjection.items?.length) {
-    lines.push(`System NPC Candidates: ${debug.system_npc_candidate_count || 0}`);
-    lines.push(`Lorebook NPC Candidates: ${debug.lorebook_npc_candidate_count || 0}`);
-    lines.push(`Lorebook Injected Chars: ${lorebookInjection.total_chars || 0}`);
-    lines.push('Lorebook Injection');
-    for (const item of lorebookInjection.items) {
-      lines.push(`- ${item.title} | ${item.entryType}/${item.runtimeScope} | priority=${item.priority} | chars=${item.injected_chars}`);
-    }
-    lines.push('');
-  }
-  lines.push('Event Memory');
-  lines.push(`Event Summary Count: ${debug.event_summary_count || 0}`);
-  lines.push(`Inject Summary: ${selector.inject_summary ? 'yes' : 'no'}`);
-  if (selector.event_hits?.length) {
-    lines.push('Event Hits');
-    for (const item of selector.event_hits) {
-      lines.push(`- ${item.event_id} (${item.turn_id}) score=${item.score} reason=${item.reason}`);
-    }
-  } else {
-    lines.push('Event Hits: none');
-  }
-  if (eventSummaryItem?.summary) {
-    lines.push('Latest Event Summary');
-    lines.push(`- ${eventSummaryItem.summary}`);
-  }
-  lines.push('');
-  lines.push('Diagnostics');
-  lines.push(JSON.stringify({
-    arbiter_analysis: debug.arbiter_analysis || null,
-    arbiter_results: debug.arbiter_results || [],
-    state_keeper_diagnostics: debug.state_keeper_diagnostics || null,
-    selector: selector,
-    retained_threads: debug.retained_threads || [],
-    retained_entities: debug.retained_entities || [],
-    completion_status: debug.completion_status || null,
-    finish_reason: debug.finish_reason || null,
-    state_error: debug.state_error || null,
-    model_error: debug.model_error || null,
-  }, null, 2));
-  debugEl.textContent = lines.join('\n');
 }
 
-function renderSessionAudit(audit) {
-  if (!sessionAuditResult) return;
-  if (!audit) {
-    sessionAuditResult.textContent = '尚未运行审计';
-    return;
-  }
-  const lines = [];
-  const severity = audit.severity || 'unknown';
-  const summary = audit.summary || {};
-  lines.push(`Severity: ${severity}`);
-  lines.push(`Issues: ${summary.issue_count || 0}`);
-  lines.push(`Style: ${summary.style_status || 'unknown'}`);
-  lines.push(`Polluted event summaries: ${summary.polluted_event_summary_count || 0}`);
-  lines.push(`Persona hook issues: ${summary.persona_hook_issue_count || 0}`);
-  lines.push('');
-  if (audit.style_drift) {
-    lines.push('Style Drift Metrics');
-    lines.push(`- assistant turns: ${audit.style_drift.assistant_turns || 0}`);
-    lines.push(`- avg chars: ${audit.style_drift.avg_chars || 0}`);
-    lines.push(`- avg micro-action score: ${audit.style_drift.avg_micro_action_score || 0}`);
-    lines.push(`- avg density / 1000 chars: ${audit.style_drift.avg_micro_action_density_per_1000_chars || 0}`);
-    lines.push('');
-  }
-  if (audit.issues?.length) {
-    lines.push('Findings');
-    for (const issue of audit.issues) {
-      lines.push(`- [${issue.severity || 'info'}] ${issue.type}: ${issue.message || ''}`);
-      if (issue.suggested_action) lines.push(`  建议：${issue.suggested_action}`);
-    }
-    lines.push('');
-  }
-  lines.push('Raw');
-  lines.push(JSON.stringify(audit, null, 2));
-  sessionAuditResult.textContent = lines.join('\n');
-}
-
-async function runSessionAudit() {
-  if (!sessionId()) throw new Error('当前没有选中的 session');
-  return apiJson('/api/session-audit', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({session_id: sessionId()}),
-  });
-}
+function renderSessionAudit(audit) {}
+async function runSessionAudit() { return {}; }
+async function loadEntity(entityId) { return {}; }
 
 async function regenerateLast() {
   const data = await apiJson('/api/regenerate-last', {
@@ -1805,6 +1796,7 @@ async function regenerateLast() {
   pendingUserMessage = null;
   await loadHistory();
   renderState(data.state_snapshot || {});
+  await loadMemory();
   renderDebug(data.debug || null);
   shouldStickToBottom = true;
   focusLatestAssistant({ smooth: false });
@@ -1821,6 +1813,7 @@ async function deleteLatestTurn() {
   applyWebConfig(data.web || {});
   renderMessages(data.messages || []);
   renderState(data.state_snapshot || {});
+  await loadMemory();
   renderCharacterCard(data.character_card || lastCharacterCard);
   renderDebug({delete_latest_turn: {turn_id: data.deleted_turn_id || null}});
   updateSessionIndicator();
@@ -2050,6 +2043,7 @@ composer.addEventListener('submit', async (e) => {
     shouldStickToBottom = true;
     await runStage('刷新历史', () => loadHistory());
     await runStage('渲染状态', () => renderState(data.state_snapshot || {}));
+    await runStage('加载记忆', () => loadMemory());
     await runStage('渲染角色卡', () => renderCharacterCard(data.character_card || lastCharacterCard));
     await runStage('渲染调试信息', () => renderDebug(data.debug || null));
     await runStage('更新会话指示器', () => updateSessionIndicator());
@@ -2155,11 +2149,13 @@ settingsBackdrop?.addEventListener('click', closeSettings);
 function openDebugPanel() {
   if (debugFloatPanel) debugFloatPanel.dataset.open = 'true';
   if (debugBackdrop) debugBackdrop.hidden = false;
+  loadMemory();
 }
 
 function closeDebugPanel() {
   if (debugFloatPanel) debugFloatPanel.dataset.open = 'false';
   if (debugBackdrop) debugBackdrop.hidden = true;
+  stopMemoryPolling();
 }
 
 debugToggleBtn?.addEventListener('click', () => {
@@ -2168,6 +2164,76 @@ debugToggleBtn?.addEventListener('click', () => {
 });
 debugCloseBtn?.addEventListener('click', closeDebugPanel);
 debugBackdrop?.addEventListener('click', closeDebugPanel);
+
+// 状态编辑表单交互
+editStateBtn?.addEventListener('click', () => {
+  if (!currentMemoryData?.state) return;
+  const s = currentMemoryData.state;
+  document.getElementById('stateEditTime').value = s.time || '';
+  document.getElementById('stateEditLocation').value = s.location || '';
+  document.getElementById('stateEditOnstage').value = (s.onstage || []).join(', ');
+  document.getElementById('stateEditGoal').value = s.goal || '';
+  document.getElementById('stateEditRisks').value = (s.risks || []).join('\n');
+  document.getElementById('stateEditItems').value = JSON.stringify(s.items || [], null, 2);
+  document.getElementById('stateEditSecrets').value = JSON.stringify(s.secrets || [], null, 2);
+  stateViewEl.hidden = true;
+  editStateBtn.hidden = true;
+  stateEditForm.hidden = false;
+});
+
+cancelStateEditBtn?.addEventListener('click', () => {
+  stateEditForm.hidden = true;
+  stateViewEl.hidden = false;
+  editStateBtn.hidden = false;
+});
+
+stateEditForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  let items = [];
+  let secrets = [];
+  try {
+    const rawItems = document.getElementById('stateEditItems').value.trim();
+    if (rawItems) items = JSON.parse(rawItems);
+  } catch (err) {
+    alert('重要物品 JSON 格式错误: ' + err.message);
+    return;
+  }
+  try {
+    const rawSecrets = document.getElementById('stateEditSecrets').value.trim();
+    if (rawSecrets) secrets = JSON.parse(rawSecrets);
+  } catch (err) {
+    alert('秘密与知情 JSON 格式错误: ' + err.message);
+    return;
+  }
+
+  const onstageStr = document.getElementById('stateEditOnstage').value;
+  const onstage = onstageStr.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  const risksStr = document.getElementById('stateEditRisks').value;
+  const risks = risksStr.split('\n').map(s => s.trim()).filter(Boolean);
+
+  const updatedState = {
+    time: document.getElementById('stateEditTime').value.trim() || '待确认',
+    location: document.getElementById('stateEditLocation').value.trim() || '待确认',
+    onstage,
+    goal: document.getElementById('stateEditGoal').value.trim() || '待确认',
+    risks,
+    items,
+    secrets,
+  };
+
+  try {
+    await apiJson('/api/memory/state', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId(), state: updatedState }),
+    });
+    stateEditForm.hidden = true;
+    stateViewEl.hidden = false;
+    editStateBtn.hidden = false;
+    await loadMemory();
+  } catch (err) {
+    alert('保存状态失败: ' + err.message);
+  }
+});
 sessionAuditBtn?.addEventListener('click', async () => {
   sessionAuditBtn.disabled = true;
   setStatus('Session 审计中...', 'working');

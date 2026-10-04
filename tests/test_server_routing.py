@@ -21,7 +21,7 @@ EXPECTED_GET = {
     '/api/health', '/api/state', '/api/sessions', '/api/providers', '/api/characters',
     '/api/user-profile', '/api/character/profile-override', '/user-avatar', '/api/site-config',
     '/api/model-config', '/api/narrator-preset', '/api/users', '/api/auth/me', '/api/history',
-    '/api/entity', '/', '/index.html', '/app.js', '/login.js', '/marked.min.js', '/styles.css',
+    '/api/memory', '/api/entity', '/', '/index.html', '/app.js', '/login.js', '/marked.min.js', '/styles.css',
     '/favicon.svg', '/character-cover',
 }
 
@@ -36,6 +36,9 @@ EXPECTED_POST = {
     '/api/site-config', '/api/model-config', '/api/narrator-preset', '/api/providers/discover',
     '/api/site-models/discover', '/api/auth/login', '/api/auth/logout',
     '/api/auth/change-password', '/api/users', '/api/multi-user',
+    '/api/memory/state', '/api/memory/turn-summary', '/api/memory/turn-summary/regenerate',
+    '/api/memory/big-summary', '/api/memory/big-summary/regenerate',
+    '/api/memory/super-summary', '/api/memory/super-summary/regenerate',
 }
 
 EXPECTED_DELETE = {'/api/providers'}

@@ -1064,6 +1064,93 @@ def cancel_and_wait(session_id: str, timeout_s: float = 5.0) -> None:
         pass
 
 
+def enqueue_turn_summary_job(session_id: str, turn: int, *, force: bool = False) -> None:
+    """供重新生成小结接口使用的单独调度函数。"""
+    user_id = active_user_id()
+    char_id = active_character_id()
+
+    def _job():
+        with active_user_context(user_id):
+            token = set_active_character_override(char_id)
+            try:
+                result = generate_turn_summary(session_id, turn)
+                with session_lock(session_id):
+                    upsert_turn_summary(session_id, result)
+                    latest_turns = load_turn_summaries(session_id)
+                    if latest_turns and int(latest_turns[-1].get('turn', 0) or 0) == turn:
+                        save_simple_state(session_id, result['state_after'])
+            except Exception as err:
+                logger.exception("Failed in enqueue_turn_summary_job for turn %d", turn)
+                with session_lock(session_id):
+                    rec = _find_turn_record(session_id, turn)
+                    if rec:
+                        rec['status'] = 'failed'
+                        rec['error'] = str(err)
+                        upsert_turn_summary(session_id, rec)
+            finally:
+                reset_active_character_override(token)
+
+    _EXECUTOR.submit(_job)
+
+
+def enqueue_big_summary_job(session_id: str, index: int, *, force: bool = False) -> None:
+    """供重新生成大总结接口使用的单独调度函数。"""
+    user_id = active_user_id()
+    char_id = active_character_id()
+
+    def _job():
+        with active_user_context(user_id):
+            token = set_active_character_override(char_id)
+            try:
+                result = generate_big_summary(session_id, index)
+                with session_lock(session_id):
+                    cur_bigs = load_big_summaries(session_id)
+                    found = False
+                    for i, b in enumerate(cur_bigs):
+                        if int(b.get('index', 0) or 0) == index:
+                            cur_bigs[i] = result
+                            found = True
+                            break
+                    if not found:
+                        cur_bigs.append(result)
+                    save_big_summaries(session_id, cur_bigs)
+            except Exception:
+                logger.exception("Failed in enqueue_big_summary_job for index %d", index)
+            finally:
+                reset_active_character_override(token)
+
+    _EXECUTOR.submit(_job)
+
+
+def enqueue_super_summary_job(session_id: str, index: int, *, force: bool = False) -> None:
+    """供重新生成超级总结接口使用的单独调度函数。"""
+    user_id = active_user_id()
+    char_id = active_character_id()
+
+    def _job():
+        with active_user_context(user_id):
+            token = set_active_character_override(char_id)
+            try:
+                result = generate_super_summary(session_id, index)
+                with session_lock(session_id):
+                    cur_supers = load_super_summaries(session_id)
+                    found = False
+                    for i, s in enumerate(cur_supers):
+                        if int(s.get('index', 0) or 0) == index:
+                            cur_supers[i] = result
+                            found = True
+                            break
+                    if not found:
+                        cur_supers.append(result)
+                    save_super_summaries(session_id, cur_supers)
+            except Exception:
+                logger.exception("Failed in enqueue_super_summary_job for index %d", index)
+            finally:
+                reset_active_character_override(token)
+
+    _EXECUTOR.submit(_job)
+
+
 def job_status(session_id: str) -> dict:
     """获取当前任务执行状态。"""
     with _FUTURES_LOCK:

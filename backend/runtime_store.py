@@ -753,66 +753,36 @@ def load_turn_trace(session_id: str, turn_id: str) -> dict:
 
 
 def build_state_snapshot(state: dict) -> dict:
-    raw_scene_entities = state.get('scene_entities', []) if isinstance(state.get('scene_entities', []), list) else []
-    scene_entities = [
-        item for item in raw_scene_entities
-        if isinstance(item, dict)
-        and sanitize_runtime_name(item.get('primary_label', ''))
-        and not looks_like_bad_entity_fragment(item.get('primary_label', ''))
-    ]
-    entity_index = {
-        sanitize_runtime_name(item.get('primary_label', '')): item
-        for item in scene_entities
-        if isinstance(item, dict) and sanitize_runtime_name(item.get('primary_label', ''))
-    }
+    """构建用于前端面板展示和接口返回的状态快照。
 
-    def build_named_entities(names: list[str]) -> list[dict]:
-        rows: list[dict] = []
-        name_counts: dict[str, int] = {}
-        for item in scene_entities:
-            if not isinstance(item, dict):
-                continue
-            label = sanitize_runtime_name(item.get('primary_label', ''))
-            if not label:
-                continue
-            name_counts[label] = name_counts.get(label, 0) + 1
-        for name in names or []:
-            label = sanitize_runtime_name(name)
-            if not label:
-                continue
-            entity = entity_index.get(label, {}) if name_counts.get(label, 0) == 1 else {}
-            rows.append({
-                'name': label,
-                'entity_id': entity.get('entity_id') if entity else None,
-                'role_label': entity.get('role_label') if entity else None,
-                'ambiguous': name_counts.get(label, 0) > 1,
-            })
-        return rows
+    在 Memory V3 架构下，直接暴露精简 state 字段（goal / onstage / risks / items / secrets），
+    同时向下兼容保留旧字段映射，保证平滑过渡。
+    """
+    raw_onstage = state.get('onstage') if state.get('onstage') is not None else state.get('onstage_npcs', [])
+    goal = state.get('goal') or state.get('immediate_goal', '待确认')
+    risks = state.get('risks') if state.get('risks') is not None else state.get('immediate_risks', [])
+    items = list(state.get('items', []) or [])
+    secrets = list(state.get('secrets', []) or [])
 
     return {
+        'session_id': state.get('session_id', ''),
         'time': state.get('time', '待确认'),
         'location': state.get('location', '待确认'),
-        'main_event': state.get('main_event', '待确认'),
-        'scene_entities': scene_entities,
-        'onstage_entities': build_named_entities(state.get('onstage_npcs', [])),
-        'relevant_entities': build_named_entities(state.get('relevant_npcs', [])),
-        'active_threads': state.get('active_threads', []),
-        'important_npcs': state.get('important_npcs', []),
-        'onstage_npcs': state.get('onstage_npcs', []),
-        'relevant_npcs': state.get('relevant_npcs', []),
+        'onstage': list(raw_onstage or []),
+        'goal': goal,
+        'risks': list(risks or []),
+        'items': items,
+        'secrets': secrets,
+        'opening_mode': state.get('opening_mode', 'direct'),
+        'opening_resolved': bool(state.get('opening_resolved', True)),
+        'opening_started': bool(state.get('opening_started', False)),
+        'opening_choice': state.get('opening_choice'),
+        # 兼容旧代码与测试断言引用（P4 清理时将彻底移除）
+        'immediate_goal': goal,
+        'onstage_npcs': list(raw_onstage or []),
+        'immediate_risks': list(risks or []),
         'scene_objective': state.get('scene_objective', {}),
-        'immediate_goal': state.get('immediate_goal', '待确认'),
-        'carryover_signals': state.get('carryover_signals', []),
-        'immediate_risks': state.get('immediate_risks', []),
-        'carryover_clues': state.get('carryover_clues', []),
-        'tracked_objects': state.get('tracked_objects', []),
         'graveyard_objects': state.get('graveyard_objects', []),
-        'possession_state': state.get('possession_state', []),
-        'object_visibility': state.get('object_visibility', []),
-        'actors': state.get('actors', {}),
-        'actor_context_index': state.get('actor_context_index', {}),
-        'actor_persona_hooks': state.get('actor_persona_hooks', {}),
-        'knowledge_records': state.get('knowledge_records', []),
     }
 
 

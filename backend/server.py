@@ -679,6 +679,49 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, payload, extra_headers=headers)
         return self._send(200, payload)
 
+    def _get_memory(self, parsed, qs):
+        session_id = self._resolve_scoped_session((qs.get('session_id') or [''])[0], allow_missing=True)
+        if session_id is None:
+            return
+        from simple_memory import (
+            build_memory_context,
+            job_status,
+            load_big_summaries,
+            load_simple_state,
+            load_super_summaries,
+            load_turn_summaries,
+            _memory_thresholds,
+        )
+        big_every, super_every = _memory_thresholds()
+        state = load_simple_state(session_id)
+        turn_summaries = load_turn_summaries(session_id)
+        big_summaries = load_big_summaries(session_id)
+        super_summaries = load_super_summaries(session_id)
+        status = job_status(session_id)
+
+        # 进度计算
+        completed_turns = len([t for t in turn_summaries if t.get('status') == 'ok'])
+        next_big_idx = len(big_summaries) + 1
+        current_big_progress = completed_turns % big_every
+        big_progress_str = f"小结 {current_big_progress}/{big_every}"
+
+        ok_bigs = len([b for b in big_summaries if b.get('status') == 'ok'])
+        current_super_progress = ok_bigs % super_every
+        super_progress_str = f"大总结 {current_super_progress}/{super_every}"
+
+        return self._send(200, {
+            'session_id': session_id,
+            'state': state,
+            'turn_summaries': turn_summaries,
+            'big_summaries': big_summaries,
+            'super_summaries': super_summaries,
+            'job_status': status,
+            'progress': {
+                'big_summary': big_progress_str,
+                'super_summary': super_progress_str,
+            },
+        })
+
     def _get_history(self, parsed, qs):
         session_id = self._resolve_scoped_session((qs.get('session_id') or [''])[0], allow_missing=True)
         if session_id is None:
@@ -833,6 +876,7 @@ class Handler(BaseHTTPRequestHandler):
         '/api/users': _get_users,
         '/api/auth/me': _get_auth_me,
         '/api/history': _get_history,
+        '/api/memory': _get_memory,
         '/api/entity': _get_entity,
         '/': _get_index,
         '/index.html': _get_index,
@@ -935,6 +979,197 @@ class Handler(BaseHTTPRequestHandler):
             bool(sent),
         )
         return sent
+
+    def _post_memory_state(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        state_in = payload.get('state')
+        if not isinstance(state_in, dict):
+            return self._invalid_input('state must be an object')
+        from simple_memory import save_simple_state, load_simple_state
+        with self._session_lock(session_id):
+            save_simple_state(session_id, state_in)
+            updated = load_simple_state(session_id)
+        return self._send(200, {'session_id': session_id, 'state': updated})
+
+    def _post_memory_turn_summary(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        if 'turn' not in payload:
+            return self._invalid_input('turn is required')
+        try:
+            turn = int(payload.get('turn'))
+        except (ValueError, TypeError):
+            return self._invalid_input('turn must be an integer')
+        summary_text = str(payload.get('summary', '') or '')
+        if len(summary_text) > 4000:
+            return self._invalid_input('summary must be <= 4000 characters')
+
+        from simple_memory import (
+            load_turn_summaries,
+            upsert_turn_summary,
+            load_big_summaries,
+            save_big_summaries,
+            save_simple_state,
+        )
+        with self._session_lock(session_id):
+            turns = load_turn_summaries(session_id)
+            target = next((t for t in turns if int(t.get('turn', 0) or 0) == turn), None)
+            if target is None:
+                return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': f'turn summary {turn} not found'}})
+
+            target['summary'] = summary_text
+            target['edited'] = True
+            target['updated_at'] = int(time.time() * 1000)
+            upsert_turn_summary(session_id, target)
+
+            # 如果这一轮已被大总结覆盖，标记为 stale
+            bigs = load_big_summaries(session_id)
+            modified_bigs = False
+            for b in bigs:
+                if int(b.get('turn_start', 0) or 0) <= turn <= int(b.get('turn_end', 0) or 0):
+                    b['stale'] = True
+                    modified_bigs = True
+            if modified_bigs:
+                save_big_summaries(session_id, bigs)
+
+        return self._send(200, {'session_id': session_id, 'turn': turn, 'summary': target})
+
+    def _post_memory_turn_summary_regenerate(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        if 'turn' not in payload:
+            return self._invalid_input('turn is required')
+        try:
+            turn = int(payload.get('turn'))
+        except (ValueError, TypeError):
+            return self._invalid_input('turn must be an integer')
+        force = bool(payload.get('force', False))
+
+        from simple_memory import load_turn_summaries, enqueue_turn_summary_job
+        with self._session_lock(session_id):
+            turns = load_turn_summaries(session_id)
+            target = next((t for t in turns if int(t.get('turn', 0) or 0) == turn), None)
+            if target is None:
+                return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': f'turn summary {turn} not found'}})
+            if target.get('edited') and not force:
+                return self._send(409, {'error': {'code': 'CONFLICT', 'message': 'turn summary has been edited; confirm with force'}})
+
+            target['status'] = 'pending'
+            from simple_memory import upsert_turn_summary
+            upsert_turn_summary(session_id, target)
+
+        enqueue_turn_summary_job(session_id, turn, force=force)
+        return self._send(200, {'session_id': session_id, 'turn': turn, 'status': 'pending'})
+
+    def _post_memory_big_summary(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        if 'index' not in payload:
+            return self._invalid_input('index is required')
+        try:
+            index = int(payload.get('index'))
+        except (ValueError, TypeError):
+            return self._invalid_input('index must be an integer')
+        content = str(payload.get('content', '') or '')
+        if len(content) > 30000:
+            return self._invalid_input('content must be <= 30000 characters')
+
+        from simple_memory import load_big_summaries, save_big_summaries
+        with self._session_lock(session_id):
+            bigs = load_big_summaries(session_id)
+            target = next((b for b in bigs if int(b.get('index', 0) or 0) == index), None)
+            if target is None:
+                return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': f'big summary {index} not found'}})
+            target['content'] = content
+            target['edited'] = True
+            target['updated_at'] = int(time.time() * 1000)
+            save_big_summaries(session_id, bigs)
+
+        return self._send(200, {'session_id': session_id, 'index': index, 'item': target})
+
+    def _post_memory_big_summary_regenerate(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        if 'index' not in payload:
+            return self._invalid_input('index is required')
+        try:
+            index = int(payload.get('index'))
+        except (ValueError, TypeError):
+            return self._invalid_input('index must be an integer')
+        force = bool(payload.get('force', False))
+
+        from simple_memory import load_big_summaries, save_big_summaries, enqueue_big_summary_job
+        with self._session_lock(session_id):
+            bigs = load_big_summaries(session_id)
+            target = next((b for b in bigs if int(b.get('index', 0) or 0) == index), None)
+            if target is None:
+                return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': f'big summary {index} not found'}})
+            if target.get('edited') and not force:
+                return self._send(409, {'error': {'code': 'CONFLICT', 'message': 'big summary has been edited; confirm with force'}})
+            target['status'] = 'pending'
+            save_big_summaries(session_id, bigs)
+
+        enqueue_big_summary_job(session_id, index, force=force)
+        return self._send(200, {'session_id': session_id, 'index': index, 'status': 'pending'})
+
+    def _post_memory_super_summary(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        if 'index' not in payload:
+            return self._invalid_input('index is required')
+        try:
+            index = int(payload.get('index'))
+        except (ValueError, TypeError):
+            return self._invalid_input('index must be an integer')
+        content = str(payload.get('content', '') or '')
+        if len(content) > 30000:
+            return self._invalid_input('content must be <= 30000 characters')
+
+        from simple_memory import load_super_summaries, save_super_summaries
+        with self._session_lock(session_id):
+            supers = load_super_summaries(session_id)
+            target = next((s for s in supers if int(s.get('index', 0) or 0) == index), None)
+            if target is None:
+                return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': f'super summary {index} not found'}})
+            target['content'] = content
+            target['edited'] = True
+            target['updated_at'] = int(time.time() * 1000)
+            save_super_summaries(session_id, supers)
+
+        return self._send(200, {'session_id': session_id, 'index': index, 'item': target})
+
+    def _post_memory_super_summary_regenerate(self, parsed, payload):
+        session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
+        if session_id is None:
+            return
+        if 'index' not in payload:
+            return self._invalid_input('index is required')
+        try:
+            index = int(payload.get('index'))
+        except (ValueError, TypeError):
+            return self._invalid_input('index must be an integer')
+        force = bool(payload.get('force', False))
+
+        from simple_memory import load_super_summaries, save_super_summaries, enqueue_super_summary_job
+        with self._session_lock(session_id):
+            supers = load_super_summaries(session_id)
+            target = next((s for s in supers if int(s.get('index', 0) or 0) == index), None)
+            if target is None:
+                return self._send(404, {'error': {'code': 'NOT_FOUND', 'message': f'super summary {index} not found'}})
+            if target.get('edited') and not force:
+                return self._send(409, {'error': {'code': 'CONFLICT', 'message': 'super summary has been edited; confirm with force'}})
+            target['status'] = 'pending'
+            save_super_summaries(session_id, supers)
+
+        enqueue_super_summary_job(session_id, index, force=force)
+        return self._send(200, {'session_id': session_id, 'index': index, 'status': 'pending'})
 
     def _post_session_audit(self, parsed, payload):
         session_id = self._resolve_scoped_session(payload.get('session_id', ''), allow_missing=False)
@@ -1343,6 +1578,13 @@ class Handler(BaseHTTPRequestHandler):
         '/api/regenerate-last': _post_regenerate_last,
         '/api/delete-latest-turn': _post_delete_latest_turn,
         '/api/message': _post_message,
+        '/api/memory/state': _post_memory_state,
+        '/api/memory/turn-summary': _post_memory_turn_summary,
+        '/api/memory/turn-summary/regenerate': _post_memory_turn_summary_regenerate,
+        '/api/memory/big-summary': _post_memory_big_summary,
+        '/api/memory/big-summary/regenerate': _post_memory_big_summary_regenerate,
+        '/api/memory/super-summary': _post_memory_super_summary,
+        '/api/memory/super-summary/regenerate': _post_memory_super_summary_regenerate,
         '/api/session-audit': _post_session_audit,
         '/api/character/select': _post_character_select,
         '/api/character/delete': _post_character_delete,

@@ -90,52 +90,72 @@
     <div id="debugBackdrop" class="debug-backdrop" hidden></div>
     <aside id="debugFloatPanel" class="debug-float-panel" aria-hidden="true">
       <div class="debug-float-header">
-        <h2>状态面板</h2>
+        <h2>总结面板</h2>
         <button id="debugCloseBtn" class="icon-btn subtle" type="button" aria-label="关闭面板">
           <span class="material-symbols-outlined">close</span>
         </button>
       </div>
       <div class="debug-float-body">
+        <!-- 1. 当前状态 -->
         <section class="card sidebar-group">
           <details class="sidebar-details" open>
             <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">explore</span>当前状态</summary>
-            <div id="state" class="sidebar-details-body"></div>
+            <div id="stateSection" class="sidebar-details-body">
+              <div id="stateView"></div>
+              <div class="panel-section-actions">
+                <button id="editStateBtn" class="subtle-btn" type="button">编辑状态</button>
+              </div>
+              <form id="stateEditForm" class="state-edit-form" hidden>
+                <label class="field"><span>时间</span><input type="text" id="stateEditTime"></label>
+                <label class="field"><span>地点</span><input type="text" id="stateEditLocation"></label>
+                <label class="field"><span>在场人物（逗号分隔）</span><input type="text" id="stateEditOnstage"></label>
+                <label class="field"><span>当前目标</span><input type="text" id="stateEditGoal"></label>
+                <label class="field"><span>当前风险（换行分隔）</span><textarea id="stateEditRisks" rows="2"></textarea></label>
+                <label class="field"><span>重要物品（JSON格式）</span><textarea id="stateEditItems" rows="3"></textarea></label>
+                <label class="field"><span>秘密与知情（JSON格式）</span><textarea id="stateEditSecrets" rows="3"></textarea></label>
+                <div class="panel-form-actions">
+                  <button type="submit" class="primary-btn">保存状态</button>
+                  <button type="button" id="cancelStateEditBtn" class="subtle-btn">取消</button>
+                </div>
+              </form>
+            </div>
           </details>
         </section>
+
+        <!-- 2. 逐轮小结 -->
         <section class="card sidebar-group">
           <details class="sidebar-details" open>
-            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">group</span>NPC</summary>
-            <div id="npcSection" class="sidebar-details-body"></div>
+            <summary class="sidebar-summary">
+              <span class="material-symbols-outlined sidebar-summary-icon">history_edu</span>逐轮小结
+              <span id="turnSummaryProgressBadge" class="progress-badge"></span>
+            </summary>
+            <div id="turnSummariesSection" class="sidebar-details-body">
+              <div id="turnSummariesList" class="summaries-list"></div>
+            </div>
           </details>
         </section>
+
+        <!-- 3. 大总结 -->
         <section class="card sidebar-group">
           <details class="sidebar-details">
-            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">inventory_2</span>物件与信号</summary>
-            <div id="objectThreadSection" class="sidebar-details-body"></div>
+            <summary class="sidebar-summary">
+              <span class="material-symbols-outlined sidebar-summary-icon">auto_stories</span>大总结
+              <span id="bigSummaryProgressBadge" class="progress-badge"></span>
+            </summary>
+            <div id="bigSummariesSection" class="sidebar-details-body">
+              <div id="bigSummariesList" class="summaries-list"></div>
+            </div>
           </details>
         </section>
+
+        <!-- 4. 超级总结 -->
         <section class="card sidebar-group">
           <details class="sidebar-details">
-            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">person_search</span>NPC 详情</summary>
-            <div id="entityDetail" class="sidebar-details-body entity-detail-body">点击状态面板中的 NPC 名称查看详情</div>
-          </details>
-        </section>
-        <section class="card sidebar-group">
-          <details class="sidebar-details">
-            <summary class="sidebar-summary"><span class="material-symbols-outlined sidebar-summary-icon">bug_report</span>调试诊断</summary>
-            <div class="sidebar-details-body">
-              <div class="session-audit-panel">
-                <div class="session-audit-head">
-                  <div>
-                    <strong>Session 审计</strong>
-                    <small>手动检查叙事风格漂移与污染摘要</small>
-                  </div>
-                  <button id="sessionAuditBtn" class="subtle-btn" type="button">运行审计</button>
-                </div>
-                <div id="sessionAuditNote" class="inline-feedback"></div>
-                <pre id="sessionAuditResult" class="session-audit-result">尚未运行审计</pre>
-              </div>
-              <pre id="debugDetail">发送一轮消息后显示</pre>
+            <summary class="sidebar-summary">
+              <span class="material-symbols-outlined sidebar-summary-icon">psychology</span>超级总结
+            </summary>
+            <div id="superSummariesSection" class="sidebar-details-body">
+              <div id="superSummariesList" class="summaries-list"></div>
             </div>
           </details>
         </section>
@@ -268,7 +288,7 @@
                   <select id="narratorModelSelect"></select>
                 </label>
                 <label class="field">
-                  <span>状态提取</span>
+                  <span>总结模型</span>
                   <select id="stateKeeperModelSelect"></select>
                 </label>
                 <label class="field field-wide">
